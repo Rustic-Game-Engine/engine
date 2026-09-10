@@ -1,0 +1,24 @@
+[package]
+name = "engine-project"
+description = "Versioned project descriptors and safe project filesystem services"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-core = { path = "../engine-core", version = "0.1.0" }
+engine-platform = { path = "../engine-platform", version = "0.1.0" }
+engine-scripting = { path = "../engine-scripting", version = "0.1.0" }
+engine-world = { path = "../engine-world", version = "0.1.0" }
+glam.workspace = true
+ron.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

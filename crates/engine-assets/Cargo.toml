@@ -1,0 +1,30 @@
+[package]
+name = "engine-assets"
+description = "Authoritative sidecars, disposable asset index/cache, and isolated import pipeline"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-core = { path = "../engine-core", version = "0.1.0" }
+gltf.workspace = true
+hound.workspace = true
+image.workspace = true
+lewton.workspace = true
+num-traits.workspace = true
+ron.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+skrifa.workspace = true
+thiserror.workspace = true
+tobj.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,29 @@
+[package]
+name = "rustic-project-manager"
+description = "Native project launcher for Rustic Game Engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+crossbeam-channel.workspace = true
+eframe.workspace = true
+engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
+engine-platform = { path = "../../crates/engine-platform", version = "0.1.0" }
+engine-project = { path = "../../crates/engine-project", version = "0.1.0" }
+engine-scripting = { path = "../../crates/engine-scripting", version = "0.1.0" }
+image.workspace = true
+ron.workspace = true
+rfd.workspace = true
+serde.workspace = true
+uuid.workspace = true
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

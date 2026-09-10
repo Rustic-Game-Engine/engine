@@ -1,0 +1,22 @@
+[package]
+name = "engine-core"
+description = "Foundational services shared by the Rustic editor and runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+crossbeam-channel.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+time.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+ron.workspace = true
+tempfile.workspace = true
+
+[lints]
+workspace = true

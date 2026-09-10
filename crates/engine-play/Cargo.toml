@@ -1,0 +1,26 @@
+[package]
+name = "engine-play"
+description = "Isolated local play protocol, snapshots, simulation control, and process supervision"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-assets = { path = "../engine-assets", version = "0.1.0" }
+engine-core = { path = "../engine-core", version = "0.1.0" }
+engine-scripting = { path = "../engine-scripting", version = "0.1.0" }
+engine-world = { path = "../engine-world", version = "0.1.0" }
+glam.workspace = true
+interprocess.workspace = true
+ron.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

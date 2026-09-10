@@ -1,0 +1,13 @@
+[package]
+name = "xtask"
+description = "Workspace build and verification commands for Rustic Game Engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-scripting = { path = "../../crates/engine-scripting", version = "0.1.0" }
+
+[lints]
+workspace = true

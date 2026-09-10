@@ -1,0 +1,14 @@
+[package]
+name = "engine-rhi"
+description = "Renderer backend abstraction and deterministic hardware selection policy"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+serde.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

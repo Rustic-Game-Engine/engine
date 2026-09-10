@@ -1,0 +1,22 @@
+[package]
+name = "engine-scripting"
+description = "Versioned multi-language gameplay runtimes, input, validation, workspace, and external-editor integration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-core = { path = "../engine-core", version = "0.1.0" }
+engine-platform = { path = "../engine-platform", version = "0.1.0" }
+mlua.workspace = true
+ron.workspace = true
+rquickjs.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tempfile.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,19 @@
+[package]
+name = "renderer-wgpu"
+description = "wgpu graphics backend hidden behind Rustic's engine-owned rendering boundary"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-rhi = { path = "../engine-rhi", version = "0.1.0" }
+naga.workspace = true
+pollster.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+
+[lints]
+workspace = true

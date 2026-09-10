@@ -1,0 +1,19 @@
+[package]
+name = "rustic-runtime"
+description = "Isolated play and standalone runtime for Rustic Game Engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
+engine-play = { path = "../../crates/engine-play", version = "0.1.0" }
+renderer-wgpu = { path = "../../crates/renderer-wgpu", version = "0.1.0" }
+winit.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,24 @@
+[package]
+name = "engine-world"
+description = "Backend-independent ECS, scene graph, serialization, undo, and render extraction"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+bevy_ecs.workspace = true
+engine-core = { path = "../engine-core", version = "0.1.0" }
+engine-scripting = { path = "../engine-scripting", version = "0.1.0" }
+glam.workspace = true
+ron.workspace = true
+serde.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

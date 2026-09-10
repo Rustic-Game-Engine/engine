@@ -1,0 +1,22 @@
+[package]
+name = "engine-platform"
+description = "Native platform paths and process services for Rustic Game Engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+directories.workspace = true
+engine-core = { path = "../engine-core", version = "0.1.0" }
+parking_lot.workspace = true
+ron.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true

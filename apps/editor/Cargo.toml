@@ -1,0 +1,31 @@
+[package]
+name = "rustic-editor"
+description = "Native authoring environment for Rustic Game Engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+egui_tiles.workspace = true
+egui_extras.workspace = true
+eframe.workspace = true
+engine-assets = { path = "../../crates/engine-assets", version = "0.1.0" }
+engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
+engine-editor = { path = "../../crates/engine-editor", version = "0.1.0" }
+engine-platform = { path = "../../crates/engine-platform", version = "0.1.0" }
+engine-play = { path = "../../crates/engine-play", version = "0.1.0" }
+engine-project = { path = "../../crates/engine-project", version = "0.1.0" }
+engine-scripting = { path = "../../crates/engine-scripting", version = "0.1.0" }
+engine-world = { path = "../../crates/engine-world", version = "0.1.0" }
+renderer-wgpu = { path = "../../crates/renderer-wgpu", version = "0.1.0" }
+rfd.workspace = true
+image.workspace = true
+glam.workspace = true
+num-traits.workspace = true
+
+[build-dependencies]
+embed-resource = "3.0.11"
+
+[lints]
+workspace = true

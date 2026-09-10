@@ -1,0 +1,50 @@
+name: workspace-ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+      - name: Install pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked --version 0.20.2
+      - name: Workspace doctor
+        run: cargo xtask doctor
+      - name: Format, lint, test, audit, and smoke
+        run: cargo xtask test
+
+  language-adapters:
+    name: language adapter conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install native, JVM, and PHP toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang g++ openjdk-21-jdk php-cli
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+      - name: Run process and Web adapter conformance
+        run: cargo test -p engine-scripting external_runtime -- --nocapture
