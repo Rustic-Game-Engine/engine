@@ -5,6 +5,8 @@ use engine_play::{
     AuthenticationToken, LocalEndpoint, PlayMode, RuntimeServerConfig, record_runtime_crash,
     run_runtime_server,
 };
+use glam::{Mat4, Vec3};
+use renderer_wgpu::MeshVertex;
 use renderer_wgpu::{BackendRequest, SurfaceRenderer, TexturedMesh};
 use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
@@ -195,7 +197,7 @@ impl RuntimeWindowApp {
             initial_size,
             window: None,
             renderer: None,
-            mesh: runtime_mesh(mode),
+            mesh: runtime_mesh(mode, initial_size[0] as f32 / initial_size[1] as f32),
             error: None,
         }
     }
@@ -217,6 +219,8 @@ impl RuntimeWindowApp {
                 event_loop,
                 format!("native runtime surface resize failed: {error}"),
             );
+        } else if width > 0 && height > 0 {
+            self.mesh.model_view_projection = runtime_view_projection(width as f32 / height as f32);
         }
     }
 }
@@ -335,15 +339,66 @@ impl ApplicationHandler for RuntimeWindowApp {
     }
 }
 
-fn runtime_mesh(mode: PlayMode) -> TexturedMesh {
-    let mut mesh = TexturedMesh::checkerboard_quad();
+fn runtime_mesh(mode: PlayMode, aspect: f32) -> TexturedMesh {
     let (bright, dark) = match mode {
         PlayMode::Play => ([70, 176, 94, 255], [30, 96, 52, 255]),
-        PlayMode::NewWindow => ([208, 132, 64, 255], [118, 62, 26, 255]),
-        PlayMode::Standalone => ([150, 92, 208, 255], [72, 38, 118, 255]),
+        PlayMode::NewWindow => ([150, 160, 176, 255], [82, 92, 108, 255]),
+        PlayMode::Standalone => ([150, 160, 176, 255], [82, 92, 108, 255]),
     };
-    mesh.texture_rgba8 = [bright, dark, dark, bright].concat();
-    mesh
+    // Four vertices per face preserve useful UVs while the indexed geometry and
+    // depth buffer make the external play surfaces unmistakably three-dimensional.
+    let p = 0.8;
+    let faces = [
+        ([-p, -p, p], [p, -p, p], [p, p, p], [-p, p, p]),
+        ([p, -p, -p], [-p, -p, -p], [-p, p, -p], [p, p, -p]),
+        ([-p, p, p], [p, p, p], [p, p, -p], [-p, p, -p]),
+        ([-p, -p, -p], [p, -p, -p], [p, -p, p], [-p, -p, p]),
+        ([p, -p, p], [p, -p, -p], [p, p, -p], [p, p, p]),
+        ([-p, -p, -p], [-p, -p, p], [-p, p, p], [-p, p, -p]),
+    ];
+    let mut vertices = Vec::with_capacity(24);
+    let mut indices = Vec::with_capacity(36);
+    for (face, (a, b, c, d)) in faces.into_iter().enumerate() {
+        let base = u32::try_from(face * 4).expect("cube vertex count fits u32");
+        vertices.extend([
+            MeshVertex {
+                position: a,
+                uv: [0.0, 1.0],
+            },
+            MeshVertex {
+                position: b,
+                uv: [1.0, 1.0],
+            },
+            MeshVertex {
+                position: c,
+                uv: [1.0, 0.0],
+            },
+            MeshVertex {
+                position: d,
+                uv: [0.0, 0.0],
+            },
+        ]);
+        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
+    TexturedMesh {
+        vertices,
+        indices,
+        texture_rgba8: [bright, dark, dark, bright].concat(),
+        texture_width: 2,
+        texture_height: 2,
+        model_view_projection: runtime_view_projection(aspect),
+    }
+}
+
+fn runtime_view_projection(aspect: f32) -> [f32; 16] {
+    let projection = glam::camera::rh::proj::directx::perspective(
+        55.0_f32.to_radians(),
+        aspect.max(0.001),
+        0.05,
+        1_000.0,
+    );
+    let view = glam::camera::rh::view::look_at_mat4(Vec3::new(3.2, 2.4, 4.0), Vec3::ZERO, Vec3::Y);
+    (projection * view * Mat4::from_rotation_y(-20.0_f32.to_radians())).to_cols_array()
 }
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
@@ -415,5 +470,19 @@ mod tests {
         assert!(requires_native_window(PlayMode::Standalone, false));
         assert!(!requires_native_window(PlayMode::NewWindow, true));
         assert!(!requires_native_window(PlayMode::Standalone, true));
+    }
+
+    #[test]
+    fn external_runtime_fixture_is_a_perspective_cube() {
+        let mesh = runtime_mesh(PlayMode::NewWindow, 16.0 / 9.0);
+        assert_eq!(mesh.vertices.len(), 24);
+        assert_eq!(mesh.indices.len(), 36);
+        let mut depths = mesh.vertices.iter().map(|vertex| vertex.position[2]);
+        let first = depths.next().unwrap();
+        assert!(depths.any(|depth| depth != first));
+        assert_ne!(
+            runtime_view_projection(16.0 / 9.0),
+            runtime_view_projection(9.0 / 16.0)
+        );
     }
 }

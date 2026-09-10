@@ -21,7 +21,7 @@ use engine_scripting::{
 };
 use engine_world::ScriptComponent;
 use engine_world::{EntityId, LocalTransform, Primitive, RenderWorldBuffer};
-use glam::{Mat4, Vec2, Vec3};
+use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
 use num_traits::ToPrimitive as _;
 use play_session::EditorPlaySession;
 use renderer_wgpu::{
@@ -1394,6 +1394,18 @@ impl EditorViewer<'_> {
         let Some(origin) = project_to_rect(view_projection, origin_world, rect) else {
             return;
         };
+        if self.gizmo.operation == GizmoOperation::Rotate {
+            self.rotation_gizmo_overlay(
+                ui,
+                rect,
+                entity,
+                snapshot.local_transform,
+                view_projection,
+                origin_world,
+                origin,
+            );
+            return;
+        }
         for (axis, color) in [
             (GizmoAxis::X, egui::Color32::RED),
             (GizmoAxis::Y, egui::Color32::GREEN),
@@ -1429,6 +1441,8 @@ impl EditorViewer<'_> {
                     before: snapshot.local_transform,
                     after: snapshot.local_transform,
                     amount: 0.0,
+                    pointer_direction: direction,
+                    last_pointer: interaction.interact_pointer_pos().unwrap_or(origin),
                 });
             }
             if interaction.dragged()
@@ -1442,6 +1456,147 @@ impl EditorViewer<'_> {
                     direction,
                     self.gizmo.operation,
                 );
+                if let Some(after) = apply_gizmo_delta(drag.before, axis, drag.amount, *self.gizmo)
+                {
+                    drag.after = after;
+                    if self.document.preview_transform(entity, after).is_ok() {
+                        *self.gizmo_drag = Some(drag);
+                        self.request_preview = true;
+                    }
+                }
+            }
+            if interaction.drag_stopped()
+                && let Some(drag) = self.gizmo_drag.take()
+                && let Err(error) =
+                    self.document
+                        .commit_transform_drag(drag.entity, drag.before, drag.after)
+            {
+                self.console
+                    .push(simple_console(Severity::Error, "gizmo", error.to_string()));
+            }
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the rotation overlay needs the viewport projection and selected transform"
+    )]
+    fn rotation_gizmo_overlay(
+        &mut self,
+        ui: &egui::Ui,
+        rect: egui::Rect,
+        entity: EntityId,
+        local_transform: LocalTransform,
+        view_projection: Mat4,
+        origin_world: Vec3,
+        origin: egui::Pos2,
+    ) {
+        const RING_RADIUS: f32 = 72.0;
+        const HIT_RADIUS: f32 = 9.0;
+        let axes = [
+            (GizmoAxis::X, egui::Color32::RED),
+            (GizmoAxis::Y, egui::Color32::GREEN),
+            (GizmoAxis::Z, egui::Color32::BLUE),
+        ];
+        let rings = axes.map(|(axis, color)| {
+            let axis_world = if self.gizmo.space == GizmoSpace::Local {
+                local_transform.rotation * axis.vector()
+            } else {
+                axis.vector()
+            };
+            (
+                axis,
+                color,
+                projected_rotation_ring(
+                    view_projection,
+                    origin_world,
+                    origin,
+                    axis_world,
+                    rect,
+                    RING_RADIUS,
+                ),
+            )
+        });
+
+        let pointer = ui.input(|input| input.pointer.hover_pos());
+        let active_axis = self.gizmo_drag.as_ref().map(|drag| drag.axis);
+        let hovered = pointer.and_then(|pointer| {
+            rings
+                .iter()
+                .filter_map(|(axis, _, points)| {
+                    ring_pointer_distance(points, pointer)
+                        .map(|(distance, tangent)| (*axis, distance, tangent))
+                })
+                .filter(|(_, distance, _)| *distance <= HIT_RADIUS)
+                .min_by(|left, right| left.1.total_cmp(&right.1))
+        });
+
+        ui.painter().circle_stroke(
+            origin,
+            RING_RADIUS + 5.0,
+            egui::Stroke::new(1.0, egui::Color32::from_gray(125)),
+        );
+
+        for (axis, color, points) in rings {
+            if points.len() < 2 {
+                continue;
+            }
+            let is_active = active_axis == Some(axis);
+            let is_hovered = hovered.is_some_and(|(hovered_axis, _, _)| hovered_axis == axis);
+            let stroke_width = if is_active || is_hovered { 5.0 } else { 3.0 };
+            let pointer_tangent = pointer.and_then(|pointer| {
+                ring_pointer_distance(&points, pointer).map(|(_, tangent)| tangent)
+            });
+            ui.painter().add(egui::Shape::closed_line(
+                points,
+                egui::Stroke::new(stroke_width, color),
+            ));
+
+            let interaction_rect = if is_active {
+                rect
+            } else if is_hovered {
+                egui::Rect::from_center_size(pointer.unwrap_or(origin), egui::Vec2::splat(20.0))
+            } else {
+                egui::Rect::NOTHING
+            };
+            let interaction = ui.interact(
+                interaction_rect,
+                egui::Id::new(("viewport-gizmo", entity.to_string(), axis as u8)),
+                if self.document.is_read_only() || (!is_active && !is_hovered) {
+                    egui::Sense::hover()
+                } else {
+                    egui::Sense::drag()
+                },
+            );
+            if interaction.drag_started() {
+                let tangent = hovered.map_or(egui::Vec2::RIGHT, |(_, _, tangent)| tangent);
+                *self.gizmo_drag = Some(GizmoDrag {
+                    entity,
+                    axis,
+                    before: local_transform,
+                    after: local_transform,
+                    amount: 0.0,
+                    pointer_direction: tangent,
+                    last_pointer: interaction.interact_pointer_pos().unwrap_or(origin),
+                });
+            }
+            if interaction.dragged()
+                && let Some(mut drag) = *self.gizmo_drag
+                && drag.entity == entity
+                && drag.axis == axis
+            {
+                let current_pointer = interaction
+                    .interact_pointer_pos()
+                    .unwrap_or(drag.last_pointer);
+                let tangent = pointer_tangent.unwrap_or(drag.pointer_direction);
+                drag.amount = accumulate_gizmo_pointer_delta(
+                    drag.amount,
+                    current_pointer - drag.last_pointer,
+                    tangent,
+                    GizmoOperation::Rotate,
+                );
+                drag.pointer_direction = tangent;
+                drag.last_pointer = current_pointer;
                 if let Some(after) = apply_gizmo_delta(drag.before, axis, drag.amount, *self.gizmo)
                 {
                     drag.after = after;
@@ -1704,6 +1859,36 @@ impl EditorViewer<'_> {
                 self.request_preview = true;
             }
         }
+        let mut rotation = rotation_degrees(transform.rotation);
+        ui.label("Rotation (degrees)");
+        let rotation_changed = ui
+            .horizontal(|ui| {
+                ui.add(
+                    egui::DragValue::new(&mut rotation[0])
+                        .prefix("X ")
+                        .speed(0.5),
+                )
+                .changed()
+                    | ui.add(
+                        egui::DragValue::new(&mut rotation[1])
+                            .prefix("Y ")
+                            .speed(0.5),
+                    )
+                    .changed()
+                    | ui.add(
+                        egui::DragValue::new(&mut rotation[2])
+                            .prefix("Z ")
+                            .speed(0.5),
+                    )
+                    .changed()
+            })
+            .inner;
+        if rotation_changed && !self.document.is_read_only() {
+            transform.rotation = rotation_from_degrees(rotation);
+            if self.document.set_transform(entity, transform).is_ok() {
+                self.request_preview = true;
+            }
+        }
         let mut scale = transform.scale.to_array();
         ui.label("Size (X, Y, Z)");
         let scale_changed = ui
@@ -1920,6 +2105,69 @@ struct GizmoDrag {
     before: LocalTransform,
     after: LocalTransform,
     amount: f32,
+    pointer_direction: egui::Vec2,
+    last_pointer: egui::Pos2,
+}
+
+fn projected_rotation_ring(
+    view_projection: Mat4,
+    origin_world: Vec3,
+    origin: egui::Pos2,
+    axis_world: Vec3,
+    rect: egui::Rect,
+    radius: f32,
+) -> Vec<egui::Pos2> {
+    const SEGMENTS: usize = 64;
+    let reference = if axis_world.dot(Vec3::Y).abs() < 0.9 {
+        Vec3::Y
+    } else {
+        Vec3::X
+    };
+    let tangent = axis_world.cross(reference).normalize();
+    let bitangent = axis_world.cross(tangent).normalize();
+    let mut points = Vec::with_capacity(SEGMENTS);
+    for index in 0..SEGMENTS {
+        let angle = index as f32 * std::f32::consts::TAU / SEGMENTS as f32;
+        let circle_point = origin_world + tangent * angle.cos() + bitangent * angle.sin();
+        let Some(projected) = project_to_rect(view_projection, circle_point, rect) else {
+            return Vec::new();
+        };
+        points.push(projected);
+    }
+    let projected_radius = points
+        .iter()
+        .map(|point| point.distance(origin))
+        .fold(0.0_f32, f32::max);
+    if projected_radius <= f32::EPSILON {
+        return Vec::new();
+    }
+    let scale = radius / projected_radius;
+    points
+        .into_iter()
+        .map(|point| origin + (point - origin) * scale)
+        .collect()
+}
+
+fn ring_pointer_distance(points: &[egui::Pos2], pointer: egui::Pos2) -> Option<(f32, egui::Vec2)> {
+    if points.len() < 2 {
+        return None;
+    }
+    let mut closest = (f32::INFINITY, egui::Vec2::RIGHT);
+    for index in 0..points.len() {
+        let start = points[index];
+        let end = points[(index + 1) % points.len()];
+        let segment = end - start;
+        let length_sq = segment.length_sq();
+        if length_sq <= f32::EPSILON {
+            continue;
+        }
+        let amount = ((pointer - start).dot(segment) / length_sq).clamp(0.0, 1.0);
+        let distance = pointer.distance(start + segment * amount);
+        if distance < closest.0 {
+            closest = (distance, segment.normalized());
+        }
+    }
+    closest.0.is_finite().then_some(closest)
 }
 
 fn accumulate_gizmo_pointer_delta(
@@ -1933,6 +2181,20 @@ fn accumulate_gizmo_pointer_delta(
         GizmoOperation::Translate | GizmoOperation::Scale => 0.015,
     };
     amount + pointer_delta.dot(axis_direction) * sensitivity
+}
+
+fn rotation_degrees(rotation: Quat) -> [f32; 3] {
+    let (x, y, z) = rotation.to_euler(EulerRot::XYZ);
+    [x.to_degrees(), y.to_degrees(), z.to_degrees()]
+}
+
+fn rotation_from_degrees(rotation: [f32; 3]) -> Quat {
+    Quat::from_euler(
+        EulerRot::XYZ,
+        rotation[0].to_radians(),
+        rotation[1].to_radians(),
+        rotation[2].to_radians(),
+    )
 }
 
 #[cfg(test)]
@@ -1957,6 +2219,36 @@ mod gizmo_drag_tests {
 
         assert!((first - 0.15).abs() < 1.0e-6);
         assert!((second - 0.225).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn rotation_motion_accumulates_as_the_ring_tangent_changes() {
+        let first = accumulate_gizmo_pointer_delta(
+            0.0,
+            egui::Vec2::new(10.0, 0.0),
+            egui::Vec2::RIGHT,
+            GizmoOperation::Rotate,
+        );
+        let second = accumulate_gizmo_pointer_delta(
+            first,
+            egui::Vec2::new(0.0, 10.0),
+            egui::Vec2::DOWN,
+            GizmoOperation::Rotate,
+        );
+
+        assert!((first - 0.12).abs() < 1.0e-6);
+        assert!((second - 0.24).abs() < 1.0e-6);
+    }
+
+    #[test]
+    fn inspector_rotation_degrees_round_trip() {
+        let rotation = [25.0, -40.0, 135.0];
+        let quaternion = rotation_from_degrees(rotation);
+        let round_trip = rotation_degrees(quaternion);
+
+        for (actual, expected) in round_trip.into_iter().zip(rotation) {
+            assert!((actual - expected).abs() < 1.0e-4);
+        }
     }
 }
 

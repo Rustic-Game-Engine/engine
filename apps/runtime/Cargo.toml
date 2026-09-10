@@ -10,6 +10,7 @@ publish = false
 engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
 engine-play = { path = "../../crates/engine-play", version = "0.1.0" }
 renderer-wgpu = { path = "../../crates/renderer-wgpu", version = "0.1.0" }
+glam.workspace = true
 winit.workspace = true
 
 [dev-dependencies]

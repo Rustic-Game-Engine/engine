@@ -3243,6 +3243,7 @@ version = "0.1.0"
 dependencies = [
  "engine-core",
  "engine-play",
+ "glam 0.33.6",
  "renderer-wgpu",
  "tempfile",
  "winit",
