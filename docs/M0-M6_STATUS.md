@@ -1,5 +1,7 @@
 # M0-M6 implementation and qualification ledger
 
+j
+
 Last updated: 2026-08-31 (Pacific/Auckland)
 
 Post-M6 addition (2026-09-09): the first external-editor gameplay slice is implemented
