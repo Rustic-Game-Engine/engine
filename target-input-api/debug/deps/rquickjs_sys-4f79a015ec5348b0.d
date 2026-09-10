@@ -1,0 +1,13 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\deps\rquickjs_sys-4f79a015ec5348b0.d: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\build\rquickjs-sys-0cf5948d036309eb\out/bindings.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\bindings/x86_64-pc-windows-msvc.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/ptr_64.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/common.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\deps\librquickjs_sys-4f79a015ec5348b0.rlib: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\build\rquickjs-sys-0cf5948d036309eb\out/bindings.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\bindings/x86_64-pc-windows-msvc.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/ptr_64.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/common.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\deps\librquickjs_sys-4f79a015ec5348b0.rmeta: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\build\rquickjs-sys-0cf5948d036309eb\out/bindings.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\bindings/x86_64-pc-windows-msvc.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/ptr_64.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/common.rs
+
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\lib.rs:
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-input-api\debug\build\rquickjs-sys-0cf5948d036309eb\out/bindings.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\bindings/x86_64-pc-windows-msvc.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/ptr_64.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\rquickjs-sys-0.12.2\src\inlines/common.rs:
+
+# env-dep:OUT_DIR=C:\\Users\\mmmtech\\Desktop\\RusticGamEngine\\target-input-api\\debug\\build\\rquickjs-sys-0cf5948d036309eb\\out

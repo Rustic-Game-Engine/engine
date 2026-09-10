@@ -1,0 +1,11 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-cpp-sdk-check\debug\deps\peniko-db4d425027890309.d: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\lib.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\blend.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\brush.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\gradient.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\image.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\style.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\impl_bytemuck.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-cpp-sdk-check\debug\deps\libpeniko-db4d425027890309.rmeta: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\lib.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\blend.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\brush.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\gradient.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\image.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\style.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\impl_bytemuck.rs
+
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\lib.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\blend.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\brush.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\gradient.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\image.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\style.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\peniko-0.6.1\src\impl_bytemuck.rs:

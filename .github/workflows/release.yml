@@ -1,0 +1,66 @@
+name: windows-release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish Windows installer
+    runs-on: windows-latest
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@v4
+
+      - name: Verify tag matches Cargo version
+        shell: pwsh
+        run: |
+          $cargoVersion = (cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json).packages |
+            Where-Object name -eq 'rustic-project-manager' |
+            Select-Object -ExpandProperty version
+          $tagVersion = '${{ github.ref_name }}'.TrimStart('v')
+
+          if ($cargoVersion -ne $tagVersion) {
+            throw "Tag version $tagVersion does not match Cargo version $cargoVersion."
+          }
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: ./tools/build-windows-installer.ps1
+
+      - name: Find installer
+        id: installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -LiteralPath dist -Filter 'RusticGameEngine-Setup-*.exe' |
+            Sort-Object LastWriteTime -Descending |
+            Select-Object -First 1
+
+          if (-not $installer) {
+            throw 'The build completed without producing a Windows installer.'
+          }
+
+          "path=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ github.ref_name }}'
+          $installer = '${{ steps.installer.outputs.path }}'
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $installer --clobber
+          } else {
+            gh release create $tag $installer --verify-tag --generate-notes --title "Rustic Game Engine $tag"
+          }

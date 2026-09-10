@@ -1,0 +1,9 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\serde_spanned-a9b9b7240d6d3224.d: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\spanned.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\de.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\libserde_spanned-a9b9b7240d6d3224.rlib: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\spanned.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\de.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\libserde_spanned-a9b9b7240d6d3224.rmeta: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\spanned.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\de.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\lib.rs:
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\spanned.rs:
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde_spanned-1.1.1\src\de.rs:

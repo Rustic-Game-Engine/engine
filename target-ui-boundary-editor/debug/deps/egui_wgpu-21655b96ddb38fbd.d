@@ -1,0 +1,11 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-ui-boundary-editor\debug\deps\egui_wgpu-21655b96ddb38fbd.d: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\lib.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\renderer.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\setup.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\capture.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\winit.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\egui.wgsl C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\texture_copy.wgsl
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-ui-boundary-editor\debug\deps\libegui_wgpu-21655b96ddb38fbd.rmeta: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\lib.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\renderer.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\setup.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\capture.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\winit.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\egui.wgsl C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\texture_copy.wgsl
+
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\lib.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\renderer.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\setup.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\capture.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\winit.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\egui.wgsl:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-wgpu-0.36.1\src\texture_copy.wgsl:

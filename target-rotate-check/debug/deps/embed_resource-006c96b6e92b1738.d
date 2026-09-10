@@ -1,0 +1,8 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\embed_resource-006c96b6e92b1738.d: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\windows_msvc.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\libembed_resource-006c96b6e92b1738.rlib: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\windows_msvc.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\libembed_resource-006c96b6e92b1738.rmeta: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\windows_msvc.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\lib.rs:
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\embed-resource-3.0.11\src\windows_msvc.rs:

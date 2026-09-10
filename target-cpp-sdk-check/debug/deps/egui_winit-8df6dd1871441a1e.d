@@ -1,0 +1,9 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-cpp-sdk-check\debug\deps\egui_winit-8df6dd1871441a1e.d: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\lib.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\clipboard.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\dropped_file.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\safe_area.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\window_settings.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-cpp-sdk-check\debug\deps\libegui_winit-8df6dd1871441a1e.rmeta: C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\lib.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\clipboard.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\dropped_file.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\safe_area.rs C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\window_settings.rs
+
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\lib.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\clipboard.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\dropped_file.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\safe_area.rs:
+C:\Users\mmmtech\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\egui-winit-0.36.1\src\window_settings.rs:
