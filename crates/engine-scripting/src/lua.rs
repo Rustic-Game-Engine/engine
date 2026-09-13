@@ -6,6 +6,9 @@ use thiserror::Error;
 
 /// Engine-owned runtime surface. Implementations live in the isolated runtime process.
 pub trait GameplayHost: Send {
+    fn set_current_camera(&mut self, _source: &str) -> Result<(), String> {
+        Err("camera selection is unavailable".into())
+    }
     fn entity_id(&self) -> EntityId;
     fn delta_time(&self) -> f64;
     fn fixed_delta_time(&self) -> f64;
@@ -396,6 +399,24 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
     scene.set_metatable(Some(metadata))?;
     let game = lua.create_table()?;
     game.set("scene", scene)?;
+    let h = Arc::clone(&host);
+    game.set(
+        "setCurrentCamera",
+        lua.create_function(move |_, value: Value| {
+            let value = match value {
+                Value::Table(table) => table.get::<Value>(1)?,
+                value => value,
+            };
+            let Value::String(source) = value else {
+                return Err(MluaError::RuntimeError(
+                    "expected a camera path or {cameraPath}".into(),
+                ));
+            };
+            lock_host(&h)?
+                .set_current_camera(source.to_str()?.as_ref())
+                .map_err(MluaError::RuntimeError)
+        })?,
+    )?;
     lua.globals().set("Game", game)?;
     let instance = lua.create_table()?;
     for (name, clone_only) in [("add", false), ("clone", true)] {
@@ -596,9 +617,11 @@ mod tests {
             self.props.get(n).cloned()
         }
         fn set_property(&mut self, n: &str, v: EngineValue) -> Result<(), String> {
-            if let Some(old) = self.props.get(n)
-                && !old.same_type(&v)
-            {
+            let old = self
+                .props
+                .get(n)
+                .ok_or_else(|| format!("property `{n}` is not declared"))?;
+            if !old.same_type(&v) {
                 return Err("property type mismatch".into());
             }
             self.props.insert(n.into(), v);
@@ -643,5 +666,20 @@ return { on_create=function() rustic.log('info','created') end, fixed_update=fun
             Err(LuaRuntimeError::BudgetExhausted)
         ));
         assert!(!b.enabled());
+    }
+
+    #[test]
+    fn api_smoke_entry_allows_an_undeclared_optional_property() {
+        let mut behavior = LuaBehavior::load(
+            ScriptId::new(),
+            include_bytes!("../../../examples/api-smoke-test/entry.lua"),
+            "entry.lua",
+            host(),
+            100_000,
+        )
+        .unwrap();
+
+        behavior.on_create().unwrap();
+        assert!(behavior.enabled());
     }
 }

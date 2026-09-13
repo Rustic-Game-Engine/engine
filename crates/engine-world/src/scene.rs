@@ -299,8 +299,14 @@ struct TransformWire {
 #[derive(Clone, Copy, Serialize, Deserialize)]
 struct CameraWire {
     projection: CameraProjection,
+    #[serde(default = "default_camera_zoom")]
+    zoom: f32,
     active: bool,
     order: i32,
+}
+
+const fn default_camera_zoom() -> f32 {
+    1.0
 }
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -364,6 +370,7 @@ impl EntityWire {
                 CAMERA_SCHEMA,
                 &CameraWire {
                     projection: camera.projection,
+                    zoom: camera.zoom,
                     active: camera.active,
                     order: camera.order,
                 },
@@ -626,6 +633,7 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                 |value| {
                     snapshot.camera = Some(Camera {
                         projection: value.projection,
+                        zoom: value.zoom,
                         active: value.active,
                         order: value.order,
                     });
@@ -879,6 +887,23 @@ mod tests {
         assert!(!loaded.read_only);
         assert_eq!(loaded.document, document);
         assert_eq!(loaded.document.to_bytes().unwrap(), first);
+    }
+
+    #[test]
+    fn camera_zoom_round_trips_and_defaults_for_older_component_payloads() {
+        let wire = CameraWire {
+            projection: CameraProjection::default(),
+            zoom: 2.5,
+            active: true,
+            order: 3,
+        };
+        let encoded = ron::to_string(&wire).unwrap();
+        assert_eq!(ron::from_str::<CameraWire>(&encoded).unwrap().zoom, 2.5);
+
+        let old_payload = ron::to_string(&CameraWire { zoom: 1.0, ..wire })
+            .unwrap()
+            .replace("zoom:1.0,", "");
+        assert_eq!(ron::from_str::<CameraWire>(&old_payload).unwrap().zoom, 1.0);
     }
 
     #[test]

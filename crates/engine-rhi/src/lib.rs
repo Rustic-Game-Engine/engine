@@ -128,11 +128,19 @@ pub fn select_renderer(
         })
         .max_by(
             |(left_candidate, left_score), (right_candidate, right_score)| {
-                left_score.cmp(right_score).then_with(|| {
-                    // The explicit backend ordinal makes ties stable across probe order.
-                    backend_tie_break(os, left_candidate.backend)
-                        .cmp(&backend_tie_break(os, right_candidate.backend))
-                })
+                let preferred = |candidate: &AdapterCandidate| {
+                    os == OperatingSystem::Windows
+                        && candidate.device_class == DeviceClass::Discrete
+                        && candidate.backend == RendererBackend::Vulkan
+                };
+                preferred(left_candidate)
+                    .cmp(&preferred(right_candidate))
+                    .then_with(|| left_score.cmp(right_score))
+                    .then_with(|| {
+                        // The explicit backend ordinal makes ties stable across probe order.
+                        backend_tie_break(os, left_candidate.backend)
+                            .cmp(&backend_tie_break(os, right_candidate.backend))
+                    })
             },
         )
         .map(|(candidate, score)| RendererSelection {
@@ -210,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn windows_prefers_d3d12_when_capabilities_are_equal() {
+    fn windows_prefers_vulkan_on_discrete_gpus() {
         let selected = select_renderer(
             OperatingSystem::Windows,
             PowerPolicy::Performance,
@@ -222,8 +230,47 @@ mod tests {
         )
         .expect("a valid adapter");
 
-        assert_eq!(selected.backend, RendererBackend::Direct3D12);
+        assert_eq!(selected.backend, RendererBackend::Vulkan);
         assert_eq!(selected.quality, QualityProfile::High);
+    }
+
+    #[test]
+    fn windows_integrated_graphics_keep_d3d12_preference() {
+        let selected = select_renderer(
+            OperatingSystem::Windows,
+            PowerPolicy::Performance,
+            16_384,
+            &[
+                candidate(RendererBackend::Vulkan, DeviceClass::Integrated),
+                candidate(RendererBackend::Direct3D12, DeviceClass::Integrated),
+            ],
+        )
+        .expect("integrated adapter");
+        assert_eq!(selected.backend, RendererBackend::Direct3D12);
+    }
+
+    #[test]
+    fn windows_hybrid_gpu_uses_discrete_vulkan_and_falls_back_if_invalid() {
+        let mut discrete = candidate(RendererBackend::Vulkan, DeviceClass::Discrete);
+        let integrated = candidate(RendererBackend::Direct3D12, DeviceClass::Integrated);
+        for supported in [true, false] {
+            discrete.supports_baseline = supported;
+            let selected = select_renderer(
+                OperatingSystem::Windows,
+                PowerPolicy::Efficiency,
+                16_384,
+                &[integrated.clone(), discrete.clone()],
+            )
+            .expect("working adapter");
+            assert_eq!(
+                selected.backend,
+                if supported {
+                    RendererBackend::Vulkan
+                } else {
+                    RendererBackend::Direct3D12
+                }
+            );
+        }
     }
 
     #[test]

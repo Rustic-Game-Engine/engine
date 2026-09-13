@@ -11,7 +11,8 @@ while ((line = Console.ReadLine()) is not null) {
     if (state.GetProperty("callback").GetString() == "on_start") {
         commands.Add(new { op="set_translation", value=state.GetProperty("translation") });
         var properties = state.GetProperty("properties");
-        commands.Add(new { op="set_property", name="smoke_value", value=properties.TryGetProperty("smoke_value", out var v) ? v : JsonSerializer.SerializeToElement(1.0) });
+        if (properties.TryGetProperty("smoke_value", out var v))
+            commands.Add(new { op="set_property", name="smoke_value", value=v });
         var attributes = state.GetProperty("attributes");
         if (attributes.TryGetProperty("Position", out var p)) commands.Add(new { op="edit_attribute", name="Position", value=p });
         commands.Add(new { op="log", level="info", message="C# API smoke test passed" });

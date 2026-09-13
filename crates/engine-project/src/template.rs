@@ -82,6 +82,7 @@ return {
         } else {
             PathBuf::from("scripts/main.lua")
         },
+        ..GameSettings::default()
     };
     game_settings
         .save(staging_root)

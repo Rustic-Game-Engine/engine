@@ -3,9 +3,10 @@ use engine_core::{
 };
 use engine_play::{
     AuthenticationToken, LocalEndpoint, PlayMode, RuntimeServerConfig, record_runtime_crash,
-    run_runtime_server,
+    run_runtime_server_with_renderer,
 };
-use glam::{Mat4, Vec3};
+use glam::Mat4;
+
 use renderer_wgpu::MeshVertex;
 use renderer_wgpu::{BackendRequest, SurfaceRenderer, TexturedMesh};
 use std::ffi::{OsStr, OsString};
@@ -108,7 +109,7 @@ fn run(arguments: &[OsString]) -> Result<(), String> {
     if requires_native_window(mode, suppress_native_window) {
         run_windowed_runtime(config)
     } else {
-        run_runtime_server(config).map_err(|error| error.to_string())
+        render_runtime(config, None)
     }
 }
 
@@ -122,11 +123,13 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
     let server_result = Arc::new(Mutex::new(None));
     let server_finished = Arc::clone(&finished);
     let result_slot = Arc::clone(&server_result);
+    let latest_frame = Arc::new(Mutex::new(None));
+    let server_frames = Arc::clone(&latest_frame);
     let server = thread::Builder::new()
         .name("rustic-runtime-server".to_owned())
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                run_runtime_server(config).map_err(|error| error.to_string())
+                render_runtime(config, Some(server_frames))
             }))
             .unwrap_or_else(|payload| {
                 Err(format!(
@@ -150,6 +153,7 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
         .map_err(|error| format!("could not create native runtime event loop: {error}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut window_app = RuntimeWindowApp::new(mode, Arc::clone(&finished), title, size);
+    window_app.latest_frame = latest_frame;
     event_loop
         .run_app(&mut window_app)
         .map_err(|error| format!("native runtime event loop failed: {error}"))?;
@@ -180,6 +184,7 @@ struct RuntimeWindowApp {
     window: Option<Arc<Window>>,
     renderer: Option<SurfaceRenderer>,
     mesh: TexturedMesh,
+    latest_frame: Arc<Mutex<Option<engine_play::BgraFrame>>>,
     error: Option<String>,
 }
 
@@ -197,7 +202,8 @@ impl RuntimeWindowApp {
             initial_size,
             window: None,
             renderer: None,
-            mesh: runtime_mesh(mode, initial_size[0] as f32 / initial_size[1] as f32),
+            mesh: frame_quad(),
+            latest_frame: Arc::new(Mutex::new(None)),
             error: None,
         }
     }
@@ -220,7 +226,7 @@ impl RuntimeWindowApp {
                 format!("native runtime surface resize failed: {error}"),
             );
         } else if width > 0 && height > 0 {
-            self.mesh.model_view_projection = runtime_view_projection(width as f32 / height as f32);
+            self.mesh.model_view_projection = frame_fit(width as f32 / height as f32);
         }
     }
 }
@@ -245,6 +251,9 @@ impl ApplicationHandler for RuntimeWindowApp {
             }
         };
         let size = window.inner_size();
+        if size.width > 0 && size.height > 0 {
+            self.mesh.model_view_projection = frame_fit(size.width as f32 / size.height as f32);
+        }
         let renderer = match SurfaceRenderer::new(
             Arc::clone(&window),
             BackendRequest::Auto,
@@ -306,6 +315,17 @@ impl ApplicationHandler for RuntimeWindowApp {
                 }
             }
             WindowEvent::RedrawRequested => {
+                if let Ok(mut latest) = self.latest_frame.lock() {
+                    if let Some(frame) = latest.take() {
+                        self.mesh.texture_width = frame.width;
+                        self.mesh.texture_height = frame.height;
+                        self.mesh.texture_rgba8 = frame.pixels;
+                        for pixel in self.mesh.texture_rgba8.chunks_exact_mut(4) {
+                            pixel.swap(0, 2);
+                        }
+                    }
+                }
+
                 let Some(renderer) = &mut self.renderer else {
                     return;
                 };
@@ -339,66 +359,73 @@ impl ApplicationHandler for RuntimeWindowApp {
     }
 }
 
-fn runtime_mesh(mode: PlayMode, aspect: f32) -> TexturedMesh {
-    let (bright, dark) = match mode {
-        PlayMode::Play => ([70, 176, 94, 255], [30, 96, 52, 255]),
-        PlayMode::NewWindow => ([150, 160, 176, 255], [82, 92, 108, 255]),
-        PlayMode::Standalone => ([150, 160, 176, 255], [82, 92, 108, 255]),
+fn frame_fit(aspect: f32) -> [f32; 16] {
+    let game_aspect = 16.0 / 9.0;
+    let scale = if aspect > game_aspect {
+        glam::Vec3::new(game_aspect / aspect, 1.0, 1.0)
+    } else {
+        glam::Vec3::new(1.0, aspect / game_aspect, 1.0)
     };
-    // Four vertices per face preserve useful UVs while the indexed geometry and
-    // depth buffer make the external play surfaces unmistakably three-dimensional.
-    let p = 0.8;
-    let faces = [
-        ([-p, -p, p], [p, -p, p], [p, p, p], [-p, p, p]),
-        ([p, -p, -p], [-p, -p, -p], [-p, p, -p], [p, p, -p]),
-        ([-p, p, p], [p, p, p], [p, p, -p], [-p, p, -p]),
-        ([-p, -p, -p], [p, -p, -p], [p, -p, p], [-p, -p, p]),
-        ([p, -p, p], [p, -p, -p], [p, p, -p], [p, p, p]),
-        ([-p, -p, -p], [-p, -p, p], [-p, p, p], [-p, p, -p]),
-    ];
-    let mut vertices = Vec::with_capacity(24);
-    let mut indices = Vec::with_capacity(36);
-    for (face, (a, b, c, d)) in faces.into_iter().enumerate() {
-        let base = u32::try_from(face * 4).expect("cube vertex count fits u32");
-        vertices.extend([
+    Mat4::from_scale(scale).to_cols_array()
+}
+
+fn frame_quad() -> TexturedMesh {
+    TexturedMesh {
+        vertices: vec![
             MeshVertex {
-                position: a,
+                position: [-1.0, -1.0, 0.0],
                 uv: [0.0, 1.0],
             },
             MeshVertex {
-                position: b,
+                position: [1.0, -1.0, 0.0],
                 uv: [1.0, 1.0],
             },
             MeshVertex {
-                position: c,
+                position: [1.0, 1.0, 0.0],
                 uv: [1.0, 0.0],
             },
             MeshVertex {
-                position: d,
+                position: [-1.0, 1.0, 0.0],
                 uv: [0.0, 0.0],
             },
-        ]);
-        indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
-    }
-    TexturedMesh {
-        vertices,
-        indices,
-        texture_rgba8: [bright, dark, dark, bright].concat(),
-        texture_width: 2,
-        texture_height: 2,
-        model_view_projection: runtime_view_projection(aspect),
+        ],
+        indices: vec![0, 1, 2, 0, 2, 3],
+        texture_width: 1,
+        texture_height: 1,
+        texture_rgba8: vec![12, 16, 22, 255],
+        model_view_projection: Mat4::IDENTITY.to_cols_array(),
     }
 }
 
-fn runtime_view_projection(aspect: f32) -> [f32; 16] {
-    let projection = glam::camera::rh::proj::directx::perspective(
-        55.0_f32.to_radians(),
-        aspect.max(0.001),
-        0.05,
-        1_000.0,
-    );
-    let view = glam::camera::rh::view::look_at_mat4(Vec3::new(3.2, 2.4, 4.0), Vec3::ZERO, Vec3::Y);
-    (projection * view * Mat4::from_rotation_y(-20.0_f32.to_radians())).to_cols_array()
+fn render_runtime(
+    config: RuntimeServerConfig,
+    latest: Option<Arc<Mutex<Option<engine_play::BgraFrame>>>>,
+) -> Result<(), String> {
+    let mut renderer = renderer_wgpu::SceneViewportRenderer::new(BackendRequest::Auto)
+        .map_err(|e| e.to_string())?;
+    run_runtime_server_with_renderer(config, move |world, tick| {
+        let scene = renderer_wgpu::game_scene(world, 16.0 / 9.0);
+        let frame = renderer
+            .render(640, 360, &scene)
+            .map_err(|e| e.to_string())?
+            .ok_or("empty game frame")?;
+        let mut pixels = frame.rgba8;
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+        }
+        let frame = engine_play::BgraFrame {
+            sequence: tick,
+            width: 640,
+            height: 360,
+            stride_bytes: 640 * 4,
+            pixels,
+        };
+        if let Some(latest) = &latest {
+            *latest.lock().map_err(|_| "frame lock poisoned")? = Some(frame.clone());
+        }
+        Ok(frame)
+    })
+    .map_err(|e| e.to_string())
 }
 
 fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> &str {
@@ -473,16 +500,11 @@ mod tests {
     }
 
     #[test]
-    fn external_runtime_fixture_is_a_perspective_cube() {
-        let mesh = runtime_mesh(PlayMode::NewWindow, 16.0 / 9.0);
-        assert_eq!(mesh.vertices.len(), 24);
-        assert_eq!(mesh.indices.len(), 36);
-        let mut depths = mesh.vertices.iter().map(|vertex| vertex.position[2]);
-        let first = depths.next().unwrap();
-        assert!(depths.any(|depth| depth != first));
-        assert_ne!(
-            runtime_view_projection(16.0 / 9.0),
-            runtime_view_projection(9.0 / 16.0)
-        );
+    fn native_frame_preserves_game_aspect_ratio() {
+        let mesh = frame_quad();
+        assert_eq!(mesh.vertices.len(), 4);
+        assert_eq!(mesh.indices.len(), 6);
+        assert_eq!(frame_fit(16.0 / 9.0), Mat4::IDENTITY.to_cols_array());
+        assert_ne!(frame_fit(1.0), frame_fit(2.0));
     }
 }

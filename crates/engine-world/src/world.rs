@@ -34,6 +34,8 @@ pub enum WorldError {
     InvalidPrimitive { entity: EntityId, message: String },
     #[error("entity {entity} has invalid script component data: {message}")]
     InvalidScript { entity: EntityId, message: String },
+    #[error("entity {0} has invalid camera or light attributes")]
+    InvalidViewComponent(EntityId),
     #[error("system `{system}` failed: {message}")]
     System { system: String, message: String },
 }
@@ -352,6 +354,19 @@ impl SceneWorld {
         let mut spawned = BTreeSet::new();
         let mut despawned = BTreeSet::new();
 
+        for command in commands {
+            let (entity, camera, light) = match command {
+                WorldCommand::Spawn(snapshot) => (snapshot.id, snapshot.camera, snapshot.light),
+                WorldCommand::SetCamera { entity, value } => (*entity, *value, None),
+                WorldCommand::SetLight { entity, value } => (*entity, None, *value),
+                _ => continue,
+            };
+            if camera.is_some_and(|value| !value.is_valid())
+                || light.is_some_and(|value| !value.is_valid())
+            {
+                return Err(WorldError::InvalidViewComponent(entity));
+            }
+        }
         for command in commands {
             match command {
                 WorldCommand::Spawn(snapshot) => {

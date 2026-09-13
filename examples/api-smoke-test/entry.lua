@@ -15,7 +15,7 @@ local function inspect_api()
   Game.scene.List("Game.scene")
 
   rustic.set_translation(x, y, z)
-  rustic.set_property("smoke_value", property or 1.0)
+  if property ~= nil then rustic.set_property("smoke_value", property) end
   if position ~= nil then rustic.EditAttribute("Position", position) end
   rustic.set_enabled(true)
   return id, dt, fixed_dt

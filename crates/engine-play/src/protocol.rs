@@ -25,7 +25,7 @@ pub struct ProtocolVersion {
 }
 
 /// Protocol understood by this engine build.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 1, minor: 2 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 2, minor: 0 };
 
 /// Process responsibility carried in every frame and authenticated handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -368,9 +368,25 @@ fn encode_frame(
     deadline_unix_millis: u64,
     message: &ProtocolMessage,
 ) -> Result<Vec<u8>, ProtocolError> {
-    let payload = ron::ser::to_string(message)
-        .map_err(|error| ProtocolError::Encode(error.to_string()))?
-        .into_bytes();
+    let payload = if let ProtocolMessage::Frame(frame) = message {
+        validate_pixel_frame(frame)?;
+        let mut bytes = Vec::with_capacity(24 + frame.pixels.len());
+        bytes.extend_from_slice(&frame.sequence.to_le_bytes());
+        for value in [
+            frame.width,
+            frame.height,
+            frame.stride_bytes,
+            frame.pixels.len() as u32,
+        ] {
+            bytes.extend_from_slice(&value.to_le_bytes());
+        }
+        bytes.extend_from_slice(&frame.pixels);
+        bytes
+    } else {
+        ron::ser::to_string(message)
+            .map_err(|error| ProtocolError::Encode(error.to_string()))?
+            .into_bytes()
+    };
     if payload.len() > MAX_PAYLOAD_BYTES {
         return Err(ProtocolError::PayloadTooLarge {
             found: payload.len(),
@@ -427,10 +443,35 @@ fn decode_frame(reader: &mut impl Read) -> Result<ReceivedMessage, ProtocolError
     }
     let mut payload = vec![0_u8; payload_length];
     reader.read_exact(&mut payload)?;
-    let payload =
-        std::str::from_utf8(&payload).map_err(|error| ProtocolError::Decode(error.to_string()))?;
-    let message: ProtocolMessage =
-        ron::from_str(payload).map_err(|error| ProtocolError::Decode(error.to_string()))?;
+    let message: ProtocolMessage = if kind == 7 {
+        if payload.len() < 24 {
+            return Err(ProtocolError::Decode("truncated pixel frame".into()));
+        }
+        let u32_at = |offset| {
+            u32::from_le_bytes(
+                payload[offset..offset + 4]
+                    .try_into()
+                    .expect("validated pixel header"),
+            )
+        };
+        let length = u32_at(20) as usize;
+        if length != payload.len() - 24 {
+            return Err(ProtocolError::Decode("pixel length mismatch".into()));
+        }
+        let frame = BgraFrame {
+            sequence: u64::from_le_bytes(payload[..8].try_into().expect("validated pixel header")),
+            width: u32_at(8),
+            height: u32_at(12),
+            stride_bytes: u32_at(16),
+            pixels: payload[24..].to_vec(),
+        };
+        validate_pixel_frame(&frame)?;
+        ProtocolMessage::Frame(frame)
+    } else {
+        let payload = std::str::from_utf8(&payload)
+            .map_err(|error| ProtocolError::Decode(error.to_string()))?;
+        ron::from_str(payload).map_err(|error| ProtocolError::Decode(error.to_string()))?
+    };
     if message.kind() != kind {
         return Err(ProtocolError::KindMismatch {
             header: kind,
@@ -444,6 +485,21 @@ fn decode_frame(reader: &mut impl Read) -> Result<ReceivedMessage, ProtocolError
         deadline_unix_millis,
         message,
     })
+}
+
+fn validate_pixel_frame(frame: &BgraFrame) -> Result<(), ProtocolError> {
+    if frame.width == 0
+        || frame.height == 0
+        || frame.width > 640
+        || frame.height > 360
+        || frame.stride_bytes != frame.width * 4
+        || frame.pixels.len() != (frame.stride_bytes * frame.height) as usize
+    {
+        return Err(ProtocolError::Decode(
+            "invalid game frame dimensions or stride".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn unix_millis() -> u64 {
@@ -540,5 +596,50 @@ mod tests {
             decode_frame(&mut Cursor::new(bytes)),
             Err(ProtocolError::DeadlineExpired)
         ));
+    }
+}
+
+#[cfg(test)]
+mod pixel_wire_tests {
+    use super::*;
+    #[test]
+    fn full_game_frame_round_trip_is_bounded_and_exact() {
+        let frame = BgraFrame {
+            sequence: 12,
+            width: 640,
+            height: 360,
+            stride_bytes: 2560,
+            pixels: (0..921600).map(|i| (i % 256) as u8).collect(),
+        };
+        let message = ProtocolMessage::Frame(frame);
+        let bytes = encode_frame(ProcessRole::Runtime, PROTOCOL_VERSION, 7, 0, &message).unwrap();
+        assert_eq!(bytes.len(), HEADER_BYTES + 24 + 921600);
+        assert!(bytes.len() < MAX_PAYLOAD_BYTES);
+        assert_eq!(
+            decode_frame(&mut std::io::Cursor::new(bytes))
+                .unwrap()
+                .message,
+            message
+        );
+    }
+    #[test]
+    fn malformed_pixel_frame_is_rejected() {
+        let frame = BgraFrame {
+            sequence: 0,
+            width: 640,
+            height: 360,
+            stride_bytes: 4,
+            pixels: vec![0; 4],
+        };
+        assert!(
+            encode_frame(
+                ProcessRole::Runtime,
+                PROTOCOL_VERSION,
+                0,
+                0,
+                &ProtocolMessage::Frame(frame)
+            )
+            .is_err()
+        );
     }
 }

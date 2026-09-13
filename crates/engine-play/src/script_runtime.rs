@@ -184,7 +184,7 @@ impl RuntimeScripts {
             Vec::new()
         };
         let entries: BTreeMap<_, _> = entries.into_iter().map(|entry| (entry.id, entry)).collect();
-        let snapshots = {
+        let mut snapshots = {
             let guard = world
                 .lock()
                 .map_err(|_| "runtime world lock poisoned".to_owned())?;
@@ -213,9 +213,27 @@ impl RuntimeScripts {
                 )
                 .ok_or_else(|| "entry script has an unsupported extension".to_owned())?;
             let entry_id = entry.map_or_else(ScriptId::new, |entry| entry.id);
-            let entry_entity = snapshots
-                .first()
-                .map_or_else(EntityId::new, |entity| entity.id);
+            // Templates can make the configured entry script an entity behavior too.
+            // Consume that first enabled attachment as the entry instance so its
+            // callbacks keep the intended entity and properties. A standalone entry
+            // script still receives a harmless scene entity as its host context.
+            let attached_entry = entry.and_then(|entry| {
+                snapshots.iter_mut().find_map(|entity| {
+                    entity
+                        .scripts
+                        .iter()
+                        .position(|component| component.enabled && component.script_id == entry.id)
+                        .map(|index| (entity.id, entity.scripts.remove(index).properties))
+                })
+            });
+            let (entry_entity, entry_properties) = attached_entry.unwrap_or_else(|| {
+                (
+                    snapshots
+                        .first()
+                        .map_or_else(EntityId::new, |entity| entity.id),
+                    BTreeMap::new(),
+                )
+            });
             let entry_source_path = snapshot_root.join(&settings.entry_script);
             let entry_source = std::fs::read(&entry_source_path).map_err(|error| {
                 format!(
@@ -227,7 +245,7 @@ impl RuntimeScripts {
                 world: Arc::clone(&world),
                 snapshot_root: snapshot_root.to_path_buf(),
                 entity: entry_entity,
-                properties: Arc::new(Mutex::new(BTreeMap::new())),
+                properties: Arc::new(Mutex::new(entry_properties)),
                 logs: Arc::clone(&logs),
                 dropped_logs: Arc::clone(&dropped_logs),
                 enabled: true,
@@ -253,12 +271,6 @@ impl RuntimeScripts {
                         entity.id, component.script_id
                     )
                 })?;
-                if settings
-                    .as_ref()
-                    .is_some_and(|settings| entry.relative_path == settings.entry_script)
-                {
-                    continue;
-                }
                 let source_path = snapshot_root.join(&entry.relative_path);
                 let source = std::fs::read(&source_path).map_err(|error| {
                     format!("could not read {}: {error}", source_path.display())
@@ -292,6 +304,14 @@ impl RuntimeScripts {
         })
     }
 
+    pub fn render_world<T>(
+        &self,
+        render: impl FnOnce(&engine_world::SceneWorld) -> T,
+    ) -> Result<T, String> {
+        let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
+        world.propagate_transforms();
+        Ok(render(&world))
+    }
     pub fn fixed_update(&mut self, delta: f64) {
         for behavior in &mut self.behaviors {
             if let Err(error) = behavior.fixed_update(delta) {
@@ -475,6 +495,33 @@ struct RuntimeHost {
 }
 
 impl GameplayHost for RuntimeHost {
+    fn set_current_camera(&mut self, source: &str) -> Result<(), String> {
+        let id = self
+            .find_entity(source)?
+            .ok_or_else(|| format!("camera `{source}` was not found"))?;
+        let mut world = self
+            .world
+            .lock()
+            .map_err(|_| "runtime world lock poisoned")?;
+        world
+            .camera(id)
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("entity `{source}` is not a camera"))?;
+        let mut commands = Vec::new();
+        for entity in world.entity_ids() {
+            if let Some(mut camera) = world.camera(entity).map_err(|e| e.to_string())? {
+                let active = entity == id;
+                if camera.active != active {
+                    camera.active = active;
+                    commands.push(WorldCommand::SetCamera {
+                        entity,
+                        value: Some(camera),
+                    });
+                }
+            }
+        }
+        world.apply_commands(&commands).map_err(|e| e.to_string())
+    }
     fn entity_id(&self) -> EntityId {
         self.entity
     }
@@ -841,6 +888,118 @@ mod tests {
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
 
     #[test]
+    fn sdk_camera_selection_changes_render_camera_and_rejects_invalid_targets() {
+        let first = EntitySnapshot {
+            name: Some("First".into()),
+            camera: Some(engine_world::Camera {
+                order: 100,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let second = EntitySnapshot {
+            name: Some("Second".into()),
+            parent: Some(first.id),
+            camera: Some(engine_world::Camera {
+                active: false,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let part = EntitySnapshot::default();
+        let mut world = SceneWorld::new();
+        world
+            .apply_commands(&[
+                WorldCommand::Spawn(Box::new(first.clone())),
+                WorldCommand::Spawn(Box::new(second.clone())),
+                WorldCommand::Spawn(Box::new(part.clone())),
+            ])
+            .unwrap();
+        let world = Arc::new(Mutex::new(world));
+        let make_host = || RuntimeHost {
+            world: Arc::clone(&world),
+            snapshot_root: PathBuf::new(),
+            entity: part.id,
+            properties: Arc::new(Mutex::new(BTreeMap::new())),
+            logs: Arc::new(Mutex::new(VecDeque::new())),
+            dropped_logs: Arc::new(Mutex::new(0)),
+            enabled: true,
+        };
+        let mut lua = LuaBehavior::load(
+            ScriptId::new(),
+            b"return {on_start=function() Game.setCurrentCamera({'Game.scene.First.Second'}) end}",
+            "camera.lua",
+            Box::new(make_host()),
+            100_000,
+        )
+        .unwrap();
+        lua.on_start().unwrap();
+        let mut buffer = engine_world::RenderWorldBuffer::new();
+        {
+            let world = world.lock().unwrap();
+            let render = buffer.extract(&world);
+            assert_eq!(render.cameras.len(), 1);
+            assert_eq!(render.cameras[0].entity, second.id);
+        }
+        let mut host = make_host();
+        for invalid in [
+            "Missing".to_owned(),
+            part.id.to_string(),
+            EntityId::new().to_string(),
+        ] {
+            assert!(host.set_current_camera(&invalid).is_err());
+            assert!(
+                world
+                    .lock()
+                    .unwrap()
+                    .camera(second.id)
+                    .unwrap()
+                    .unwrap()
+                    .active
+            );
+        }
+        let mut js = JavaScriptBehavior::load(
+            ScriptId::new(),
+            b"globalThis.behavior={on_start(){Game.setCurrentCamera('First');}};",
+            "camera.js",
+            Box::new(make_host()),
+            100_000,
+        )
+        .unwrap();
+        js.on_start().unwrap();
+        assert!(
+            world
+                .lock()
+                .unwrap()
+                .camera(first.id)
+                .unwrap()
+                .unwrap()
+                .active
+        );
+        assert!(
+            !world
+                .lock()
+                .unwrap()
+                .camera(second.id)
+                .unwrap()
+                .unwrap()
+                .active
+        );
+        host.set_current_camera(&second.id.to_string()).unwrap();
+        host.set_current_camera(&second.id.to_string()).unwrap();
+        assert_eq!(
+            world
+                .lock()
+                .unwrap()
+                .camera(first.id)
+                .unwrap()
+                .unwrap()
+                .order,
+            100
+        );
+    }
+
+    #[test]
     fn hot_reload_success_and_compile_failure_retain_last_good_state() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("config")).unwrap();
@@ -980,6 +1139,7 @@ mod tests {
         };
         GameSettings {
             entry_script: "scripts/main.lua".into(),
+            ..GameSettings::default()
         }
         .save(temp.path())
         .unwrap();
@@ -993,6 +1153,67 @@ mod tests {
         assert_eq!(
             runtime.drain_logs(),
             vec![("info".to_owned(), "entry ran".to_owned())]
+        );
+    }
+
+    #[test]
+    fn configured_entry_behavior_runs_on_its_attached_entity() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("config")).unwrap();
+        std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
+        let script_id = ScriptId::new();
+        let camera = EntitySnapshot {
+            name: Some("Camera".into()),
+            ..EntitySnapshot::default()
+        };
+        let actor = EntitySnapshot {
+            name: Some("Actor".into()),
+            scripts: vec![ScriptComponent::new(script_id)],
+            ..EntitySnapshot::default()
+        };
+        let scene = SceneDocument {
+            id: engine_core::SceneId::new(),
+            name: "Attached entry".into(),
+            entities: vec![camera.clone(), actor.clone()],
+            instances: Vec::new(),
+        };
+        save_manifest_atomic(
+            &temp.path().join("config/scripts.ron"),
+            &ScriptManifest {
+                format_version: 2,
+                scripts: vec![ScriptManifestEntry {
+                    id: script_id,
+                    language: ScriptLanguage::Lua54,
+                    relative_path: "scripts/main.lua".into(),
+                    api_version: ScriptApiVersion::CURRENT,
+                    public_properties: Vec::new(),
+                }],
+            },
+        )
+        .unwrap();
+        GameSettings {
+            entry_script: "scripts/main.lua".into(),
+            ..GameSettings::default()
+        }
+        .save(temp.path())
+        .unwrap();
+        std::fs::write(
+            temp.path().join("scripts/main.lua"),
+            b"return { on_start=function() rustic.set_translation(7, 0, 0) end }",
+        )
+        .unwrap();
+
+        let runtime = RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+        let changes = runtime
+            .runtime_changes("base", &scene.to_bytes().unwrap())
+            .unwrap();
+
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].target.entity_id, actor.id.to_string());
+        assert_ne!(changes.changes[0].target.entity_id, camera.id.to_string());
+        assert_eq!(
+            changes.changes[0].after,
+            RuntimeValue::Vector3([7.0, 0.0, 0.0])
         );
     }
 
@@ -1024,6 +1245,7 @@ mod tests {
         .unwrap();
         GameSettings {
             entry_script: "scripts/main.lua".into(),
+            ..GameSettings::default()
         }
         .save(temp.path())
         .unwrap();
@@ -1089,6 +1311,7 @@ mod tests {
         .unwrap();
         GameSettings {
             entry_script: "scripts/chosen.lua".into(),
+            ..GameSettings::default()
         }
         .save(temp.path())
         .unwrap();

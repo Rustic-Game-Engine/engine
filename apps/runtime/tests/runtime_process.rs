@@ -9,17 +9,74 @@ use std::time::Duration;
 
 #[test]
 fn real_runtime_child_authenticates_controls_all_modes_and_reaps() {
+    verify_play_modes(false);
+}
+
+#[test]
+#[ignore = "opens native game windows; requires a desktop and graphics adapter"]
+fn native_runtime_windows_render_scene_and_reap() {
+    verify_play_modes(true);
+}
+
+fn verify_play_modes(native_windows: bool) {
     let executable = Path::new(env!("CARGO_BIN_EXE_rustic-runtime"));
     for mode in [PlayMode::Play, PlayMode::NewWindow, PlayMode::Standalone] {
         let directory = tempfile::tempdir().unwrap();
         let play_directory = directory.path().join("temp/play");
         let logs_directory = directory.path().join("logs");
-        let source_bytes = b"immutable authored scene".to_vec();
+        let mut scene = engine_world::SceneDocument::new("Game view");
+        scene.entities = vec![
+            engine_world::EntitySnapshot {
+                name: Some("GameCamera".into()),
+                camera: Some(engine_world::Camera {
+                    active: false,
+                    order: 10,
+                    ..engine_world::Camera::default()
+                }),
+                local_transform: engine_world::LocalTransform {
+                    translation: glam::Vec3::new(0.0, 0.0, -5.0),
+                    ..engine_world::LocalTransform::IDENTITY
+                },
+                ..engine_world::EntitySnapshot::default()
+            },
+            engine_world::EntitySnapshot {
+                light: Some(engine_world::Light::default()),
+                ..engine_world::EntitySnapshot::default()
+            },
+            engine_world::EntitySnapshot {
+                primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
+                part_attributes: engine_world::PartAttributes {
+                    color: [1.0, 0.02, 0.02, 1.0],
+                    ..engine_world::PartAttributes::default()
+                },
+                ..engine_world::EntitySnapshot::default()
+            },
+        ];
+        // The authoring camera looks away. The startup script must select the
+        // game camera before the first frame, in every play mode.
+        scene.entities.push(engine_world::EntitySnapshot {
+            camera: Some(engine_world::Camera::default()),
+            local_transform: engine_world::LocalTransform {
+                translation: glam::Vec3::new(100.0, 0.0, -5.0),
+                ..engine_world::LocalTransform::IDENTITY
+            },
+            ..engine_world::EntitySnapshot::default()
+        });
+        let source_bytes = scene.to_bytes().unwrap();
         let snapshot = SnapshotBuilder::new(&play_directory)
             .stage(
                 mode,
                 SnapshotInput::new("scenes/main.rscene", source_bytes.clone()),
-                &[],
+                &[
+                    SnapshotInput::new(
+                        "settings.json",
+                        br#"{"entry_script":"scripts/main.lua"}"#.to_vec(),
+                    ),
+                    SnapshotInput::new(
+                        "scripts/main.lua",
+                        b"Game.setCurrentCamera('GameCamera')".to_vec(),
+                    ),
+                ],
             )
             .unwrap();
         let mut launch = RuntimeLaunch::new(
@@ -31,12 +88,18 @@ fn real_runtime_child_authenticates_controls_all_modes_and_reaps() {
         );
         launch.connect_timeout = Duration::from_secs(10);
         launch.stop_grace_period = Duration::from_secs(3);
-        // Native windows are a manual platform qualification. The real process,
-        // authenticated IPC, simulation, frame transport, and cleanup remain active.
-        launch.extra_arguments.push("--no-native-window".into());
+        if !native_windows {
+            launch.extra_arguments.push("--no-native-window".into());
+        }
         let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
         let initial_frame = runtime.take_latest_frame().unwrap().unwrap();
-        assert_eq!((initial_frame.width, initial_frame.height), (64, 64));
+        assert_eq!((initial_frame.width, initial_frame.height), (640, 360));
+        let center = (180 * 640 + 320) * 4;
+        assert!(
+            initial_frame.pixels[center + 2] > 100
+                && initial_frame.pixels[center + 2] > initial_frame.pixels[center] * 2,
+            "Play must render the lit scene through its camera"
+        );
         assert_eq!(
             initial_frame.pixels.len(),
             usize::try_from(initial_frame.stride_bytes * initial_frame.height).unwrap()

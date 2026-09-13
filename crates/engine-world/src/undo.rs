@@ -7,6 +7,16 @@ use crate::{
 /// command batch and therefore cannot leave a partial hierarchy edit behind.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneEdit {
+    Camera {
+        entity: EntityId,
+        before: Option<crate::Camera>,
+        after: Option<crate::Camera>,
+    },
+    Light {
+        entity: EntityId,
+        before: Option<crate::Light>,
+        after: Option<crate::Light>,
+    },
     Name {
         entity: EntityId,
         before: Option<String>,
@@ -65,6 +75,8 @@ impl SceneEdit {
 
     pub fn label(&self) -> &str {
         match self {
+            Self::Camera { .. } => "Camera",
+            Self::Light { .. } => "Light",
             Self::Name { .. } => "Name",
             Self::Transform { .. } => "Transform",
             Self::Primitive { .. } => "Primitive dimensions",
@@ -79,6 +91,14 @@ impl SceneEdit {
 
     fn append_forward(&self, output: &mut Vec<WorldCommand>) {
         match self {
+            Self::Camera { entity, after, .. } => output.push(WorldCommand::SetCamera {
+                entity: *entity,
+                value: *after,
+            }),
+            Self::Light { entity, after, .. } => output.push(WorldCommand::SetLight {
+                entity: *entity,
+                value: *after,
+            }),
             Self::Name { entity, after, .. } => output.push(WorldCommand::SetName {
                 entity: *entity,
                 value: after.clone(),
@@ -119,6 +139,14 @@ impl SceneEdit {
 
     fn append_reverse(&self, output: &mut Vec<WorldCommand>) {
         match self {
+            Self::Camera { entity, before, .. } => output.push(WorldCommand::SetCamera {
+                entity: *entity,
+                value: *before,
+            }),
+            Self::Light { entity, before, .. } => output.push(WorldCommand::SetLight {
+                entity: *entity,
+                value: *before,
+            }),
             Self::Name { entity, before, .. } => output.push(WorldCommand::SetName {
                 entity: *entity,
                 value: before.clone(),
@@ -329,5 +357,79 @@ mod tests {
         assert!(undo.undo(&mut world).unwrap());
         assert!(world.contains(id));
         assert_eq!(world.local_transform(id).unwrap(), after);
+    }
+}
+
+#[cfg(test)]
+mod view_component_tests {
+    use super::*;
+    #[test]
+    fn camera_and_light_edits_validate_undo_and_serialize() {
+        let mut world = SceneWorld::new();
+        let entity = EntitySnapshot {
+            camera: Some(crate::Camera::default()),
+            light: Some(crate::Light::default()),
+            ..EntitySnapshot::default()
+        };
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(entity.clone()))])
+            .unwrap();
+        let camera = crate::Camera {
+            order: 5,
+            active: false,
+            ..crate::Camera::default()
+        };
+        let light = crate::Light {
+            intensity: 3.0,
+            kind: crate::LightKind::Spot,
+            ..crate::Light::default()
+        };
+        let mut undo = UndoStack::default();
+        undo.execute(
+            &mut world,
+            SceneEdit::Transaction {
+                label: "View".into(),
+                edits: vec![
+                    SceneEdit::Camera {
+                        entity: entity.id,
+                        before: entity.camera,
+                        after: Some(camera),
+                    },
+                    SceneEdit::Light {
+                        entity: entity.id,
+                        before: entity.light,
+                        after: Some(light),
+                    },
+                ],
+            },
+        )
+        .unwrap();
+        assert_eq!(world.camera(entity.id).unwrap(), Some(camera));
+        undo.undo(&mut world).unwrap();
+        assert_eq!(world.light(entity.id).unwrap(), entity.light);
+        undo.redo(&mut world).unwrap();
+        let document = crate::SceneDocument {
+            entities: vec![world.snapshot(entity.id).unwrap()],
+            ..crate::SceneDocument::new("View test")
+        };
+        let loaded = crate::load_scene(&document.to_bytes().unwrap())
+            .unwrap()
+            .document
+            .create_world()
+            .unwrap();
+        assert_eq!(loaded.camera(entity.id).unwrap(), Some(camera));
+        assert_eq!(loaded.light(entity.id).unwrap(), Some(light));
+        assert!(
+            world
+                .apply_commands(&[WorldCommand::SetLight {
+                    entity: entity.id,
+                    value: Some(crate::Light {
+                        intensity: f32::NAN,
+                        ..light
+                    })
+                }])
+                .is_err()
+        );
+        assert_eq!(world.light(entity.id).unwrap(), Some(light));
     }
 }

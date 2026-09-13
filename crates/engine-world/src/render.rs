@@ -24,6 +24,7 @@ pub struct RenderCamera {
     pub entity: EntityId,
     pub transform: [f32; 16],
     pub projection: CameraProjection,
+    pub zoom: f32,
     pub order: i32,
 }
 
@@ -122,6 +123,7 @@ impl RenderWorldBuffer {
                     entity,
                     transform,
                     projection: camera.projection,
+                    zoom: camera.zoom,
                     order: camera.order,
                 });
             }
@@ -224,5 +226,80 @@ mod tests {
             extracted.primitives[0].primitive,
             Primitive::Cube { size: 1.0 }
         );
+    }
+}
+
+impl RenderCamera {
+    /// Cameras look along local +Z, with local +Y up. Scale does not change the lens.
+    pub fn view_projection(&self, aspect: f32) -> glam::Mat4 {
+        use glam::{Mat4, Vec3};
+        let transform = Mat4::from_cols_array(&self.transform);
+        let (_, rotation, position) = transform.to_scale_rotation_translation();
+        let view = glam::camera::rh::view::look_at_mat4(
+            position,
+            position + rotation * Vec3::Z,
+            rotation * Vec3::Y,
+        );
+        let projection = match self.projection {
+            CameraProjection::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => glam::camera::rh::proj::directx::perspective(
+                2.0 * ((vertical_fov_radians * 0.5).tan() / self.zoom).atan(),
+                aspect.max(0.001),
+                near,
+                far,
+            ),
+            CameraProjection::Orthographic {
+                vertical_size,
+                near,
+                far,
+            } => {
+                let half = vertical_size * 0.5 / self.zoom;
+                // Right-handed projection with WebGPU depth in 0..1.
+                Mat4::from_cols_array(&[
+                    1.0 / (half * aspect.max(0.001)),
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0 / half,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0 / (near - far),
+                    0.0,
+                    0.0,
+                    0.0,
+                    near / (near - far),
+                    1.0,
+                ])
+            }
+        };
+        projection * view
+    }
+}
+
+#[cfg(test)]
+mod camera_projection_tests {
+    use super::*;
+
+    #[test]
+    fn zoom_changes_the_render_projection() {
+        let base = RenderCamera {
+            entity: EntityId::new(),
+            transform: glam::Mat4::IDENTITY.to_cols_array(),
+            projection: CameraProjection::default(),
+            zoom: 1.0,
+            order: 0,
+        };
+        let zoomed = RenderCamera { zoom: 2.0, ..base };
+
+        let base_projection = base.view_projection(1.0);
+        let zoomed_projection = zoomed.view_projection(1.0);
+        assert!(zoomed_projection.x_axis.x.abs() > base_projection.x_axis.x.abs());
+        assert!(zoomed_projection.y_axis.y.abs() > base_projection.y_axis.y.abs());
     }
 }

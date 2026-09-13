@@ -25,8 +25,8 @@ use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
 use num_traits::ToPrimitive as _;
 use play_session::EditorPlaySession;
 use renderer_wgpu::{
-    BackendRequest, RenderedFrame, SceneViewportRenderer, ViewportMesh, ViewportScene,
-    ViewportVertex,
+    BackendRequest, RenderedFrame, SceneViewportRenderer, ViewportGuide, ViewportMesh,
+    ViewportScene, ViewportVertex,
 };
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -127,6 +127,8 @@ struct EditorApp {
     game_settings: GameSettings,
     game_name_text: String,
     entry_script_text: String,
+    autosave_enabled: bool,
+    last_autosave: Option<Instant>,
     show_game_settings: bool,
     missing_dependencies: Vec<ScriptLanguage>,
     show_dependency_prompt: bool,
@@ -183,6 +185,7 @@ impl EditorApp {
                 .and_then(|load| load.manifest.scripts.first().cloned())
                 .map_or_else(GameSettings::default, |entry| GameSettings {
                     entry_script: entry.relative_path,
+                    ..GameSettings::default()
                 })
         });
         if !read_only
@@ -199,6 +202,7 @@ impl EditorApp {
             .entry_script
             .to_string_lossy()
             .replace('\\', "/");
+        let autosave_enabled = game_settings.autosave;
         let missing_dependencies = missing_project_dependencies(document.project().root());
         let show_dependency_prompt = !missing_dependencies.is_empty();
         let mut app = Self {
@@ -232,6 +236,8 @@ impl EditorApp {
             game_settings,
             game_name_text,
             entry_script_text,
+            autosave_enabled,
+            last_autosave: Some(Instant::now()),
             show_game_settings: false,
             missing_dependencies,
             show_dependency_prompt,
@@ -273,6 +279,9 @@ impl EditorApp {
     }
 
     fn refresh_preview(&mut self) {
+        if self.play.is_some() {
+            return;
+        }
         self.preview_dirty = true;
         let scene = viewport_scene(
             &self.document,
@@ -315,7 +324,7 @@ impl EditorApp {
         // external editor become visible without requiring mouse movement.
         context.request_repaint_after(Duration::from_secs(1));
         let preview = self.preview_result.try_recv().ok();
-        if let Some(result) = preview {
+        if let Some(result) = preview.filter(|_| self.play.is_none()) {
             match result {
                 Ok(Some(frame)) => {
                     let image = egui::ColorImage::from_rgba_unmultiplied(
@@ -351,6 +360,7 @@ impl EditorApp {
             context.request_repaint_after(std::time::Duration::from_millis(16));
         }
         if let Some(play) = &mut self.play {
+            context.request_repaint_after(Duration::from_millis(33));
             if let Ok(Some(frame)) = play.take_latest_frame() {
                 let mut rgba = frame.pixels;
                 for pixel in rgba.as_chunks_mut::<4>().0 {
@@ -438,6 +448,7 @@ impl EditorApp {
                 Err(error) => self.log(Severity::Error, "runtime", error),
             }
         }
+        self.refresh_preview();
     }
 
     fn runtime_changes_dialog(&mut self, context: &egui::Context) {
@@ -519,6 +530,27 @@ impl EditorApp {
         match self.document.save() {
             Ok(()) => self.log(Severity::Info, "scene", "Scene saved transactionally"),
             Err(error) => self.log(Severity::Error, "scene", error.to_string()),
+        }
+    }
+
+    fn autosave_if_needed(&mut self, scene_changed: bool) {
+        if !self.game_settings.autosave
+            || self.document.is_read_only()
+            || !self.document.is_modified()
+        {
+            return;
+        }
+        let interval_elapsed = self
+            .last_autosave
+            .is_none_or(|instant| instant.elapsed() >= Duration::from_secs(30));
+        if !scene_changed && !interval_elapsed {
+            return;
+        }
+
+        self.last_autosave = Some(Instant::now());
+        match self.document.save() {
+            Ok(()) => self.log(Severity::Info, "scene.autosave", "Scene autosaved"),
+            Err(error) => self.log(Severity::Error, "scene.autosave", error.to_string()),
         }
     }
 
@@ -904,6 +936,14 @@ impl EditorApp {
                         .hint_text("scripts/main.lua"),
                 );
                 ui.small("Project-relative path. Its top-level code runs once when play starts.");
+                ui.add_space(8.0);
+                ui.add_enabled(
+                    !self.document.is_read_only(),
+                    egui::Checkbox::new(&mut self.autosave_enabled, "Autosave scene"),
+                );
+                ui.small(
+                    "Saves after an attribute changes and flushes pending changes every 30 seconds.",
+                );
                 ui.horizontal(|ui| {
                     if ui
                         .add_enabled(!self.document.is_read_only(), egui::Button::new("Save"))
@@ -912,6 +952,7 @@ impl EditorApp {
                         let game_name = self.game_name_text.trim().to_owned();
                         let candidate = GameSettings {
                             entry_script: PathBuf::from(self.entry_script_text.trim()),
+                            autosave: self.autosave_enabled,
                         };
                         let root = self.document.project().root().to_path_buf();
                         let mut project = self.document.project().clone();
@@ -938,7 +979,11 @@ impl EditorApp {
                             });
                         match result {
                             Ok(()) => {
+                                let autosave_was_enabled = self.game_settings.autosave;
                                 self.game_settings = candidate;
+                                if !autosave_was_enabled && self.game_settings.autosave {
+                                    self.last_autosave = None;
+                                }
                                 self.show_game_settings = false;
                                 context.send_viewport_cmd(egui::ViewportCommand::Title(format!(
                                     "{} — Rustic Editor",
@@ -947,7 +992,7 @@ impl EditorApp {
                                 self.log(
                                     Severity::Info,
                                     "game.settings",
-                                    "Saved game name and entry script settings",
+                                    "Saved game name, entry script, and autosave settings",
                                 );
                             }
                             Err(error) => self.log(Severity::Error, "game.settings", error),
@@ -1058,6 +1103,7 @@ fn transform_mode_button(
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_background(ui.ctx());
+        let scene_was_modified = self.document.is_modified();
         egui::Panel::top("editor-toolbar")
             .frame(
                 egui::Frame::new()
@@ -1094,6 +1140,7 @@ impl eframe::App for EditorApp {
             preview: self.preview.as_ref(),
             preview_status: &self.preview_status,
             request_preview: false,
+            playing: self.play.is_some(),
             camera: &mut self.camera,
             viewport_extent: &mut self.viewport_extent,
             gizmo: &mut self.gizmo,
@@ -1106,6 +1153,8 @@ impl eframe::App for EditorApp {
         self.runtime_changes_dialog(ui.ctx());
         self.game_settings_dialog(ui.ctx());
         self.dependency_prompt(ui.ctx());
+        let scene_changed = !scene_was_modified && self.document.is_modified();
+        self.autosave_if_needed(scene_changed);
     }
 }
 
@@ -1119,6 +1168,7 @@ struct EditorViewer<'a> {
     preview: Option<&'a egui::TextureHandle>,
     preview_status: &'a str,
     request_preview: bool,
+    playing: bool,
     camera: &'a mut EditorCamera,
     viewport_extent: &'a mut [u32; 2],
     gizmo: &'a mut GizmoSettings,
@@ -1153,7 +1203,10 @@ impl EditorViewer<'_> {
     )]
     fn viewport(&mut self, ui: &mut egui::Ui, is_2d: bool) {
         ui.horizontal(|ui| {
-            if !is_2d {
+            if self.playing {
+                ui.label("Game view · Active scene camera · 16:9");
+            }
+            if !is_2d && !self.playing {
                 ui.selectable_value(&mut self.gizmo.space, GizmoSpace::World, "World");
                 ui.selectable_value(&mut self.gizmo.space, GizmoSpace::Local, "Local");
                 ui.checkbox(&mut self.gizmo.snapping, "Snap");
@@ -1192,6 +1245,17 @@ impl EditorViewer<'_> {
             let size = ui.available_size().max(egui::vec2(64.0, 64.0));
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
             if let Some(texture) = self.preview {
+                let rect = if self.playing {
+                    let aspect = 16.0 / 9.0;
+                    let size = if rect.width() / rect.height() > aspect {
+                        egui::vec2(rect.height() * aspect, rect.height())
+                    } else {
+                        egui::vec2(rect.width(), rect.width() / aspect)
+                    };
+                    egui::Rect::from_center_size(rect.center(), size)
+                } else {
+                    rect
+                };
                 ui.painter().image(
                     texture.id(),
                     rect,
@@ -1234,7 +1298,7 @@ impl EditorViewer<'_> {
             *self.viewport_extent = extent;
             self.request_preview = true;
         }
-        if !is_2d {
+        if !is_2d && !self.playing {
             self.viewport_input(ui, &response);
             self.gizmo_overlay(ui, response.rect);
         }
@@ -1654,6 +1718,24 @@ impl EditorViewer<'_> {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("+ Add", |ui| {
+                    for (label, is_camera) in [("Camera", true), ("Light", false)] {
+                        if ui.button(label).clicked() {
+                            let transform = if is_camera {
+                                camera_placement(*self.camera)
+                            } else {
+                                LocalTransform::IDENTITY
+                            };
+                            match self.document.add_camera_or_light(is_camera, transform) {
+                                Ok(_) => self.request_preview = true,
+                                Err(error) => self.console.push(simple_console(
+                                    Severity::Error,
+                                    "inspector",
+                                    error.to_string(),
+                                )),
+                            }
+                            ui.close();
+                        }
+                    }
                     for (name, primitive) in primitive_palette() {
                         if ui
                             .add_enabled(!self.document.is_read_only(), egui::Button::new(name))
@@ -1907,31 +1989,72 @@ impl EditorViewer<'_> {
                 self.request_preview = true;
             }
         }
-        let mut attributes = snapshot.part_attributes;
-        ui.label("Color");
-        let mut color = attributes.color;
-        let mut attributes_changed = ui.color_edit_button_rgba_unmultiplied(&mut color).changed();
-        attributes.color = color;
-        attributes_changed |= ui
-            .checkbox(&mut attributes.can_touch, "Can touch")
-            .changed();
-        attributes_changed |= ui
-            .checkbox(&mut attributes.can_collide, "Can collide")
-            .changed();
-        attributes_changed |= ui.checkbox(&mut attributes.anchored, "Anchored").changed();
-        ui.label(format!(
-            "Parent: {}",
-            snapshot
-                .parent
-                .map_or_else(|| "Scene root".into(), |id| id.to_string())
-        ));
-        if attributes_changed && !self.document.is_read_only() {
-            if self
-                .document
-                .set_part_attributes(entity, attributes)
-                .is_ok()
-            {
-                self.request_preview = true;
+        if let Some(mut camera) = snapshot.camera {
+            ui.separator();
+            ui_theme::section(ui, "Camera", "Game view during Play");
+            ui.label("Looks along local +Z. Highest active priority is used.");
+            if ui.button("Align to editor view").clicked() && !self.document.is_read_only() {
+                if self
+                    .document
+                    .set_transform(entity, camera_placement(*self.camera))
+                    .is_ok()
+                {
+                    self.request_preview = true;
+                }
+            }
+            if edit_camera(ui, &mut camera) && !self.document.is_read_only() {
+                match self.document.set_camera(entity, camera) {
+                    Ok(()) => self.request_preview = true,
+                    Err(error) => self.console.push(simple_console(
+                        Severity::Error,
+                        "inspector",
+                        error.to_string(),
+                    )),
+                }
+            }
+        }
+        if let Some(mut light) = snapshot.light {
+            ui.separator();
+            ui_theme::section(ui, "Light", "Scene illumination");
+            if edit_light(ui, &mut light) && !self.document.is_read_only() {
+                match self.document.set_light(entity, light) {
+                    Ok(()) => self.request_preview = true,
+                    Err(error) => self.console.push(simple_console(
+                        Severity::Error,
+                        "inspector",
+                        error.to_string(),
+                    )),
+                }
+            }
+        }
+        if snapshot.primitive.is_some() || snapshot.mesh.is_some() {
+            let mut attributes = snapshot.part_attributes;
+            ui.label("Color");
+            let mut color = attributes.color;
+            let mut attributes_changed =
+                ui.color_edit_button_rgba_unmultiplied(&mut color).changed();
+            attributes.color = color;
+            attributes_changed |= ui
+                .checkbox(&mut attributes.can_touch, "Can touch")
+                .changed();
+            attributes_changed |= ui
+                .checkbox(&mut attributes.can_collide, "Can collide")
+                .changed();
+            attributes_changed |= ui.checkbox(&mut attributes.anchored, "Anchored").changed();
+            ui.label(format!(
+                "Parent: {}",
+                snapshot
+                    .parent
+                    .map_or_else(|| "Scene root".into(), |id| id.to_string())
+            ));
+            if attributes_changed && !self.document.is_read_only() {
+                if self
+                    .document
+                    .set_part_attributes(entity, attributes)
+                    .is_ok()
+                {
+                    self.request_preview = true;
+                }
             }
         }
         if let Some(mut primitive) = snapshot.primitive {
@@ -2350,8 +2473,232 @@ fn viewport_scene(
     ViewportScene {
         view_projection: camera.view_projection(aspect).to_cols_array(),
         meshes,
+        lights: render_world.lights.to_vec(),
+        guides: selection_guides(document, aspect),
         grid_vertices: grid_lines(20, 1.0),
         clear_color: [0.045, 0.06, 0.085, 1.0],
+    }
+}
+
+fn selection_guides(document: &AuthoringDocument, aspect: f32) -> Vec<ViewportGuide> {
+    let Some(entity) = document.selected() else {
+        return Vec::new();
+    };
+    let Ok(transform) = document.world().world_transform(entity) else {
+        return Vec::new();
+    };
+    let transform = transform.0;
+    if let Ok(Some(camera)) = document.world().camera(entity) {
+        return vec![ViewportGuide {
+            key: hash_value(&format!("camera-guide-{entity}")),
+            vertices: camera_guide_vertices(camera, aspect, transform),
+            color: [0.18, 0.82, 1.0, 1.0],
+        }];
+    }
+    if let Ok(Some(light)) = document.world().light(entity) {
+        return vec![ViewportGuide {
+            key: hash_value(&format!("light-guide-{entity}")),
+            vertices: light_guide_vertices(light, transform),
+            color: [1.0, 0.78, 0.12, 1.0],
+        }];
+    }
+    Vec::new()
+}
+
+fn push_local_line(output: &mut Vec<[f32; 3]>, transform: Mat4, from: Vec3, to: Vec3) {
+    output.push(transform.transform_point3(from).to_array());
+    output.push(transform.transform_point3(to).to_array());
+}
+
+fn push_rectangle(
+    output: &mut Vec<[f32; 3]>,
+    transform: Mat4,
+    half_width: f32,
+    half_height: f32,
+    z: f32,
+) -> [Vec3; 4] {
+    let corners = [
+        Vec3::new(-half_width, -half_height, z),
+        Vec3::new(half_width, -half_height, z),
+        Vec3::new(half_width, half_height, z),
+        Vec3::new(-half_width, half_height, z),
+    ];
+    for edge in 0..4 {
+        push_local_line(output, transform, corners[edge], corners[(edge + 1) % 4]);
+    }
+    corners
+}
+
+fn camera_guide_vertices(
+    camera: engine_world::Camera,
+    aspect: f32,
+    transform: Mat4,
+) -> Vec<[f32; 3]> {
+    let mut output = Vec::new();
+    let aspect = aspect.max(0.001);
+    match camera.projection {
+        engine_world::CameraProjection::Perspective {
+            vertical_fov_radians,
+            near,
+            far,
+        } => {
+            let guide_far = far.min(12.0).max(near);
+            let tangent = (vertical_fov_radians * 0.5).tan() / camera.zoom;
+            push_rectangle(
+                &mut output,
+                transform,
+                near * tangent * aspect,
+                near * tangent,
+                near,
+            );
+            let far_corners = push_rectangle(
+                &mut output,
+                transform,
+                guide_far * tangent * aspect,
+                guide_far * tangent,
+                guide_far,
+            );
+            for corner in far_corners {
+                push_local_line(&mut output, transform, Vec3::ZERO, corner);
+            }
+            push_local_line(
+                &mut output,
+                transform,
+                Vec3::new(0.0, 0.0, near),
+                Vec3::new(0.0, 0.0, guide_far),
+            );
+        }
+        engine_world::CameraProjection::Orthographic {
+            vertical_size,
+            near,
+            far,
+        } => {
+            let guide_far = far.min(near + 12.0);
+            let half_height = vertical_size * 0.5 / camera.zoom;
+            let half_width = half_height * aspect;
+            let near_corners =
+                push_rectangle(&mut output, transform, half_width, half_height, near);
+            let far_corners =
+                push_rectangle(&mut output, transform, half_width, half_height, guide_far);
+            for index in 0..4 {
+                push_local_line(
+                    &mut output,
+                    transform,
+                    near_corners[index],
+                    far_corners[index],
+                );
+            }
+            push_local_line(
+                &mut output,
+                transform,
+                Vec3::new(0.0, 0.0, near),
+                Vec3::new(0.0, 0.0, guide_far),
+            );
+        }
+    }
+    output
+}
+
+fn light_guide_vertices(light: engine_world::Light, transform: Mat4) -> Vec<[f32; 3]> {
+    let mut output = Vec::new();
+    match light.kind {
+        engine_world::LightKind::Directional => {
+            let end = Vec3::new(0.0, 0.0, 8.0);
+            push_local_line(&mut output, transform, Vec3::ZERO, end);
+            for offset in [
+                Vec3::new(0.45, 0.0, -0.9),
+                Vec3::new(-0.45, 0.0, -0.9),
+                Vec3::new(0.0, 0.45, -0.9),
+                Vec3::new(0.0, -0.45, -0.9),
+            ] {
+                push_local_line(&mut output, transform, end, end + offset);
+            }
+        }
+        engine_world::LightKind::Spot => {
+            let radius = light.range * light.spot_outer_angle_radians.tan();
+            let segments = 32;
+            for index in 0..segments {
+                let a = std::f32::consts::TAU * index as f32 / segments as f32;
+                let b = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+                let first = Vec3::new(radius * a.cos(), radius * a.sin(), light.range);
+                let second = Vec3::new(radius * b.cos(), radius * b.sin(), light.range);
+                push_local_line(&mut output, transform, first, second);
+                if index % 8 == 0 {
+                    push_local_line(&mut output, transform, Vec3::ZERO, first);
+                }
+            }
+            push_local_line(
+                &mut output,
+                transform,
+                Vec3::ZERO,
+                Vec3::new(0.0, 0.0, light.range),
+            );
+        }
+        engine_world::LightKind::Point => {
+            let segments = 32;
+            for axis in 0..3 {
+                for index in 0..segments {
+                    let a = std::f32::consts::TAU * index as f32 / segments as f32;
+                    let b = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+                    let circle_point = |angle: f32| match axis {
+                        0 => Vec3::new(0.0, angle.cos(), angle.sin()) * light.range,
+                        1 => Vec3::new(angle.cos(), 0.0, angle.sin()) * light.range,
+                        _ => Vec3::new(angle.cos(), angle.sin(), 0.0) * light.range,
+                    };
+                    push_local_line(&mut output, transform, circle_point(a), circle_point(b));
+                }
+            }
+        }
+    }
+    output
+}
+
+#[cfg(test)]
+mod camera_light_guide_tests {
+    use super::*;
+
+    #[test]
+    fn camera_zoom_narrows_the_perspective_guide() {
+        let normal = camera_guide_vertices(engine_world::Camera::default(), 1.0, Mat4::IDENTITY);
+        let zoomed = camera_guide_vertices(
+            engine_world::Camera {
+                zoom: 2.0,
+                ..engine_world::Camera::default()
+            },
+            1.0,
+            Mat4::IDENTITY,
+        );
+
+        assert_eq!(normal.len(), zoomed.len());
+        let normal_width = normal
+            .iter()
+            .map(|point| point[0].abs())
+            .fold(0.0_f32, f32::max);
+        let zoomed_width = zoomed
+            .iter()
+            .map(|point| point[0].abs())
+            .fold(0.0_f32, f32::max);
+        assert!((zoomed_width * 2.0 - normal_width).abs() < 1.0e-4);
+    }
+
+    #[test]
+    fn each_light_shape_produces_a_visible_line_guide() {
+        for kind in [
+            engine_world::LightKind::Directional,
+            engine_world::LightKind::Point,
+            engine_world::LightKind::Spot,
+        ] {
+            let vertices = light_guide_vertices(
+                engine_world::Light {
+                    kind,
+                    ..engine_world::Light::default()
+                },
+                Mat4::IDENTITY,
+            );
+            assert!(!vertices.is_empty());
+            assert_eq!(vertices.len() % 2, 0);
+            assert!(vertices.iter().flatten().all(|value| value.is_finite()));
+        }
     }
 }
 
@@ -2959,7 +3306,10 @@ class SceneApi:
         prefix = "" if path in ("", "Game.scene") else path.rstrip("./") + "."
         return [entity for name, entity in self.state.items() if not prefix or name.startswith(prefix)]
 
-class GameApi: pass
+class GameApi:
+    def setCurrentCamera(self, source):
+        instance.commands.append({"op":"set_current_camera","source":source})
+    set_current_camera = setCurrentCamera
 rustic = RusticApi()
 Game = GameApi()
 Game.scene = SceneApi()
@@ -2984,7 +3334,7 @@ using System.Text.Json;
 
 var instance = new InstanceApi();
 var rustic = new RusticApi(instance.Commands);
-var Game = new GameApi();
+var Game = new GameApi(instance.Commands);
 string? line;
 while ((line = Console.ReadLine()) is not null) {
     instance.Commands.Clear();
@@ -3029,7 +3379,13 @@ sealed class SceneApi {
     public string? Find(string path) => State.TryGetProperty(path, out var value) ? value.GetString() : null;
     public IEnumerable<string> List(string path="Game.scene") => State.EnumerateObject().Where(x => path=="Game.scene" || x.Name.StartsWith(path+".")).Select(x => x.Value.GetString()!);
 }
-sealed class GameApi { public SceneApi scene { get; } = new(); }
+sealed class GameApi {
+    public SceneApi scene { get; } = new();
+    private readonly List<object> commands;
+    public GameApi(List<object> commands) => this.commands = commands;
+    public void SetCurrentCamera(string source) => commands.Add(new { op="set_current_camera", source });
+    public void setCurrentCamera(string source) => SetCurrentCamera(source);
+}
 "#,
         ),
         ScriptLanguage::C => (
@@ -3045,6 +3401,18 @@ static void instance_command(const char *op, const char *source, const char *par
 }
 static void instance_add(const char *source, const char *parent) { instance_command("add_instance", source, parent); }
 static void instance_clone(const char *source, const char *parent) { instance_command("clone_instance", source, parent); }
+static void Game_setCurrentCamera(const char *source) {
+    char escaped[1048500];
+    size_t n = 0;
+    for (const unsigned char *p = (const unsigned char *)source; *p; ++p) {
+        if (n + 6 >= sizeof escaped) { fputs("camera path too long\n", stderr); return; }
+        if (*p < 32 || *p == '"' || *p == '\\') {
+            n += (size_t)snprintf(escaped + n, sizeof escaped - n, "\\u%04x", *p);
+        } else escaped[n++] = (char)*p;
+    }
+    escaped[n] = '\0';
+    instance_command("set_current_camera", escaped, NULL);
+}
 
 int main(void) {
     char request[1048577];
@@ -3099,8 +3467,21 @@ int main() {
             commands.add("{\"op\":\""+op+"\",\"source\":\""+source+"\",\"parent\":"+(parent==null?"null":"\""+parent+"\"")+"}");
         }
     }
+    static final class GameApi {
+        final InstanceApi instance;
+        GameApi(InstanceApi instance) { this.instance = instance; }
+        void setCurrentCamera(String source) {
+            var escaped = new StringBuilder();
+            for (char c : source.toCharArray()) {
+                if (c < 32 || c == '"' || c == '\\') escaped.append(String.format("\\u%04x", (int)c));
+                else escaped.append(c);
+            }
+            instance.push("set_current_camera", escaped.toString(), null);
+        }
+    }
     public static void main(String[] args) throws Exception {
         var instance = new InstanceApi();
+        var Game = new GameApi(instance);
         var input = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
         while (input.readLine() != null) {
             instance.commands.clear();
@@ -3148,10 +3529,14 @@ final class SceneApi {
     public function Find(string $path): ?string { return $this->state[$path] ?? null; }
     public function List(string $path="Game.scene"): array { return array_values(array_filter($this->state, fn($id,$name)=>$path==="Game.scene" || str_starts_with($name,$path."."), ARRAY_FILTER_USE_BOTH)); }
 }
-final class GameApi { public SceneApi $scene; public function __construct(){ $this->scene=new SceneApi(); } }
+final class GameApi {
+    public SceneApi $scene;
+    public function __construct(private InstanceApi $instance){ $this->scene=new SceneApi(); }
+    public function setCurrentCamera(string $source): void { $this->instance->commands[]=["op"=>"set_current_camera","source"=>$source]; }
+}
 $instance = new InstanceApi();
 $rustic = new RusticApi($instance);
-$Game = new GameApi();
+$Game = new GameApi($instance);
 while (($line = fgets(STDIN)) !== false) {
     $request = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
     $instance->commands = [];
@@ -3181,7 +3566,20 @@ globalThis.behavior = {
         ),
         ScriptLanguage::Luau => (
             "luau",
-            b"-- Luau uses the isolated CLI host protocol.\nprint('{\"format_version\":1,\"commands\":[]}')\n",
+            br#"-- Luau uses the isolated CLI host protocol.
+local commands = {}
+local Game = {}
+function Game.setCurrentCamera(source)
+    if type(source) == "table" then source = source[1] end
+    assert(type(source) == "string", "expected a camera path or {cameraPath}")
+    local escaped = string.gsub(source, '[%c\\"]', function(c)
+        return string.format("\\u%04x", string.byte(c))
+    end)
+    table.insert(commands, '{"op":"set_current_camera","source":"' .. escaped .. '"}')
+end
+-- Example: Game.setCurrentCamera({"Game.scene.Camera"})
+print('{"format_version":1,"commands":[' .. table.concat(commands, ",") .. ']}')
+"#,
         ),
     }
 }
@@ -3271,4 +3669,131 @@ fn project_argument(arguments: &[std::ffi::OsString]) -> Option<PathBuf> {
         .windows(2)
         .find(|pair| pair[0] == "--project")
         .map(|pair| PathBuf::from(&pair[1]))
+}
+
+fn camera_placement(camera: EditorCamera) -> LocalTransform {
+    LocalTransform {
+        translation: camera.position(),
+        rotation: Quat::from_mat4(&camera.view_matrix().inverse())
+            * Quat::from_rotation_y(std::f32::consts::PI),
+        ..LocalTransform::IDENTITY
+    }
+}
+
+fn edit_camera(ui: &mut egui::Ui, camera: &mut engine_world::Camera) -> bool {
+    let before = *camera;
+    ui.checkbox(&mut camera.active, "Active");
+    ui.add(egui::DragValue::new(&mut camera.order).prefix("Priority "));
+    ui.add(
+        egui::DragValue::new(&mut camera.zoom)
+            .range(0.01..=100.0)
+            .speed(0.05)
+            .prefix("Zoom "),
+    )
+    .on_hover_text("Optical magnification: values above 1 zoom in; values below 1 zoom out");
+    let mut ortho = matches!(
+        camera.projection,
+        engine_world::CameraProjection::Orthographic { .. }
+    );
+    if ui.checkbox(&mut ortho, "Orthographic").changed() {
+        camera.projection = if ortho {
+            engine_world::CameraProjection::Orthographic {
+                vertical_size: 10.0,
+                near: 0.1,
+                far: 1000.0,
+            }
+        } else {
+            engine_world::CameraProjection::default()
+        };
+    }
+    let (near, far) = match &mut camera.projection {
+        engine_world::CameraProjection::Perspective {
+            vertical_fov_radians,
+            near,
+            far,
+        } => {
+            let mut degrees = vertical_fov_radians.to_degrees();
+            if ui
+                .add(egui::Slider::new(&mut degrees, 1.0..=179.0).text("Field of view (degrees)"))
+                .changed()
+            {
+                *vertical_fov_radians = degrees.to_radians();
+            }
+            (near, far)
+        }
+        engine_world::CameraProjection::Orthographic {
+            vertical_size,
+            near,
+            far,
+        } => {
+            ui.add(
+                egui::DragValue::new(vertical_size)
+                    .range(0.01..=100000.0)
+                    .speed(0.1)
+                    .prefix("Vertical size "),
+            );
+            (near, far)
+        }
+    };
+    ui.add(
+        egui::DragValue::new(near)
+            .range(0.001..=(*far - 0.001).max(0.001))
+            .speed(0.01)
+            .prefix("Near clip "),
+    );
+    ui.add(
+        egui::DragValue::new(far)
+            .range((*near + 0.001)..=1000000.0)
+            .speed(1.0)
+            .prefix("Far clip "),
+    );
+    before != *camera
+}
+
+fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
+    let before = *light;
+    egui::ComboBox::from_label("Type")
+        .selected_text(format!("{:?}", light.kind))
+        .show_ui(ui, |ui| {
+            for kind in [
+                engine_world::LightKind::Directional,
+                engine_world::LightKind::Point,
+                engine_world::LightKind::Spot,
+            ] {
+                ui.selectable_value(&mut light.kind, kind, format!("{kind:?}"));
+            }
+        });
+    let mut color = light.color.to_array();
+    ui.horizontal(|ui| {
+        ui.label("Light color");
+        ui.color_edit_button_rgb(&mut color);
+    });
+    light.color = color.into();
+    ui.add(
+        egui::DragValue::new(&mut light.intensity)
+            .range(0.0..=10000.0)
+            .speed(0.05)
+            .prefix("Intensity "),
+    );
+    if light.kind != engine_world::LightKind::Directional {
+        ui.add(
+            egui::DragValue::new(&mut light.range)
+                .range(0.01..=100000.0)
+                .speed(0.1)
+                .prefix("Range "),
+        );
+    }
+    if light.kind == engine_world::LightKind::Spot {
+        let mut degrees = light.spot_outer_angle_radians.to_degrees();
+        if ui
+            .add(egui::Slider::new(&mut degrees, 1.0..=89.0).text("Cone half-angle (degrees)"))
+            .changed()
+        {
+            light.spot_outer_angle_radians = degrees.to_radians();
+        }
+    }
+    ui.label("Directional and spot lights shine along local +Z.");
+    ui.label("Intensity 0 turns this light off. Up to 32 lights per scene.");
+    ui.label("Shadow casting is not supported yet.");
+    before != *light
 }

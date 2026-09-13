@@ -9,7 +9,7 @@ function inspectApi() {
   Game.scene.Find("Game.scene"); Game.scene.List("Game.scene");
   void Game.scene.Camera;
   rustic.set_translation(x, y, z);
-  rustic.set_property("smoke_value", value ?? 1.0);
+  if (value !== undefined) rustic.set_property("smoke_value", value);
   if (position !== undefined) rustic.EditAttribute("Position", position);
   rustic.set_enabled(true);
   return id;

@@ -9,8 +9,13 @@ class RusticBehavior {
             "translation","properties","attributes","scene_paths","actions","keys","key_events","any_key_pressed");
         while ((request = input.readLine()) != null) {
             for (var field : fields) if (!request.contains("\"" + field + "\"")) System.err.println("missing " + field);
-            if (request.contains("\"callback\":\"on_start\""))
-                System.out.println("{\"format_version\":1,\"commands\":[{\"op\":\"set_translation\",\"value\":[0,0,0]},{\"op\":\"set_property\",\"name\":\"smoke_value\",\"value\":1.0},{\"op\":\"edit_attribute\",\"name\":\"Position\",\"value\":[0,0,0]},{\"op\":\"log\",\"level\":\"info\",\"message\":\"Java API smoke test passed\"},{\"op\":\"set_enabled\",\"enabled\":true},{\"op\":\"add_instance\",\"source\":\"Part\",\"parent\":null},{\"op\":\"clone_instance\",\"source\":\"Part\",\"parent\":null}]}");
+            if (request.contains("\"callback\":\"on_start\"")) {
+                var commands = "{\"op\":\"set_translation\",\"value\":[0,0,0]}";
+                if (request.contains("\"smoke_value\":"))
+                    commands += ",{\"op\":\"set_property\",\"name\":\"smoke_value\",\"value\":1.0}";
+                commands += ",{\"op\":\"edit_attribute\",\"name\":\"Position\",\"value\":[0,0,0]},{\"op\":\"log\",\"level\":\"info\",\"message\":\"Java API smoke test passed\"},{\"op\":\"set_enabled\",\"enabled\":true},{\"op\":\"add_instance\",\"source\":\"Part\",\"parent\":null},{\"op\":\"clone_instance\",\"source\":\"Part\",\"parent\":null}";
+                System.out.println("{\"format_version\":1,\"commands\":[" + commands + "]}");
+            }
             else System.out.println("{\"format_version\":1,\"commands\":[]}");
             System.out.flush();
         }

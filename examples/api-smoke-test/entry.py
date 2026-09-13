@@ -12,12 +12,13 @@ def commands_for(state):
         position = state.get("attributes", {}).get("Position")
         commands.extend([
             {"op":"set_translation", "value":state["translation"]},
-            {"op":"set_property", "name":"smoke_value", "value":state.get("properties", {}).get("smoke_value", 1.0)},
             {"op":"log", "level":"info", "message":"Python API smoke test passed"},
             {"op":"set_enabled", "enabled":True},
             {"op":"add_instance", "source":"Part", "parent":None},
             {"op":"clone_instance", "source":state["entity_id"], "parent":None},
         ])
+        if "smoke_value" in state.get("properties", {}):
+            commands.append({"op":"set_property", "name":"smoke_value", "value":state["properties"]["smoke_value"]})
         if position is not None:
             commands.append({"op":"edit_attribute", "name":"Position", "value":position})
     return commands

@@ -64,7 +64,7 @@ toolchains through the build service, never from a render or UI thread.
 
 | Support tier | Initial targets | Promise |
 |---|---|---|
-| Tier 1 | Windows 11 x86-64 | Every merge is built and tested. DX12 is preferred, Vulkan is secondary, and GL compatibility is the recovery path. The first usable MVP ships here. |
+| Tier 1 | Windows 11 x86-64 | Every merge is built and tested. Dedicated GPUs prefer Vulkan; integrated graphics retain DX12 preference. DX12, Vulkan, and GL remain recovery paths if the preferred candidate cannot initialize. The first usable MVP ships here. |
 | Tier 1 after MVP | Linux x86-64 on current Ubuntu LTS and one rolling distribution | Every release is built/tested. Vulkan is preferred and GL compatibility is the recovery path. Wayland and X11 are both exercised through `winit`. |
 | Tier 1 after MVP | macOS on Apple silicon, with x86-64 while upstream dependencies support it | Every release is built/tested. Metal is the only preferred native backend; GL is compatibility-only where the OS and `wgpu` support it. |
 | Tier 2 future | Android and iOS | Runtime/export support after desktop API boundaries are stable; no editor commitment. |
@@ -541,7 +541,7 @@ Selection is deterministic, explainable, cached, and recoverable:
 2. **Inventory hardware.** Record OS/build, GPU vendor/device/driver, UMA/discrete,
    VRAM or shared-memory budget, supported APIs/features/limits, CPU topology, RAM,
    display pixels/refresh/HDR, power source, thermal/power hints, and multi-GPU topology.
-3. **Enumerate candidates.** Windows: DX12, Vulkan, GL; Linux: Vulkan, GL; macOS:
+3. **Enumerate candidates.** Windows: dedicated Vulkan adapters first, then DX12, Vulkan, GL; Linux: Vulkan, GL; macOS:
    Metal, then available compatibility. Enumerate each physical adapter/backend pair.
 4. **Hard reject.** Remove candidates that cannot create the target surface, lack the
    Compatibility baseline limits/formats, have a known fatal driver rule, or exceed

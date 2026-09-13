@@ -7,6 +7,8 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+engine-world = { path = "../engine-world", version = "0.1.0" }
+glam.workspace = true
 engine-rhi = { path = "../engine-rhi", version = "0.1.0" }
 naga.workspace = true
 pollster.workspace = true

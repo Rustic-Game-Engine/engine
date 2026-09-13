@@ -52,6 +52,15 @@ pub struct RuntimeServerConfig {
     reason = "the session loop keeps control ordering and shutdown cleanup auditable"
 )]
 pub fn run_runtime_server(config: RuntimeServerConfig) -> Result<(), RuntimeServerError> {
+    let mode = config.mode;
+    run_runtime_server_with_renderer(config, move |_, tick| Ok(runtime_frame(mode, tick)))
+}
+
+/// Runs the protocol with an application-owned renderer of the live simulation world.
+pub fn run_runtime_server_with_renderer(
+    config: RuntimeServerConfig,
+    mut render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,
+) -> Result<(), RuntimeServerError> {
     let snapshot = PlaySnapshot::open(&config.snapshot_root)?;
     let source_scene = snapshot.scene_bytes()?;
     let scripts = Arc::new(Mutex::new(
@@ -84,7 +93,17 @@ pub fn run_runtime_server(config: RuntimeServerConfig) -> Result<(), RuntimeServ
     )?;
 
     let result = (|| {
-        connection.send(0, &ProtocolMessage::Frame(runtime_frame(config.mode, 0)))?;
+        connection.send(
+            0,
+            &ProtocolMessage::Frame(
+                scripts
+                    .lock()
+                    .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                    .render_world(|world| render(world, 0))
+                    .map_err(RuntimeServerError::Scripts)?
+                    .map_err(RuntimeServerError::Scripts)?,
+            ),
+        )?;
         connection.send(
             0,
             &ProtocolMessage::Ready {
@@ -218,20 +237,29 @@ pub fn run_runtime_server(config: RuntimeServerConfig) -> Result<(), RuntimeServ
             } else {
                 connection.send(
                     received.request_id,
-                    &ProtocolMessage::Frame(runtime_frame(config.mode, ack.fixed_tick)),
+                    &ProtocolMessage::Frame(
+                        scripts
+                            .lock()
+                            .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                            .render_world(|world| render(world, ack.fixed_tick))
+                            .map_err(RuntimeServerError::Scripts)?
+                            .map_err(RuntimeServerError::Scripts)?,
+                    ),
                 )?;
             }
-            emit_console(
-                &mut connection,
-                logger.as_ref(),
-                &process,
-                Severity::Debug,
-                "runtime.control",
-                format!(
-                    "control {request:?}: state={:?}, fixed_tick={}",
-                    ack.state, ack.fixed_tick
-                ),
-            )?;
+            if request != ControlRequest::QueryState {
+                emit_console(
+                    &mut connection,
+                    logger.as_ref(),
+                    &process,
+                    Severity::Debug,
+                    "runtime.control",
+                    format!(
+                        "control {request:?}: state={:?}, fixed_tick={}",
+                        ack.state, ack.fixed_tick
+                    ),
+                )?;
+            }
             connection.send(received.request_id, &ProtocolMessage::ControlAck(ack))?;
             if ack.state == RuntimeState::Stopped {
                 break;

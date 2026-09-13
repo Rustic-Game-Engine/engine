@@ -264,6 +264,62 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    pub fn add_camera_or_light(
+        &mut self,
+        camera: bool,
+        transform: LocalTransform,
+    ) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        let snapshot = EntitySnapshot {
+            name: Some(if camera { "Camera" } else { "Light" }.into()),
+            local_transform: transform,
+            camera: camera.then(engine_world::Camera::default),
+            light: (!camera).then(engine_world::Light::default),
+            ..EntitySnapshot::default()
+        };
+        let id = snapshot.id;
+        self.undo
+            .execute(&mut self.world, SceneEdit::Create { snapshot })?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
+    pub fn set_camera(
+        &mut self,
+        entity: EntityId,
+        after: engine_world::Camera,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.camera(entity)?;
+        self.undo.execute(
+            &mut self.world,
+            SceneEdit::Camera {
+                entity,
+                before,
+                after: Some(after),
+            },
+        )?;
+        Ok(())
+    }
+
+    pub fn set_light(
+        &mut self,
+        entity: EntityId,
+        after: engine_world::Light,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.light(entity)?;
+        self.undo.execute(
+            &mut self.world,
+            SceneEdit::Light {
+                entity,
+                before,
+                after: Some(after),
+            },
+        )?;
+        Ok(())
+    }
+
     pub fn set_part_attributes(
         &mut self,
         entity: EntityId,

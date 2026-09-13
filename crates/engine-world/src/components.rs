@@ -176,6 +176,8 @@ impl Default for CameraProjection {
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct Camera {
     pub projection: CameraProjection,
+    /// Optical magnification. Values above 1 narrow the view; values below 1 widen it.
+    pub zoom: f32,
     pub active: bool,
     pub order: i32,
 }
@@ -184,6 +186,7 @@ impl Default for Camera {
     fn default() -> Self {
         Self {
             projection: CameraProjection::default(),
+            zoom: 1.0,
             active: true,
             order: 0,
         }
@@ -220,5 +223,44 @@ impl Default for Light {
             spot_outer_angle_radians: 45.0_f32.to_radians(),
             casts_shadows: true,
         }
+    }
+}
+
+impl Camera {
+    pub fn is_valid(self) -> bool {
+        let (size, near, far, perspective) = match self.projection {
+            CameraProjection::Perspective {
+                vertical_fov_radians,
+                near,
+                far,
+            } => (vertical_fov_radians, near, far, true),
+            CameraProjection::Orthographic {
+                vertical_size,
+                near,
+                far,
+            } => (vertical_size, near, far, false),
+        };
+        size.is_finite()
+            && size > 0.0
+            && (!perspective || size < std::f32::consts::PI)
+            && self.zoom.is_finite()
+            && self.zoom > 0.0
+            && near.is_finite()
+            && far.is_finite()
+            && near > 0.0
+            && far > near
+    }
+}
+impl Light {
+    pub fn is_valid(self) -> bool {
+        self.color.is_finite()
+            && self.color.min_element() >= 0.0
+            && self.intensity.is_finite()
+            && self.intensity >= 0.0
+            && self.range.is_finite()
+            && self.range > 0.0
+            && self.spot_outer_angle_radians.is_finite()
+            && self.spot_outer_angle_radians > 0.0
+            && self.spot_outer_angle_radians < std::f32::consts::PI
     }
 }

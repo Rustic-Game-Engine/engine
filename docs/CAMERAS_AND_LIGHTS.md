@@ -1,0 +1,39 @@
+# Cameras and lights
+
+Use **+ Add > Camera** or **+ Add > Light** in the hierarchy. Select the object to edit its component in the inspector. Component changes save with the scene and support Undo/Redo.
+
+## Camera
+
+Play, New Window, and Standalone render the live scene through its current active camera. The highest Priority wins; equal priorities use stable entity ID order. Scripts can select the current camera during startup or gameplay with `setCurrentCamera` (or the language-specific equivalent). This activates the selected camera and deactivates the others. Until a camera is active, the game view is empty.
+
+**Align to editor view** copies the editor viewpoint into the selected camera. New cameras start aligned to the editor. Cameras look along local +Z with +Y up; parent transforms affect their position and orientation. Camera scale does not zoom the lens.
+
+- Active: makes the camera eligible for the game view.
+- Priority: selects the camera when more than one is active.
+- Zoom: optical magnification. Values above 1 zoom in and values below 1 zoom out.
+- Perspective field of view: changes how much of the scene is visible before zoom is applied.
+- Orthographic vertical size: changes the visible world-space height without perspective foreshortening.
+- Near/Far clip: limits visible depth.
+
+The game view currently renders at 640 by 360, with a fixed 16:9 aspect ratio and letterboxing. Editor navigation and gizmos are separate from the game camera. Stop restores the editor view. Simulation changes to camera or parent transforms are reflected in subsequent game frames.
+
+Selecting a camera displays a cyan frustum and center trajectory in the editor viewport. The guide follows the camera transform, projection, aspect ratio, clipping settings, and zoom. Very long far clipping distances are shortened in the editor guide so the scene remains usable; this does not change rendering.
+
+## Light
+
+Scene lights illuminate primitives in both the editor and game view. A small ambient term keeps unlit surfaces visible. The renderer uses up to 32 lights in stable entity order.
+
+- Directional: shines along local +Z throughout the scene; rotate it to change illumination.
+- Point: emits from its world position, fading smoothly to zero at Range.
+- Spot: combines point-light range with a cone along local +Z. Cone half-angle controls coverage, with a soft edge.
+- Light color and Intensity affect illumination. Intensity zero turns the light off.
+
+Parent transforms move and rotate lights. Range and cone controls appear only for the light types that use them. Shadow casting is not implemented and has no editable control.
+
+Selecting a light displays an amber editor guide: an arrow for directional lights, the range sphere for point lights, or the complete range cone and center trajectory for spot lights. Guides are editor-only and do not appear in the game view.
+
+## Verification
+
+GPU tests compare actual rendered pixels for camera projection/clipping and light intensity, color, range, and direction. World tests cover component persistence, validation, and undo/redo. Runtime process tests transport the rendered scene through authenticated IPC in all three play modes and check pause, step, resume, and shutdown.
+
+IPC generation 2 transports pixel buffers as bounded binary frames instead of decimal text. Editor and runtime must come from the same build.

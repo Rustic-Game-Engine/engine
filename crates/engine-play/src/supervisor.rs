@@ -133,7 +133,7 @@ impl SupervisedRuntime {
             stop_grace_period: launch.stop_grace_period,
             next_request_id: 2,
             console_events: VecDeque::new(),
-            frames: FrameRing::new(3, FrameRingLimits::bgra(128, 128)?)?,
+            frames: FrameRing::new(3, FrameRingLimits::bgra(640, 360)?)?,
             runtime_changes: None,
             terminal: false,
         };

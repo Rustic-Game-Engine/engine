@@ -14,10 +14,14 @@ pub struct EditorPlaySession {
     mode: PlayMode,
     state: RuntimeState,
     fixed_tick: u64,
+    last_frame_request: std::time::Instant,
 }
 
 impl EditorPlaySession {
     pub fn start(document: &AuthoringDocument, mode: PlayMode) -> Result<Self, String> {
+        // Startup scripts may create or select the current camera. Let the live
+        // runtime choose it after those scripts run, rather than rejecting the
+        // authoring snapshot before initialization.
         let scene = document
             .snapshot_bytes()
             .map_err(|error| error.to_string())?;
@@ -103,6 +107,7 @@ impl EditorPlaySession {
             mode,
             state: RuntimeState::Running,
             fixed_tick: 0,
+            last_frame_request: std::time::Instant::now(),
         })
     }
 
@@ -164,7 +169,11 @@ impl EditorPlaySession {
         self.runtime.drain_console_events()
     }
 
-    pub fn take_latest_frame(&self) -> Result<Option<engine_play::BgraFrame>, String> {
+    pub fn take_latest_frame(&mut self) -> Result<Option<engine_play::BgraFrame>, String> {
+        if self.last_frame_request.elapsed() >= Duration::from_millis(33) {
+            self.control(ControlRequest::QueryState)?;
+            self.last_frame_request = std::time::Instant::now();
+        }
         self.runtime
             .take_latest_frame()
             .map_err(|error| error.to_string())

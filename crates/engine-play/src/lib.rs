@@ -28,6 +28,7 @@ pub use protocol::{
 };
 pub use runtime_server::{
     RuntimeServerConfig, RuntimeServerError, record_runtime_crash, run_runtime_server,
+    run_runtime_server_with_renderer,
 };
 pub use simulation::{
     ControlAck, ControlRequest, PlayMode, RuntimeSimulation, RuntimeState, SimulationError,

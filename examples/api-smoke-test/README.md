@@ -6,8 +6,8 @@ mutation commands, logs a success message, and leaves the behavior enabled.
 
 Copy the desired file into a project's `scripts/` directory (or `ui/` for PHP and
 Web), add it through **Programming > Create Behavior**, and attach it to an entity.
-The behavior should declare a public Number property named `smoke_value` so the
-`set_property` check has a valid target.
+The `set_property` check runs when the behavior declares a public Number property
+named `smoke_value`; entries also run safely when that optional property is absent.
 
 The native Lua/JavaScript/Web scripts exercise the complete in-process API. External
 languages exercise every host-protocol command (`set_translation`, `set_property`,

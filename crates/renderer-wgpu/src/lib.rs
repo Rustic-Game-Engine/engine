@@ -14,6 +14,10 @@ use wgpu::util::DeviceExt as _;
 /// Hard cap for offscreen fixture dimensions and frame-transport allocations.
 pub const MAX_RENDER_DIMENSION: u32 = 8_192;
 
+// Shared by viewport pipelines and their color/depth attachments.
+const VIEWPORT_SAMPLE_COUNT: u32 = 4;
+const SELECTION_OUTLINE_WIDTH_PIXELS: f32 = 3.0;
+
 const MESH_SHADER: &str = r"
 struct Uniforms {
     model_view_projection: mat4x4<f32>,
@@ -52,6 +56,15 @@ struct Uniforms {
     model_view_projection: mat4x4<f32>,
     model: mat4x4<f32>,
     color: vec4<f32>,
+    normal_matrix: mat4x4<f32>,
+    lighting: vec4<f32>,
+    lights: array<Light, 32>,
+};
+struct Light {
+    position_kind: vec4<f32>,
+    direction_range: vec4<f32>,
+    color_intensity: vec4<f32>,
+    cone: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
 struct VertexInput {
@@ -61,24 +74,43 @@ struct VertexInput {
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) normal: vec3<f32>,
+    @location(1) world_position: vec3<f32>,
 };
 @vertex fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
     output.position = uniforms.model_view_projection * vec4<f32>(input.position, 1.0);
-    output.normal = normalize((uniforms.model * vec4<f32>(input.normal, 0.0)).xyz);
+    output.normal = normalize((uniforms.normal_matrix * vec4<f32>(input.normal, 0.0)).xyz);
+    output.world_position = (uniforms.model * vec4<f32>(input.position, 1.0)).xyz;
     return output;
 }
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let light = normalize(vec3<f32>(0.35, 0.8, -0.45));
-    let diffuse = 0.28 + 0.72 * abs(dot(normalize(input.normal), light));
-    return vec4<f32>(uniforms.color.rgb * diffuse, uniforms.color.a);
+    if uniforms.lighting.y > 0.5 { return uniforms.color; }
+    var illumination = vec3<f32>(0.12);
+    for (var i = 0u; i < u32(uniforms.lighting.x); i += 1u) {
+        let light = uniforms.lights[i];
+        var direction = -light.direction_range.xyz;
+        var attenuation = 1.0;
+        if light.position_kind.w > 0.5 {
+            let offset = light.position_kind.xyz - input.world_position;
+            let distance = length(offset);
+            direction = offset / max(distance, 0.0001);
+            let falloff = max(1.0 - distance / max(light.direction_range.w, 0.0001), 0.0);
+            attenuation = falloff * falloff;
+            if light.position_kind.w > 1.5 {
+                let cosine = dot(-direction, light.direction_range.xyz);
+                attenuation *= smoothstep(light.cone.x, light.cone.y, cosine);
+            }
+        }
+        illumination += light.color_intensity.rgb * light.color_intensity.w * attenuation * max(dot(normalize(input.normal), direction), 0.0);
+    }
+    return vec4<f32>(uniforms.color.rgb * illumination, uniforms.color.a);
 }
 ";
 
 /// A backend request. `Auto` tries platform-preferred candidates in explicit order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendRequest {
-    /// Windows: DX12, Vulkan, GL; Linux: Vulkan, GL; macOS: Metal.
+    /// Windows: discrete Vulkan first, then DX12, Vulkan, GL; Linux: Vulkan, GL; macOS: Metal.
     Auto,
     /// Direct3D 12 only.
     Direct3D12,
@@ -91,25 +123,81 @@ pub enum BackendRequest {
 }
 
 impl BackendRequest {
-    fn candidates(self) -> Vec<(RendererBackend, wgpu::Backends)> {
+    fn candidates(self) -> Vec<(RendererBackend, wgpu::Backends, bool)> {
         match self {
-            Self::Direct3D12 => vec![(RendererBackend::Direct3D12, wgpu::Backends::DX12)],
-            Self::Vulkan => vec![(RendererBackend::Vulkan, wgpu::Backends::VULKAN)],
-            Self::Metal => vec![(RendererBackend::Metal, wgpu::Backends::METAL)],
-            Self::OpenGl => vec![(RendererBackend::OpenGl, wgpu::Backends::GL)],
+            Self::Direct3D12 => vec![(RendererBackend::Direct3D12, wgpu::Backends::DX12, false)],
+            Self::Vulkan => vec![(RendererBackend::Vulkan, wgpu::Backends::VULKAN, false)],
+            Self::Metal => vec![(RendererBackend::Metal, wgpu::Backends::METAL, false)],
+            Self::OpenGl => vec![(RendererBackend::OpenGl, wgpu::Backends::GL, false)],
             Self::Auto if cfg!(target_os = "windows") => vec![
-                (RendererBackend::Direct3D12, wgpu::Backends::DX12),
-                (RendererBackend::Vulkan, wgpu::Backends::VULKAN),
-                (RendererBackend::OpenGl, wgpu::Backends::GL),
+                (RendererBackend::Vulkan, wgpu::Backends::VULKAN, true),
+                (RendererBackend::Direct3D12, wgpu::Backends::DX12, false),
+                (RendererBackend::Vulkan, wgpu::Backends::VULKAN, false),
+                (RendererBackend::OpenGl, wgpu::Backends::GL, false),
             ],
             Self::Auto if cfg!(target_os = "macos") => {
-                vec![(RendererBackend::Metal, wgpu::Backends::METAL)]
+                vec![(RendererBackend::Metal, wgpu::Backends::METAL, false)]
             }
             Self::Auto => vec![
-                (RendererBackend::Vulkan, wgpu::Backends::VULKAN),
-                (RendererBackend::OpenGl, wgpu::Backends::GL),
+                (RendererBackend::Vulkan, wgpu::Backends::VULKAN, false),
+                (RendererBackend::OpenGl, wgpu::Backends::GL, false),
             ],
         }
+    }
+}
+
+/// Try every dedicated Vulkan adapter before returning to the normal backend order.
+/// Surface compatibility and device creation must succeed before an adapter is selected.
+async fn initialize_adapter(
+    instance: &wgpu::Instance,
+    surface: Option<&wgpu::Surface<'_>>,
+    discrete_only: bool,
+    label: &str,
+) -> Result<(wgpu::Adapter, wgpu::Device, wgpu::Queue), String> {
+    let adapters = if discrete_only {
+        instance
+            .enumerate_adapters(wgpu::Backends::VULKAN)
+            .await
+            .into_iter()
+            .filter(|adapter| {
+                adapter.get_info().device_type == wgpu::DeviceType::DiscreteGpu
+                    && surface.is_none_or(|surface| adapter.is_surface_supported(surface))
+            })
+            .collect::<Vec<_>>()
+    } else {
+        vec![
+            instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    force_fallback_adapter: false,
+                    compatible_surface: surface,
+                    apply_limit_buckets: true,
+                })
+                .await
+                .map_err(|error| error.to_string())?,
+        ]
+    };
+    let mut failures = Vec::new();
+    for adapter in adapters {
+        match adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some(label),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
+                memory_hints: wgpu::MemoryHints::Performance,
+                trace: wgpu::Trace::Off,
+            })
+            .await
+        {
+            Ok((device, queue)) => return Ok((adapter, device, queue)),
+            Err(error) => failures.push(format!("{}: {error}", adapter.get_info().name)),
+        }
+    }
+    if failures.is_empty() {
+        Err("no compatible dedicated Vulkan GPU".to_owned())
+    } else {
+        Err(failures.join("; "))
     }
 }
 
@@ -175,11 +263,22 @@ pub struct ViewportMesh {
     pub selected: bool,
 }
 
+/// An editor-only colored line list, used for selection trajectories and volumes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ViewportGuide {
+    pub key: u64,
+    pub vertices: Vec<[f32; 3]>,
+    pub color: [f32; 4],
+}
+
 /// Complete editor viewport frame input without backend implementation types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewportScene {
     pub view_projection: [f32; 16],
     pub meshes: Vec<ViewportMesh>,
+    pub lights: Vec<engine_world::RenderLight>,
+    /// Editor-only guides. Each consecutive pair of vertices forms one line.
+    pub guides: Vec<ViewportGuide>,
     /// Line-list positions, normally the XZ authoring grid.
     pub grid_vertices: Vec<[f32; 3]>,
     pub clear_color: [f32; 4],
@@ -422,7 +521,7 @@ impl SurfaceRenderer {
         scale_factor: f64,
     ) -> Result<Self, RendererError> {
         let mut attempts = Vec::new();
-        for (backend, bit) in request.candidates() {
+        for (backend, bit, discrete_only) in request.candidates() {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             descriptor.backends = bit;
             let instance = wgpu::Instance::new(descriptor);
@@ -433,35 +532,19 @@ impl SurfaceRenderer {
                     continue;
                 }
             };
-            let adapter = match instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(&surface),
-                    apply_limit_buckets: true,
-                })
-                .await
-            {
-                Ok(adapter) => adapter,
-                Err(error) => {
-                    attempts.push(format!("{backend:?}: surface adapter failed: {error}"));
-                    continue;
-                }
-            };
-            let (device, queue) = match adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("rustic-m2-surface-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                    memory_hints: wgpu::MemoryHints::Performance,
-                    trace: wgpu::Trace::Off,
-                })
-                .await
+            let (adapter, device, queue) = match initialize_adapter(
+                &instance,
+                Some(&surface),
+                discrete_only,
+                "rustic-m2-surface-device",
+            )
+            .await
             {
                 Ok(result) => result,
                 Err(error) => {
-                    attempts.push(format!("{backend:?}: surface device failed: {error}"));
+                    attempts.push(format!(
+                        "{backend:?} (discrete_only={discrete_only}): {error}"
+                    ));
                     continue;
                 }
             };
@@ -682,39 +765,23 @@ impl BackendContext {
 
     async fn initialize(request: BackendRequest) -> Result<Self, RendererError> {
         let mut attempts = Vec::new();
-        for (backend, bit) in request.candidates() {
+        for (backend, bit, discrete_only) in request.candidates() {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
             descriptor.backends = bit;
             let instance = wgpu::Instance::new(descriptor);
-            let adapter = match instance
-                .request_adapter(&wgpu::RequestAdapterOptions {
-                    power_preference: wgpu::PowerPreference::HighPerformance,
-                    force_fallback_adapter: false,
-                    compatible_surface: None,
-                    apply_limit_buckets: true,
-                })
-                .await
-            {
-                Ok(adapter) => adapter,
-                Err(error) => {
-                    attempts.push(format!("{backend:?}: adapter request failed: {error}"));
-                    continue;
-                }
-            };
-            let (device, queue) = match adapter
-                .request_device(&wgpu::DeviceDescriptor {
-                    label: Some("rustic-m2-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::downlevel_defaults(),
-                    experimental_features: wgpu::ExperimentalFeatures::disabled(),
-                    memory_hints: wgpu::MemoryHints::Performance,
-                    trace: wgpu::Trace::Off,
-                })
-                .await
+            let (adapter, device, queue) = match initialize_adapter(
+                &instance,
+                None,
+                discrete_only,
+                "rustic-m2-device",
+            )
+            .await
             {
                 Ok(result) => result,
                 Err(error) => {
-                    attempts.push(format!("{backend:?}: device request failed: {error}"));
+                    attempts.push(format!(
+                        "{backend:?} (discrete_only={discrete_only}): {error}"
+                    ));
                     continue;
                 }
             };
@@ -863,6 +930,7 @@ struct ViewportTargets {
     height: u32,
     color: wgpu::Texture,
     color_view: wgpu::TextureView,
+    multisample_color_view: wgpu::TextureView,
     depth_view: wgpu::TextureView,
     readback: wgpu::Buffer,
     padded_bytes_per_row: u32,
@@ -983,6 +1051,18 @@ impl SceneViewportRenderer {
         }
         self.ensure_targets(width, height);
         self.ensure_grid(&scene.grid_vertices)?;
+        for guide in &scene.guides {
+            self.ensure_guide(guide)?;
+            self.ensure_instance(guide.key);
+            self.write_instance(
+                guide.key,
+                scene.view_projection,
+                identity_matrix(),
+                guide.color,
+                &[],
+                true,
+            );
+        }
         for mesh in &scene.meshes {
             validate_viewport_mesh(mesh)?;
             self.ensure_mesh(mesh)?;
@@ -992,6 +1072,8 @@ impl SceneViewportRenderer {
                 scene.view_projection,
                 mesh.model,
                 mesh.color,
+                &scene.lights,
+                false,
             );
             if mesh.selected {
                 let outline_key = mesh.instance_key ^ (1_u64 << 63);
@@ -999,8 +1081,10 @@ impl SceneViewportRenderer {
                 self.write_instance(
                     outline_key,
                     scene.view_projection,
-                    multiply_matrix(mesh.model, scale_matrix(1.045)),
+                    selection_outline_model(mesh, scene.view_projection, width, height),
                     [1.0, 0.48, 0.04, 1.0],
+                    &[],
+                    true,
                 );
             }
         }
@@ -1009,6 +1093,8 @@ impl SceneViewportRenderer {
             scene.view_projection,
             identity_matrix(),
             [0.28, 0.31, 0.35, 1.0],
+            &[],
+            true,
         );
 
         let targets = self.targets.as_ref().ok_or_else(|| {
@@ -1024,8 +1110,8 @@ impl SceneViewportRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rustic-viewport-main-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &targets.color_view,
-                    resolve_target: None,
+                    view: &targets.multisample_color_view,
+                    resolve_target: Some(&targets.color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: f64::from(scene.clear_color[0]),
@@ -1033,7 +1119,7 @@ impl SceneViewportRenderer {
                             b: f64::from(scene.clear_color[2]),
                             a: f64::from(scene.clear_color[3]),
                         }),
-                        store: wgpu::StoreOp::Store,
+                        store: wgpu::StoreOp::Discard,
                     },
                     depth_slice: None,
                 })],
@@ -1088,6 +1174,19 @@ impl SceneViewportRenderer {
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
                 }
             }
+
+            pass.set_pipeline(&self.line_pipeline);
+            for guide in &scene.guides {
+                let (Some(gpu_mesh), Some(instance)) =
+                    (self.meshes.get(&guide.key), self.instances.get(&guide.key))
+                else {
+                    continue;
+                };
+                pass.set_bind_group(0, &instance.bind_group, &[]);
+                pass.set_vertex_buffer(0, gpu_mesh.vertices.slice(..));
+                pass.set_index_buffer(gpu_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
+            }
         }
         encoder.copy_texture_to_buffer(
             targets.color.as_image_copy(),
@@ -1141,11 +1240,22 @@ impl SceneViewportRenderer {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
+        // Resolve into the single-sample color texture used by CPU readback.
+        let multisample_color = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rustic-viewport-msaa-color"),
+            size,
+            mip_level_count: 1,
+            sample_count: VIEWPORT_SAMPLE_COUNT,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("rustic-viewport-depth"),
             size,
             mip_level_count: 1,
-            sample_count: 1,
+            sample_count: VIEWPORT_SAMPLE_COUNT,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -1162,6 +1272,8 @@ impl SceneViewportRenderer {
             width,
             height,
             color_view: color.create_view(&wgpu::TextureViewDescriptor::default()),
+            multisample_color_view: multisample_color
+                .create_view(&wgpu::TextureViewDescriptor::default()),
             depth_view: depth.create_view(&wgpu::TextureViewDescriptor::default()),
             color,
             readback,
@@ -1265,11 +1377,52 @@ impl SceneViewportRenderer {
         Ok(())
     }
 
+    fn ensure_guide(&mut self, guide: &ViewportGuide) -> Result<(), RendererError> {
+        if guide.vertices.len() % 2 != 0 {
+            return Err(RendererError::InvalidMesh(
+                "viewport guide must contain pairs of line vertices".to_owned(),
+            ));
+        }
+        if guide
+            .vertices
+            .iter()
+            .flatten()
+            .chain(guide.color.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err(RendererError::InvalidMesh(
+                "viewport guide contains non-finite values".to_owned(),
+            ));
+        }
+        let vertices = guide
+            .vertices
+            .iter()
+            .map(|position| ViewportVertex {
+                position: *position,
+                normal: [0.0, 1.0, 0.0],
+            })
+            .collect::<Vec<_>>();
+        let indices = (0..u32::try_from(vertices.len()).map_err(|_| {
+            RendererError::InvalidMesh("guide vertex count exceeds u32".to_owned())
+        })?)
+            .collect::<Vec<_>>();
+        let mesh = ViewportMesh {
+            instance_key: guide.key,
+            mesh_key: guide.key,
+            vertices,
+            indices,
+            model: identity_matrix(),
+            color: guide.color,
+            selected: false,
+        };
+        self.ensure_mesh(&mesh)
+    }
+
     fn ensure_instance(&mut self, key: u64) {
         self.instances.entry(key).or_insert_with(|| {
             let uniform = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rustic-viewport-instance-uniform"),
-                size: 144,
+                size: 2272,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -1297,11 +1450,50 @@ impl SceneViewportRenderer {
         view_projection: [f32; 16],
         model: [f32; 16],
         color: [f32; 4],
+        lights: &[engine_world::RenderLight],
+        unlit: bool,
     ) {
-        let mut values = Vec::with_capacity(36);
+        let mut values = Vec::with_capacity(568);
         values.extend(multiply_matrix(view_projection, model));
         values.extend(model);
         values.extend(color);
+        values.extend(
+            glam::Mat4::from_cols_array(&model)
+                .inverse()
+                .transpose()
+                .to_cols_array(),
+        );
+        values.extend([
+            lights.len().min(32) as f32,
+            if unlit { 1.0 } else { 0.0 },
+            0.0,
+            0.0,
+        ]);
+        for light in lights.iter().take(32) {
+            let transform = glam::Mat4::from_cols_array(&light.transform);
+            let (_, rotation, position) = transform.to_scale_rotation_translation();
+            let direction = rotation * glam::Vec3::Z;
+            let kind = match light.kind {
+                engine_world::LightKind::Directional => 0.0,
+                engine_world::LightKind::Point => 1.0,
+                engine_world::LightKind::Spot => 2.0,
+            };
+            values.extend([position.x, position.y, position.z, kind]);
+            values.extend([direction.x, direction.y, direction.z, light.range]);
+            values.extend([
+                light.color[0],
+                light.color[1],
+                light.color[2],
+                light.intensity,
+            ]);
+            values.extend([
+                light.spot_outer_angle_radians.cos(),
+                (light.spot_outer_angle_radians * 0.8).cos(),
+                0.0,
+                0.0,
+            ]);
+        }
+        values.resize(568, 0.0);
         if let Some(instance) = self.instances.get(&key) {
             self.context
                 .queue
@@ -1383,7 +1575,10 @@ fn viewport_pipeline(
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
-        multisample: wgpu::MultisampleState::default(),
+        multisample: wgpu::MultisampleState {
+            count: VIEWPORT_SAMPLE_COUNT,
+            ..wgpu::MultisampleState::default()
+        },
         fragment: Some(wgpu::FragmentState {
             module: &shader,
             entry_point: Some("fs_main"),
@@ -1491,10 +1686,63 @@ fn multiply_matrix(left: [f32; 16], right: [f32; 16]) -> [f32; 16] {
     output
 }
 
-const fn scale_matrix(scale: f32) -> [f32; 16] {
-    [
-        scale, 0.0, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 0.0, scale, 0.0, 0.0, 0.0, 0.0, 1.0,
-    ]
+fn selection_outline_model(
+    mesh: &ViewportMesh,
+    view_projection: [f32; 16],
+    width: u32,
+    height: u32,
+) -> [f32; 16] {
+    let mut half_extents = glam::Vec3::ZERO;
+    for vertex in &mesh.vertices {
+        half_extents = half_extents.max(glam::Vec3::from(vertex.position).abs());
+    }
+    let transform =
+        glam::Mat4::from_cols_array(&view_projection) * glam::Mat4::from_cols_array(&mesh.model);
+    let Some(center) = projected_viewport_point(transform, glam::Vec3::ZERO, width, height) else {
+        return mesh.model;
+    };
+    let mut outline_scale = glam::Vec3::ONE;
+    for axis in 0..3 {
+        let radius = half_extents[axis];
+        if radius <= f32::EPSILON {
+            continue;
+        }
+        let mut projected_radius = 0.0;
+        let mut samples = 0.0;
+        for sign in [-1.0, 1.0] {
+            let mut point = glam::Vec3::ZERO;
+            point[axis] = sign * radius;
+            if let Some(projected) = projected_viewport_point(transform, point, width, height) {
+                projected_radius += projected.distance(center);
+                samples += 1.0;
+            }
+        }
+        if samples > 0.0 {
+            projected_radius /= samples;
+        }
+        if projected_radius > 0.001 {
+            outline_scale[axis] += SELECTION_OUTLINE_WIDTH_PIXELS / projected_radius;
+        }
+    }
+    (glam::Mat4::from_cols_array(&mesh.model) * glam::Mat4::from_scale(outline_scale))
+        .to_cols_array()
+}
+
+fn projected_viewport_point(
+    transform: glam::Mat4,
+    point: glam::Vec3,
+    width: u32,
+    height: u32,
+) -> Option<glam::Vec2> {
+    let clip = transform * point.extend(1.0);
+    if !clip.is_finite() || clip.w.abs() <= f32::EPSILON {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    Some(glam::Vec2::new(
+        ndc.x * width as f32 * 0.5,
+        ndc.y * height as f32 * 0.5,
+    ))
 }
 
 #[allow(
@@ -2113,9 +2361,14 @@ mod tests {
         let candidates = BackendRequest::Auto.candidates();
         assert!(!candidates.is_empty());
         if cfg!(target_os = "windows") {
-            assert_eq!(candidates[0].0, RendererBackend::Direct3D12);
-            assert_eq!(candidates[1].0, RendererBackend::Vulkan);
-            assert_eq!(candidates[2].0, RendererBackend::OpenGl);
+            assert_eq!(
+                candidates[0],
+                (RendererBackend::Vulkan, wgpu::Backends::VULKAN, true)
+            );
+            assert_eq!(candidates[1].0, RendererBackend::Direct3D12);
+            assert_eq!(candidates[2].0, RendererBackend::Vulkan);
+            assert_eq!(candidates[3].0, RendererBackend::OpenGl);
+            assert!(candidates[1..].iter().all(|candidate| !candidate.2));
         }
     }
 
@@ -2162,7 +2415,7 @@ mod tests {
             instance_key,
             mesh_key,
             vertices: vertices.clone(),
-            indices: vec![0, 1, 2],
+            indices: vec![0, 2, 1],
             model: [
                 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, z, 1.0,
             ],
@@ -2175,6 +2428,8 @@ mod tests {
                 mesh(1, 1, 0.8, [0.0, 0.0, 1.0, 1.0]),
                 mesh(2, 1, 0.2, [1.0, 0.0, 0.0, 1.0]),
             ],
+            lights: Vec::new(),
+            guides: Vec::new(),
             grid_vertices: Vec::new(),
             clear_color: [0.0, 0.0, 0.0, 1.0],
         };
@@ -2191,6 +2446,14 @@ mod tests {
         assert_eq!(second_stats.frame_count, first_stats.frame_count + 1);
         let center = (32 * 64 + 32) * 4;
         assert!(first.rgba8[center] > first.rgba8[center + 2]);
+        // A flat triangle against black must have partially covered edge pixels.
+        // Single-sample rendering produces only black or the full interior color.
+        assert!(
+            first
+                .rgba8
+                .chunks_exact(4)
+                .any(|pixel| { pixel[0] > 0 && pixel[0] < first.rgba8[center] })
+        );
         assert_eq!(first.rgba8, second.rgba8);
         renderer.render(80, 64, &scene).unwrap();
         assert_eq!(
@@ -2198,5 +2461,398 @@ mod tests {
             second_stats.target_generations + 1
         );
         assert!(renderer.render(0, 0, &scene).unwrap().is_none());
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run explicitly for viewport qualification"]
+    fn viewport_renders_colored_selection_guides() {
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let scene = ViewportScene {
+            view_projection: identity_matrix(),
+            meshes: Vec::new(),
+            lights: Vec::new(),
+            guides: vec![ViewportGuide {
+                key: 42,
+                vertices: vec![[-0.8, 0.0, 0.2], [0.8, 0.0, 0.2]],
+                color: [0.1, 0.8, 1.0, 1.0],
+            }],
+            grid_vertices: Vec::new(),
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let frame = renderer.render(64, 64, &scene).unwrap().unwrap();
+        assert!(
+            frame
+                .rgba8
+                .chunks_exact(4)
+                .any(|pixel| { pixel[2] > 100 && pixel[1] > pixel[0].saturating_mul(2) })
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run explicitly for viewport qualification"]
+    fn selection_outline_width_is_constant_across_object_scales() {
+        let primitive = engine_world::Primitive::Cube { size: 1.0 }
+            .mesh()
+            .expect("cube mesh");
+        let vertices = primitive
+            .positions
+            .iter()
+            .zip(&primitive.normals)
+            .map(|(position, normal)| ViewportVertex {
+                position: *position,
+                normal: *normal,
+            })
+            .collect::<Vec<_>>();
+        let mesh = |scale: f32| ViewportMesh {
+            instance_key: 10,
+            mesh_key: 20,
+            vertices: vertices.clone(),
+            indices: primitive.indices.clone(),
+            model: glam::Mat4::from_scale(glam::Vec3::new(scale, 0.5, 0.5)).to_cols_array(),
+            color: [0.2, 0.35, 0.65, 1.0],
+            selected: true,
+        };
+        let view = glam::camera::rh::view::look_at_mat4(
+            glam::Vec3::new(0.0, 0.0, -3.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+        );
+        let projection =
+            glam::camera::rh::proj::directx::perspective(60.0_f32.to_radians(), 1.0, 0.1, 100.0);
+        let scene = |scale| ViewportScene {
+            view_projection: (projection * view).to_cols_array(),
+            meshes: vec![mesh(scale)],
+            lights: Vec::new(),
+            guides: Vec::new(),
+            grid_vertices: Vec::new(),
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let outline_run = |frame: &RenderedFrame| {
+            let row = frame.height as usize / 2;
+            let pixels =
+                &frame.rgba8[row * frame.width as usize * 4..(row + 1) * frame.width as usize * 4];
+            pixels
+                .chunks_exact(4)
+                .skip_while(|pixel| pixel[0] < 64)
+                .take_while(|pixel| pixel[0] > pixel[1] && pixel[1] > pixel[2])
+                .count()
+        };
+
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let small = renderer.render(256, 256, &scene(0.35)).unwrap().unwrap();
+        let large = renderer.render(256, 256, &scene(1.25)).unwrap().unwrap();
+        let small_width = outline_run(&small);
+        let large_width = outline_run(&large);
+        assert!(small_width > 0, "small object must have a visible outline");
+        assert!(large_width > 0, "large object must have a visible outline");
+        assert!(
+            small_width.abs_diff(large_width) <= 1,
+            "outline changed from {small_width}px to {large_width}px"
+        );
+    }
+}
+
+/// Builds a game frame from the live simulation world. Highest camera order wins.
+/// No active camera produces an empty frame instead of a fabricated viewpoint.
+pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScene {
+    let mut buffer = engine_world::RenderWorldBuffer::new();
+    let extracted = buffer.extract(world);
+    let mut scene = ViewportScene {
+        view_projection: identity_matrix(),
+        meshes: Vec::new(),
+        lights: extracted.lights.to_vec(),
+        guides: Vec::new(),
+        grid_vertices: Vec::new(),
+        clear_color: [0.045, 0.06, 0.085, 1.0],
+    };
+    let Some(camera) = extracted.cameras.last() else {
+        return scene;
+    };
+    scene.view_projection = camera.view_projection(aspect).to_cols_array();
+    for primitive in extracted.primitives {
+        let Ok(mesh) = primitive.primitive.mesh() else {
+            continue;
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        use std::hash::{Hash, Hasher};
+        primitive.entity.hash(&mut hasher);
+        let key = hasher.finish();
+        scene.meshes.push(ViewportMesh {
+            instance_key: key,
+            mesh_key: key,
+            vertices: mesh
+                .positions
+                .iter()
+                .zip(&mesh.normals)
+                .map(|(position, normal)| ViewportVertex {
+                    position: *position,
+                    normal: *normal,
+                })
+                .collect(),
+            indices: mesh.indices,
+            model: primitive.transform,
+            color: world
+                .part_attributes(primitive.entity)
+                .unwrap_or_default()
+                .color,
+            selected: false,
+        });
+    }
+    scene
+}
+
+#[cfg(test)]
+mod game_view_tests {
+    use super::*;
+    use engine_world::*;
+    use glam::{Quat, Vec3};
+
+    fn fixture() -> (SceneWorld, EntityId, EntityId) {
+        let camera = EntitySnapshot {
+            camera: Some(Camera::default()),
+            local_transform: LocalTransform {
+                translation: Vec3::new(0.0, 0.0, -5.0),
+                ..LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let light = EntitySnapshot {
+            light: Some(Light::default()),
+            ..EntitySnapshot::default()
+        };
+        let ids = (camera.id, light.id);
+        let mut world = SceneWorld::new();
+        world
+            .apply_commands(&[
+                WorldCommand::Spawn(Box::new(camera)),
+                WorldCommand::Spawn(Box::new(light)),
+                WorldCommand::Spawn(Box::new(EntitySnapshot {
+                    primitive: Some(Primitive::Cube { size: 2.0 }),
+                    ..EntitySnapshot::default()
+                })),
+            ])
+            .unwrap();
+        world.propagate_transforms();
+        (world, ids.0, ids.1)
+    }
+
+    #[test]
+    fn game_camera_selection_and_parent_transform() {
+        let (mut world, camera, _) = fixture();
+        let first = game_scene(&world, 1.0);
+        assert_eq!(first.meshes.len(), 1);
+        let parent = EntitySnapshot {
+            local_transform: LocalTransform {
+                translation: Vec3::X,
+                ..LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        world
+            .apply_commands(&[
+                WorldCommand::Spawn(Box::new(parent.clone())),
+                WorldCommand::SetParent {
+                    child: camera,
+                    parent: Some(parent.id),
+                },
+            ])
+            .unwrap();
+        world.propagate_transforms();
+        assert_ne!(
+            first.view_projection,
+            game_scene(&world, 1.0).view_projection
+        );
+        let other = EntitySnapshot {
+            camera: Some(Camera {
+                order: 10,
+                ..Camera::default()
+            }),
+            ..EntitySnapshot::default()
+        };
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(other.clone()))])
+            .unwrap();
+        world.propagate_transforms();
+        let mut buffer = RenderWorldBuffer::new();
+        assert_eq!(
+            buffer.extract(&world).cameras.last().unwrap().entity,
+            other.id
+        );
+        world
+            .apply_commands(&[
+                WorldCommand::SetCamera {
+                    entity: camera,
+                    value: None,
+                },
+                WorldCommand::SetCamera {
+                    entity: other.id,
+                    value: Some(Camera {
+                        active: false,
+                        ..Camera::default()
+                    }),
+                },
+            ])
+            .unwrap();
+        assert!(game_scene(&world, 1.0).meshes.is_empty());
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter"]
+    fn game_camera_and_light_attributes_change_rendered_pixels() {
+        let (mut world, camera, light) = fixture();
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let mut render = |world: &SceneWorld| {
+            renderer
+                .render(256, 256, &game_scene(world, 1.0))
+                .unwrap()
+                .unwrap()
+        };
+        let base = render(&world);
+        let center = (128 * 256 + 128) * 4;
+        assert!(
+            base.rgba8[center] > 100,
+            "camera must see the illuminated cube"
+        );
+        world
+            .apply_commands(&[WorldCommand::SetLight {
+                entity: light,
+                value: Some(Light {
+                    intensity: 0.0,
+                    ..Light::default()
+                }),
+            }])
+            .unwrap();
+        let dark = render(&world);
+        assert!(dark.rgba8[center] < base.rgba8[center] / 2);
+        world
+            .apply_commands(&[WorldCommand::SetLight {
+                entity: light,
+                value: Some(Light {
+                    color: Vec3::X,
+                    ..Light::default()
+                }),
+            }])
+            .unwrap();
+        let red = render(&world);
+        assert!(red.rgba8[center] > red.rgba8[center + 1] * 2);
+        world
+            .apply_commands(&[
+                WorldCommand::SetLocalTransform {
+                    entity: light,
+                    value: LocalTransform {
+                        translation: Vec3::new(0.0, 0.0, -3.0),
+                        ..LocalTransform::IDENTITY
+                    },
+                },
+                WorldCommand::SetLight {
+                    entity: light,
+                    value: Some(Light {
+                        kind: LightKind::Point,
+                        range: 10.0,
+                        ..Light::default()
+                    }),
+                },
+            ])
+            .unwrap();
+        world.propagate_transforms();
+        let point = render(&world);
+        world
+            .apply_commands(&[WorldCommand::SetLight {
+                entity: light,
+                value: Some(Light {
+                    kind: LightKind::Point,
+                    range: 0.5,
+                    ..Light::default()
+                }),
+            }])
+            .unwrap();
+        assert!(render(&world).rgba8[center] < point.rgba8[center]);
+        world
+            .apply_commands(&[WorldCommand::SetLight {
+                entity: light,
+                value: Some(Light {
+                    kind: LightKind::Spot,
+                    ..Light::default()
+                }),
+            }])
+            .unwrap();
+        let spot = render(&world);
+        world
+            .apply_commands(&[WorldCommand::SetLocalTransform {
+                entity: light,
+                value: LocalTransform {
+                    translation: Vec3::new(0.0, 0.0, -3.0),
+                    rotation: Quat::from_rotation_y(std::f32::consts::PI),
+                    ..LocalTransform::IDENTITY
+                },
+            }])
+            .unwrap();
+        world.propagate_transforms();
+        assert!(render(&world).rgba8[center] < spot.rgba8[center]);
+        world
+            .apply_commands(&[WorldCommand::SetCamera {
+                entity: camera,
+                value: Some(Camera {
+                    projection: CameraProjection::Perspective {
+                        vertical_fov_radians: 100.0_f32.to_radians(),
+                        near: 0.1,
+                        far: 100.0,
+                    },
+                    ..Camera::default()
+                }),
+            }])
+            .unwrap();
+        let wide = render(&world);
+        assert_ne!(wide.rgba8, dark.rgba8);
+        world
+            .apply_commands(&[WorldCommand::SetCamera {
+                entity: camera,
+                value: Some(Camera {
+                    projection: CameraProjection::Orthographic {
+                        vertical_size: 6.0,
+                        near: 0.1,
+                        far: 100.0,
+                    },
+                    ..Camera::default()
+                }),
+            }])
+            .unwrap();
+        let ortho = render(&world);
+        assert_ne!(wide.rgba8, ortho.rgba8);
+        world
+            .apply_commands(&[WorldCommand::SetCamera {
+                entity: camera,
+                value: Some(Camera {
+                    projection: CameraProjection::Orthographic {
+                        vertical_size: 6.0,
+                        near: 0.1,
+                        far: 1.0,
+                    },
+                    ..Camera::default()
+                }),
+            }])
+            .unwrap();
+        assert_ne!(ortho.rgba8, render(&world).rgba8);
+        if let Ok(directory) = std::env::var("RUSTIC_RENDER_EVIDENCE") {
+            std::fs::create_dir_all(&directory).unwrap();
+            for (name, frame) in [
+                ("lit", base),
+                ("dark", dark),
+                ("red", red),
+                ("point", point),
+                ("spot", spot),
+                ("orthographic", ortho),
+            ] {
+                let mut bytes = format!("P6\n{} {}\n255\n", frame.width, frame.height).into_bytes();
+                for pixel in frame.rgba8.chunks_exact(4) {
+                    bytes.extend_from_slice(&pixel[..3]);
+                }
+                std::fs::write(
+                    std::path::Path::new(&directory).join(format!("{name}.ppm")),
+                    bytes,
+                )
+                .unwrap();
+            }
+        }
     }
 }

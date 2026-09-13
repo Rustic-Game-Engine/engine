@@ -7,12 +7,19 @@ pub const GAME_SETTINGS_FILE: &str = "settings.json";
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct GameSettings {
     pub entry_script: PathBuf,
+    #[serde(default = "autosave_enabled_by_default")]
+    pub autosave: bool,
+}
+
+const fn autosave_enabled_by_default() -> bool {
+    true
 }
 
 impl Default for GameSettings {
     fn default() -> Self {
         Self {
             entry_script: PathBuf::from("scripts/main.lua"),
+            autosave: autosave_enabled_by_default(),
         }
     }
 }
@@ -68,10 +75,23 @@ mod tests {
         assert_eq!(GameSettings::load(temp.path()).unwrap(), settings);
         assert!(
             GameSettings {
-                entry_script: "../main.lua".into()
+                entry_script: "../main.lua".into(),
+                ..GameSettings::default()
             }
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn settings_without_autosave_use_the_enabled_default() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(
+            temp.path().join(GAME_SETTINGS_FILE),
+            br#"{"entry_script":"scripts/main.lua"}"#,
+        )
+        .unwrap();
+
+        assert!(GameSettings::load(temp.path()).unwrap().autosave);
     }
 }

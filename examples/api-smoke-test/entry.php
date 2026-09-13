@@ -9,12 +9,13 @@ while (($line = fgets(STDIN)) !== false) {
     if ($s["callback"] === "on_start") {
         $commands = [
             ["op"=>"set_translation", "value"=>$s["translation"]],
-            ["op"=>"set_property", "name"=>"smoke_value", "value"=>$s["properties"]["smoke_value"] ?? 1.0],
             ["op"=>"log", "level"=>"info", "message"=>"PHP API smoke test passed"],
             ["op"=>"set_enabled", "enabled"=>true],
             ["op"=>"add_instance", "source"=>"Part", "parent"=>null],
             ["op"=>"clone_instance", "source"=>$s["entity_id"], "parent"=>null],
         ];
+        if (array_key_exists("smoke_value", $s["properties"] ?? []))
+            $commands[] = ["op"=>"set_property", "name"=>"smoke_value", "value"=>$s["properties"]["smoke_value"]];
         if (isset($s["attributes"]["Position"]))
             $commands[] = ["op"=>"edit_attribute", "name"=>"Position", "value"=>$s["attributes"]["Position"]];
     }

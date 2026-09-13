@@ -34,7 +34,10 @@ const BRIDGE: &str = r#"
     if (key === "List") return () => Object.keys(state.scene_paths);
     return state.scene_paths[String(key)];
   }});
-  Object.defineProperty(globalThis, "Game", {value:Object.freeze({scene}), writable:false, configurable:false});
+  Object.defineProperty(globalThis, "Game", {value:Object.freeze({scene, setCurrentCamera: source => {
+    if (typeof source !== "string") throw new TypeError("expected a camera path or entity ID");
+    commands.push({op:"set_current_camera", source});
+  }}), writable:false, configurable:false});
   const instance = Object.freeze({
     add: (source, parent = null) => commands.push({op:"add_instance", source:String(source), parent}),
     clone: (source, parent = null) => commands.push({op:"clone_instance", source:String(source), parent})
@@ -301,6 +304,9 @@ impl JavaScriptBehavior {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Command {
+    SetCurrentCamera {
+        source: String,
+    },
     SetTranslation {
         value: [f64; 3],
     },
@@ -355,6 +361,7 @@ fn apply_command(
         Command::AddInstance { source, parent } => parse_parent(parent)
             .and_then(|parent| host.add_instance(&source, parent))
             .map(|_| ()),
+        Command::SetCurrentCamera { source } => host.set_current_camera(&source),
         Command::CloneInstance { source, parent } => parse_parent(parent)
             .and_then(|parent| host.clone_instance(&source, parent))
             .map(|_| ()),
@@ -476,6 +483,13 @@ mod tests {
             self.properties.clone()
         }
         fn set_property(&mut self, name: &str, value: EngineValue) -> Result<(), String> {
+            let current = self
+                .properties
+                .get(name)
+                .ok_or_else(|| format!("property `{name}` is not declared"))?;
+            if !current.same_type(&value) {
+                return Err("property type mismatch".into());
+            }
             self.properties.insert(name.into(), value);
             Ok(())
         }
@@ -509,5 +523,20 @@ mod tests {
         let mut behavior =
             JavaScriptBehavior::load(ScriptId::new(), looping, "loop.js", host(), 100).unwrap();
         assert!(behavior.update(0.016).is_err());
+    }
+
+    #[test]
+    fn api_smoke_entry_allows_an_undeclared_optional_property() {
+        let mut behavior = JavaScriptBehavior::load(
+            ScriptId::new(),
+            include_bytes!("../../../examples/api-smoke-test/entry.js"),
+            "entry.js",
+            host(),
+            100_000,
+        )
+        .unwrap();
+
+        behavior.on_create().unwrap();
+        assert!(behavior.enabled);
     }
 }

@@ -821,6 +821,9 @@ struct InvocationResponse {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum ExternalCommand {
+    SetCurrentCamera {
+        source: String,
+    },
     SetTranslation {
         value: [f64; 3],
     },
@@ -882,6 +885,7 @@ fn apply_command(
         ExternalCommand::AddInstance { source, parent } => parse_parent(parent)
             .and_then(|parent| host.add_instance(&source, parent))
             .map(|_| ()),
+        ExternalCommand::SetCurrentCamera { source } => host.set_current_camera(&source),
         ExternalCommand::CloneInstance { source, parent } => parse_parent(parent)
             .and_then(|parent| host.clone_instance(&source, parent))
             .map(|_| ()),
@@ -1142,6 +1146,13 @@ mod tests {
     }
 
     impl GameplayHost for Host {
+        fn set_current_camera(&mut self, source: &str) -> Result<(), String> {
+            if source != "Room.Camera" {
+                return Err("camera not found".into());
+            }
+            self.translation = [42.0; 3];
+            Ok(())
+        }
         fn entity_id(&self) -> EntityId {
             self.entity
         }
@@ -1191,6 +1202,54 @@ mod tests {
             Err("not declared".into())
         }
         fn set_enabled(&mut self, _enabled: bool) {}
+    }
+
+    #[test]
+    fn camera_command_is_shared_by_all_external_languages() {
+        for language in [
+            ScriptLanguage::Luau,
+            ScriptLanguage::Python,
+            ScriptLanguage::C,
+            ScriptLanguage::Cpp,
+            ScriptLanguage::CSharp,
+            ScriptLanguage::Java,
+            ScriptLanguage::Php,
+        ] {
+            let mut host = Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            };
+            let command =
+                serde_json::from_str(r#"{"op":"set_current_camera","source":"Room.Camera"}"#)
+                    .unwrap();
+            apply_command(language, &mut host, command).unwrap();
+            assert_eq!(host.translation, [42.0; 3]);
+            let command =
+                serde_json::from_str(r#"{"op":"set_current_camera","source":"Missing"}"#).unwrap();
+            assert!(apply_command(language, &mut host, command).is_err());
+        }
+    }
+
+    #[test]
+    fn cpp_camera_helper_executes_when_available() {
+        if !probe_language_toolchain(ScriptLanguage::Cpp).available {
+            return;
+        }
+        let mut behavior = ExternalBehavior::load(
+            ScriptId::new(),
+            ScriptLanguage::Cpp,
+            br#"#include "rustic.hpp"
+void start(){Game.setCurrentCamera("Room.Camera");}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#,
+            "camera.cpp",
+            Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            }),
+        )
+        .unwrap();
+        behavior.on_start().unwrap();
+        assert_eq!(behavior.host().lock().unwrap().translation(), [42.0; 3]);
     }
 
     #[test]
