@@ -148,6 +148,7 @@ impl AuthoringDocument {
         &mut self,
         name: impl Into<String>,
         primitive: Primitive,
+        parent: Option<EntityId>,
     ) -> Result<EntityId, AuthoringError> {
         self.ensure_writable()?;
         primitive
@@ -159,6 +160,7 @@ impl AuthoringDocument {
         let snapshot = EntitySnapshot {
             name: Some(name.into()),
             primitive: Some(primitive),
+            parent,
             ..EntitySnapshot::default()
         };
         let id = snapshot.id;
@@ -268,6 +270,7 @@ impl AuthoringDocument {
         &mut self,
         camera: bool,
         transform: LocalTransform,
+        parent: Option<EntityId>,
     ) -> Result<EntityId, AuthoringError> {
         self.ensure_writable()?;
         let snapshot = EntitySnapshot {
@@ -275,6 +278,23 @@ impl AuthoringDocument {
             local_transform: transform,
             camera: camera.then(engine_world::Camera::default),
             light: (!camera).then(engine_world::Light::default),
+            parent,
+            ..EntitySnapshot::default()
+        };
+        let id = snapshot.id;
+        self.undo
+            .execute(&mut self.world, SceneEdit::Create { snapshot })?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
+    /// Creates an organizational folder in the scene hierarchy.
+    pub fn add_folder(&mut self, parent: Option<EntityId>) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        let snapshot = EntitySnapshot {
+            name: Some("New Folder".into()),
+            folder: true,
+            parent,
             ..EntitySnapshot::default()
         };
         let id = snapshot.id;
@@ -676,7 +696,7 @@ mod tests {
         let project = Project::create(&root, "Authoring", ProjectTemplate::Blank).unwrap();
         let mut document = AuthoringDocument::open(project, false).unwrap();
         let id = document
-            .add_primitive("Cube", Primitive::Cube { size: 2.0 })
+            .add_primitive("Cube", Primitive::Cube { size: 2.0 }, None)
             .unwrap();
         document
             .set_transform(
@@ -709,6 +729,28 @@ mod tests {
     }
 
     #[test]
+    fn folders_persist_and_accept_new_scene_objects() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("folders");
+        let project = Project::create(&root, "Folders", ProjectTemplate::Blank).unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let folder = document.add_folder(None).unwrap();
+        document.set_name(folder, "Environment".into()).unwrap();
+        let child = document
+            .add_primitive("Tree", Primitive::Cube { size: 1.0 }, Some(folder))
+            .unwrap();
+        document.save().unwrap();
+        drop(document);
+
+        let project = Project::open(&root).unwrap();
+        let reopened = AuthoringDocument::open(project, false).unwrap();
+        let folder_snapshot = reopened.world().snapshot(folder).unwrap();
+        assert!(folder_snapshot.folder);
+        assert_eq!(folder_snapshot.name.as_deref(), Some("Environment"));
+        assert_eq!(reopened.world().parent(child).unwrap(), Some(folder));
+    }
+
+    #[test]
     fn read_only_session_refuses_all_writes() {
         let temporary = tempdir().unwrap();
         let project = Project::create(
@@ -720,7 +762,7 @@ mod tests {
         let mut document = AuthoringDocument::open(project, true).unwrap();
         assert!(matches!(document.save(), Err(AuthoringError::ReadOnly)));
         assert!(matches!(
-            document.add_primitive("Cube", Primitive::Cube { size: 1.0 }),
+            document.add_primitive("Cube", Primitive::Cube { size: 1.0 }, None),
             Err(AuthoringError::ReadOnly)
         ));
     }
@@ -736,7 +778,7 @@ mod tests {
         .unwrap();
         let mut document = AuthoringDocument::open(project, false).unwrap();
         let entity = document
-            .add_primitive("Cube", Primitive::Cube { size: 1.0 })
+            .add_primitive("Cube", Primitive::Cube { size: 1.0 }, None)
             .unwrap();
         document.save().unwrap();
         let base_hash = document.source_sha256().unwrap();

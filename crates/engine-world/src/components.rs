@@ -13,6 +13,10 @@ pub struct StableEntity(pub EntityId);
 #[derive(Component, Clone, Debug, Eq, PartialEq)]
 pub struct Name(pub String);
 
+/// Editor-only organizational node in a scene hierarchy.
+#[derive(Component, Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct Folder;
+
 /// Local translation, rotation, and scale relative to an optional parent.
 #[derive(Component, Clone, Copy, Debug, PartialEq)]
 pub struct LocalTransform {

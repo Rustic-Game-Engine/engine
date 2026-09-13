@@ -1712,12 +1712,34 @@ impl EditorViewer<'_> {
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
         let snapshots = self.document.entity_snapshots();
         let entity_count = snapshots.as_ref().map_or(0, Vec::len);
+        let selected_folder = snapshots.as_ref().ok().and_then(|items| {
+            let selected = self.document.selected()?;
+            items
+                .iter()
+                .find(|item| item.id == selected && item.folder)
+                .map(|item| item.id)
+        });
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!("{entity_count} entities")).color(ui_theme::MUTED),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("+ Add", |ui| {
+                    if ui
+                        .add_enabled(!self.document.is_read_only(), egui::Button::new("Folder"))
+                        .clicked()
+                    {
+                        match self.document.add_folder(selected_folder) {
+                            Ok(_) => self.request_preview = true,
+                            Err(error) => self.console.push(simple_console(
+                                Severity::Error,
+                                "editor",
+                                error.to_string(),
+                            )),
+                        }
+                        ui.close();
+                    }
+                    ui.separator();
                     for (label, is_camera) in [("Camera", true), ("Light", false)] {
                         if ui.button(label).clicked() {
                             let transform = if is_camera {
@@ -1725,7 +1747,11 @@ impl EditorViewer<'_> {
                             } else {
                                 LocalTransform::IDENTITY
                             };
-                            match self.document.add_camera_or_light(is_camera, transform) {
+                            match self.document.add_camera_or_light(
+                                is_camera,
+                                transform,
+                                selected_folder,
+                            ) {
                                 Ok(_) => self.request_preview = true,
                                 Err(error) => self.console.push(simple_console(
                                     Severity::Error,
@@ -1741,7 +1767,10 @@ impl EditorViewer<'_> {
                             .add_enabled(!self.document.is_read_only(), egui::Button::new(name))
                             .clicked()
                         {
-                            match self.document.add_primitive(name, primitive) {
+                            match self
+                                .document
+                                .add_primitive(name, primitive, selected_folder)
+                            {
                                 Ok(_) => self.request_preview = true,
                                 Err(error) => self.console.push(simple_console(
                                     Severity::Error,
@@ -1761,21 +1790,11 @@ impl EditorViewer<'_> {
             .auto_shrink([false, false])
             .show(ui, |ui| match snapshots {
                 Ok(snapshots) => {
-                    for snapshot in snapshots {
-                        let label = snapshot
-                            .name
-                            .as_deref()
-                            .map_or_else(|| snapshot.id.to_string(), str::to_owned);
-                        if ui
-                            .selectable_label(
-                                self.document.selected() == Some(snapshot.id),
-                                egui::RichText::new(label).color(ui_theme::TEXT),
-                            )
-                            .clicked()
-                        {
-                            self.document.select(Some(snapshot.id));
-                            self.request_preview = true;
-                        }
+                    if let Some(id) =
+                        render_scene_hierarchy(ui, &snapshots, None, self.document.selected())
+                    {
+                        self.document.select(Some(id));
+                        self.request_preview = true;
                     }
                 }
                 Err(error) => {
@@ -2959,6 +2978,56 @@ struct ProjectDirectory {
     files: Vec<ProjectFile>,
 }
 
+fn render_scene_hierarchy(
+    ui: &mut egui::Ui,
+    snapshots: &[engine_world::EntitySnapshot],
+    parent: Option<engine_core::EntityId>,
+    selected: Option<engine_core::EntityId>,
+) -> Option<engine_core::EntityId> {
+    let mut clicked = None;
+    for snapshot in snapshots.iter().filter(|item| item.parent == parent) {
+        let label = snapshot
+            .name
+            .as_deref()
+            .map_or_else(|| snapshot.id.to_string(), str::to_owned);
+        let has_children = snapshots
+            .iter()
+            .any(|item| item.parent == Some(snapshot.id));
+        if snapshot.folder || has_children {
+            let title = if snapshot.folder {
+                format!("📁 {label}")
+            } else {
+                label
+            };
+            let response =
+                egui::CollapsingHeader::new(egui::RichText::new(title).color(ui_theme::TEXT))
+                    .id_salt(("scene-entity", snapshot.id))
+                    .default_open(snapshot.folder)
+                    .show(ui, |ui| {
+                        render_scene_hierarchy(ui, snapshots, Some(snapshot.id), selected)
+                    });
+            if response.header_response.clicked() {
+                clicked = Some(snapshot.id);
+            }
+            if let Some(child) = response.body_returned.flatten() {
+                clicked = Some(child);
+            }
+            if selected == Some(snapshot.id) {
+                response.header_response.highlight();
+            }
+        } else if ui
+            .selectable_label(
+                selected == Some(snapshot.id),
+                egui::RichText::new(label).color(ui_theme::TEXT),
+            )
+            .clicked()
+        {
+            clicked = Some(snapshot.id);
+        }
+    }
+    clicked
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum ProjectPanelMode {
     #[default]
@@ -3009,21 +3078,30 @@ fn render_project_directory(
 ) -> Option<PathBuf> {
     const FOLDER_TEXT: egui::Color32 = egui::Color32::from_rgb(207, 215, 225);
     const EMPTY_TEXT: egui::Color32 = egui::Color32::from_rgb(105, 115, 128);
-    if directory.directories.is_empty() && directory.files.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(&directory.name).color(EMPTY_TEXT));
-            ui.label(egui::RichText::new("empty").small().color(EMPTY_TEXT));
-        })
-        .response
-        .on_hover_text("This folder is empty");
-        return None;
-    }
-
+    let is_empty = directory.directories.is_empty() && directory.files.is_empty();
+    let text_color = if is_empty { EMPTY_TEXT } else { FOLDER_TEXT };
     let mut opened_script = None;
-    egui::CollapsingHeader::new(egui::RichText::new(&directory.name).color(FOLDER_TEXT))
-        .id_salt(("project-directory", &directory.relative_path))
-        .default_open(default_open)
-        .show(ui, |ui| {
+    let id = ui.make_persistent_id(("project-directory", &directory.relative_path));
+    let header = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(),
+        id,
+        default_open && !is_empty,
+    )
+    .show_header(ui, |ui| {
+        ui.add(
+            egui::Image::new(egui::include_image!(
+                "../../../assets/icons/material-design/folder.svg"
+            ))
+            .fit_to_exact_size(egui::vec2(18.0, 18.0))
+            .tint(text_color),
+        );
+        ui.label(egui::RichText::new(&directory.name).color(text_color));
+        if is_empty {
+            ui.label(egui::RichText::new("empty").small().color(EMPTY_TEXT));
+        }
+    });
+    let (_, header_response, _) = header.body(|ui| {
+        if !is_empty {
             for child in &directory.directories {
                 if project_directory_matches(child, filter)
                     && let Some(path) =
@@ -3039,7 +3117,13 @@ fn render_project_directory(
                     opened_script = Some(path);
                 }
             }
-        });
+        }
+    });
+    if is_empty {
+        header_response
+            .response
+            .on_hover_text("This folder is empty");
+    }
     opened_script
 }
 

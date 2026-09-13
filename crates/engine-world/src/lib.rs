@@ -11,8 +11,8 @@ mod undo;
 mod world;
 
 pub use components::{
-    Camera, CameraProjection, Children, Light, LightKind, LocalTransform, Material, Mesh, Name,
-    Parent, PartAttributes, ScriptComponent, ScriptComponents, StableEntity, WorldTransform,
+    Camera, CameraProjection, Children, Folder, Light, LightKind, LocalTransform, Material, Mesh,
+    Name, Parent, PartAttributes, ScriptComponent, ScriptComponents, StableEntity, WorldTransform,
 };
 pub use ids::{AssetId, EntityId, RuntimeEntityRef, SceneId, SceneInstanceId, WorldId};
 pub use primitive::{Primitive, PrimitiveError, PrimitiveMesh};

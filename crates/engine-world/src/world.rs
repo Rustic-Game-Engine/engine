@@ -1,5 +1,5 @@
 use crate::components::{
-    Camera, Children, Light, LocalTransform, Material, Mesh, Name, Parent, PartAttributes,
+    Camera, Children, Folder, Light, LocalTransform, Material, Mesh, Name, Parent, PartAttributes,
     ScriptComponents, StableEntity, WorldTransform,
 };
 use crate::primitive::Primitive;
@@ -594,6 +594,7 @@ impl SceneWorld {
         Ok(EntitySnapshot {
             id,
             name: self.ecs.get::<Name>(entity).map(|value| value.0.clone()),
+            folder: self.ecs.get::<Folder>(entity).is_some(),
             local_transform: self
                 .ecs
                 .get::<LocalTransform>(entity)
@@ -775,6 +776,9 @@ impl SceneWorld {
         ));
         if let Some(name) = snapshot.name {
             entity.insert(Name(name));
+        }
+        if snapshot.folder {
+            entity.insert(Folder);
         }
         if let Some(mesh) = snapshot.mesh {
             entity.insert(mesh);

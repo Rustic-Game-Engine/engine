@@ -19,6 +19,7 @@ pub const CURRENT_SCENE_VERSION: u32 = 2;
 const RESOURCE_KIND: &str = "rustic_scene";
 
 const NAME_SCHEMA: &str = "rustic.name";
+const FOLDER_SCHEMA: &str = "rustic.folder";
 const TRANSFORM_SCHEMA: &str = "rustic.transform";
 const PARENT_SCHEMA: &str = "rustic.parent";
 const MESH_SCHEMA: &str = "rustic.mesh";
@@ -42,6 +43,7 @@ pub struct RawComponent {
 pub struct EntitySnapshot {
     pub id: EntityId,
     pub name: Option<String>,
+    pub folder: bool,
     pub local_transform: LocalTransform,
     pub parent: Option<EntityId>,
     pub mesh: Option<Mesh>,
@@ -59,6 +61,7 @@ impl Default for EntitySnapshot {
         Self {
             id: EntityId::new(),
             name: None,
+            folder: false,
             local_transform: LocalTransform::IDENTITY,
             parent: None,
             mesh: None,
@@ -348,6 +351,9 @@ impl EntityWire {
         if let Some(name) = snapshot.name {
             components.push(encode_component(NAME_SCHEMA, &name)?);
         }
+        if snapshot.folder {
+            components.push(encode_component(FOLDER_SCHEMA, &true)?);
+        }
         components.push(encode_component(
             TRANSFORM_SCHEMA,
             &TransformWire {
@@ -590,6 +596,13 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                 diagnostics,
                 &mut snapshot.unknown_components,
                 |value| snapshot.name = Some(value),
+            ),
+            FOLDER_SCHEMA => assign_or_preserve::<bool>(
+                &raw,
+                entity.id,
+                diagnostics,
+                &mut snapshot.unknown_components,
+                |value| snapshot.folder = value,
             ),
             TRANSFORM_SCHEMA => assign_or_preserve::<TransformWire>(
                 &raw,
