@@ -1,0 +1,9 @@
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-linked-script-fix\debug\deps\either-c60f036cf4ef7354.d: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\iterator.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\into_either.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-linked-script-fix\debug\deps\libeither-c60f036cf4ef7354.rlib: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\iterator.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\into_either.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\target-linked-script-fix\debug\deps\libeither-c60f036cf4ef7354.rmeta: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\iterator.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\into_either.rs
+
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\lib.rs:
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\iterator.rs:
+C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\either-1.18.0\src\into_either.rs:

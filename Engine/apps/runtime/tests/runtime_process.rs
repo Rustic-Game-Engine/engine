@@ -1,0 +1,260 @@
+use engine_play::{
+    ControlRequest, PlayMode, RuntimeLaunch, RuntimeState, SnapshotBuilder, SnapshotInput,
+    SupervisedRuntime, SupervisorExit,
+};
+use std::fs;
+use std::path::Path;
+use std::thread;
+use std::time::Duration;
+
+#[test]
+fn real_runtime_child_authenticates_controls_all_modes_and_reaps() {
+    verify_play_modes(false);
+}
+
+#[test]
+#[ignore = "opens native game windows; requires a desktop and graphics adapter"]
+fn native_runtime_windows_render_scene_and_reap() {
+    verify_play_modes(true);
+}
+
+fn verify_play_modes(native_windows: bool) {
+    let executable = Path::new(env!("CARGO_BIN_EXE_rustic-runtime"));
+    for mode in [PlayMode::Play, PlayMode::NewWindow, PlayMode::Standalone] {
+        let directory = tempfile::tempdir().unwrap();
+        let play_directory = directory.path().join("temp/play");
+        let logs_directory = directory.path().join("logs");
+        let mut scene = engine_world::SceneDocument::new("Game view");
+        let startup_script = engine_scripting::ScriptId::new();
+        scene.startup_scripts = vec![engine_scripting::ScriptReference::new(startup_script)];
+        scene.entities = vec![
+            engine_world::EntitySnapshot {
+                name: Some("GameCamera".into()),
+                camera: Some(engine_world::Camera {
+                    active: false,
+                    order: 10,
+                    ..engine_world::Camera::default()
+                }),
+                local_transform: engine_world::LocalTransform {
+                    translation: glam::Vec3::new(0.0, 0.0, -5.0),
+                    ..engine_world::LocalTransform::IDENTITY
+                },
+                ..engine_world::EntitySnapshot::default()
+            },
+            engine_world::EntitySnapshot {
+                light: Some(engine_world::Light::default()),
+                ..engine_world::EntitySnapshot::default()
+            },
+            engine_world::EntitySnapshot {
+                primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
+                part_attributes: engine_world::PartAttributes {
+                    color: [1.0, 0.02, 0.02, 1.0],
+                    ..engine_world::PartAttributes::default()
+                },
+                ..engine_world::EntitySnapshot::default()
+            },
+        ];
+        // The authoring camera looks away. The startup script must select the
+        // game camera before the first frame, in every play mode.
+        scene.entities.push(engine_world::EntitySnapshot {
+            camera: Some(engine_world::Camera::default()),
+            local_transform: engine_world::LocalTransform {
+                translation: glam::Vec3::new(100.0, 0.0, -5.0),
+                ..engine_world::LocalTransform::IDENTITY
+            },
+            ..engine_world::EntitySnapshot::default()
+        });
+        let source_bytes = scene.to_bytes().unwrap();
+        fs::create_dir_all(directory.path().join("config")).unwrap();
+        engine_scripting::save_manifest_atomic(
+            &directory.path().join("config/scripts.ron"),
+            &engine_scripting::ScriptManifest {
+                format_version: engine_scripting::CURRENT_SCRIPT_MANIFEST_VERSION,
+                scripts: vec![engine_scripting::ScriptManifestEntry {
+                    id: startup_script,
+                    language: engine_scripting::ScriptLanguage::Lua54,
+                    relative_path: "scripts/main.lua".into(),
+                    api_version: engine_scripting::ScriptApiVersion::CURRENT,
+                    public_properties: Vec::new(),
+                }],
+            },
+        )
+        .unwrap();
+        let manifest_bytes = fs::read(directory.path().join("config/scripts.ron")).unwrap();
+        let snapshot = SnapshotBuilder::new(&play_directory)
+            .stage(
+                mode,
+                SnapshotInput::new("scenes/main.rscene", source_bytes.clone()),
+                &[
+                    SnapshotInput::new("settings.json", br#"{}"#.to_vec()),
+                    SnapshotInput::new("config/scripts.ron", manifest_bytes),
+                    SnapshotInput::new(
+                        "scripts/main.lua",
+                        b"Game.setCurrentCamera('GameCamera')".to_vec(),
+                    ),
+                ],
+            )
+            .unwrap();
+        let mut launch = RuntimeLaunch::new(
+            executable,
+            snapshot.root(),
+            &logs_directory,
+            mode,
+            directory.path().join("ipc"),
+        );
+        launch.connect_timeout = Duration::from_secs(10);
+        launch.stop_grace_period = Duration::from_secs(3);
+        if !native_windows {
+            launch.extra_arguments.push("--no-native-window".into());
+        }
+        let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
+        let initial_frame = runtime.take_latest_frame().unwrap().unwrap();
+        assert_eq!((initial_frame.width, initial_frame.height), (640, 360));
+        let center = (180 * 640 + 320) * 4;
+        assert!(
+            initial_frame.pixels[center + 2] > 100
+                && initial_frame.pixels[center + 2] > initial_frame.pixels[center] * 2,
+            "Play must render the lit scene through its camera"
+        );
+        assert_eq!(
+            initial_frame.pixels.len(),
+            usize::try_from(initial_frame.stride_bytes * initial_frame.height).unwrap()
+        );
+
+        let running_deadline = std::time::Instant::now() + Duration::from_secs(2);
+        let running = loop {
+            let state = runtime
+                .control(ControlRequest::QueryState, Duration::from_secs(2))
+                .unwrap();
+            if state.fixed_tick > 0 {
+                break state;
+            }
+            assert!(
+                std::time::Instant::now() < running_deadline,
+                "fixed simulation did not begin"
+            );
+            thread::sleep(Duration::from_millis(10));
+        };
+        assert_eq!(running.state, RuntimeState::Running);
+        assert!(runtime.take_latest_frame().unwrap().is_some());
+
+        let paused = runtime
+            .control(ControlRequest::Pause, Duration::from_secs(2))
+            .unwrap();
+        thread::sleep(Duration::from_millis(50));
+        let frozen = runtime
+            .control(ControlRequest::QueryState, Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(frozen.state, RuntimeState::Paused);
+        assert_eq!(frozen.fixed_tick, paused.fixed_tick);
+
+        let stepped = runtime
+            .control(ControlRequest::FrameAdvance, Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(stepped.fixed_tick, frozen.fixed_tick + 1);
+        thread::sleep(Duration::from_millis(40));
+        let still_frozen = runtime
+            .control(ControlRequest::QueryState, Duration::from_secs(2))
+            .unwrap();
+        assert_eq!(still_frozen.fixed_tick, stepped.fixed_tick);
+        assert_eq!(still_frozen.state, RuntimeState::Paused);
+
+        runtime
+            .control(ControlRequest::Resume, Duration::from_secs(2))
+            .unwrap();
+        thread::sleep(Duration::from_millis(40));
+        let resumed = runtime
+            .control(ControlRequest::QueryState, Duration::from_secs(2))
+            .unwrap();
+        assert!(resumed.fixed_tick > still_frozen.fixed_tick);
+
+        let exit = runtime.stop().unwrap();
+        assert!(matches!(exit, SupervisorExit::Graceful(_)));
+        assert!(exit.status().success());
+        let changes = runtime.take_runtime_changes().unwrap();
+        assert!(changes.changes.is_empty());
+        assert_eq!(snapshot.scene_bytes().unwrap(), source_bytes);
+        assert!(
+            fs::read_dir(&logs_directory)
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|entry| entry.file_name().to_string_lossy().starts_with("runtime-"))
+        );
+        snapshot.remove().unwrap();
+    }
+}
+
+#[test]
+fn injected_runtime_crash_is_observed_and_persisted_without_touching_snapshot() {
+    let executable = Path::new(env!("CARGO_BIN_EXE_rustic-runtime"));
+    let directory = tempfile::tempdir().unwrap();
+    let logs_directory = directory.path().join("logs");
+    let source_bytes = b"saved source scene".to_vec();
+    let snapshot = SnapshotBuilder::new(directory.path().join("temp/play"))
+        .stage(
+            PlayMode::Play,
+            SnapshotInput::new("scenes/main.rscene", source_bytes.clone()),
+            &[],
+        )
+        .unwrap();
+    let mut launch = RuntimeLaunch::new(
+        executable,
+        snapshot.root(),
+        &logs_directory,
+        PlayMode::Play,
+        directory.path().join("ipc"),
+    );
+    launch.connect_timeout = Duration::from_secs(10);
+    launch.extra_arguments.push("--crash-after-ready".into());
+    let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let exit = loop {
+        if let Some(exit) = runtime.try_wait().unwrap() {
+            break exit;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "runtime did not exit after injected crash"
+        );
+        thread::sleep(Duration::from_millis(10));
+    };
+    assert!(matches!(exit, SupervisorExit::Exited(_)));
+    assert!(!exit.status().success());
+    assert_eq!(snapshot.scene_bytes().unwrap(), source_bytes);
+    assert!(
+        fs::read_dir(&logs_directory)
+            .unwrap()
+            .filter_map(Result::ok)
+            .any(|entry| entry.file_name().to_string_lossy().starts_with("crash-"))
+    );
+    snapshot.remove().unwrap();
+}
+
+#[test]
+fn unresponsive_runtime_is_force_killed_and_reaped_after_grace() {
+    let executable = Path::new(env!("CARGO_BIN_EXE_rustic-runtime"));
+    let directory = tempfile::tempdir().unwrap();
+    let snapshot = SnapshotBuilder::new(directory.path().join("temp/play"))
+        .stage(
+            PlayMode::Play,
+            SnapshotInput::new("scenes/main.rscene", b"scene".to_vec()),
+            &[],
+        )
+        .unwrap();
+    let mut launch = RuntimeLaunch::new(
+        executable,
+        snapshot.root(),
+        directory.path().join("logs"),
+        PlayMode::Play,
+        directory.path().join("ipc"),
+    );
+    launch.connect_timeout = Duration::from_secs(10);
+    launch.stop_grace_period = Duration::from_millis(100);
+    launch.extra_arguments.push("--ignore-stop".into());
+    let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
+
+    let exit = runtime.stop().unwrap();
+    assert!(matches!(exit, SupervisorExit::Forced(_)));
+    snapshot.remove().unwrap();
+}

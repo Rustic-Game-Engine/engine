@@ -1,0 +1,18 @@
+[package]
+name = "rustic-agent-backend"
+description = "Local MCP backend for AI-assisted Rustic project authoring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-project = { path = "../../crates/engine-project", version = "0.1.0" }
+engine-world = { path = "../../crates/engine-world", version = "0.1.0" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lints]
+workspace = true
