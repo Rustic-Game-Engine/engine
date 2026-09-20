@@ -1,9 +1,8 @@
-# Workspace completion requirement
+# Repository layout
 
-After completing code changes in this repository, build the Windows installer before reporting the task as finished:
+This repository is split into two independent project folders:
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
-```
+- `Engine/` contains the Rust game engine workspace and its engine-specific instructions.
+- `Website/` contains the Next.js documentation website.
 
-Confirm that a fresh `dist\RusticGameEngine-Setup-*.exe` was produced. If the installer build fails, report the failure and do not describe the task as fully complete.
+Run commands from the project folder they apply to. Do not assume the repository root is a Cargo or Node.js project, and do not move either project back to the root.
