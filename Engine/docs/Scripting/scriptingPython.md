@@ -60,9 +60,9 @@ rustic.get_property("health")      # None when absent
 rustic.set_property("health", 90)
 rustic.GetAttribute("Color")       # get_attribute is an alias
 rustic.EditAttribute("Anchored", True)
-rustic.key("Space")                # pressed/released/held/axis dict
-rustic.key_events()                 # copied event list
-rustic.any_key_pressed()
+rustic.key("KeyW")                 # held/axis populated in embedded Play
+rustic.key_events()                 # currently an empty list
+rustic.any_key_pressed()            # currently False
 rustic.log("info", "message")
 rustic.set_enabled(False)
 
@@ -76,8 +76,11 @@ instance.clone("assets/models/chair.glb", parent_id)
 ```
 
 Named `rustic.input(name)` exists, but the current external invocation sends an empty
-`actions` map; it therefore returns the default inactive state. Raw keys and key
-events are populated. Built-in attributes are `Name`, `Position`, `Size`, `Color`,
+`actions` map; it therefore returns the default inactive state. In the editor's
+embedded Play viewport, held WASD, arrow, and Shift keys are populated. Press/release
+events and other key names are not forwarded. See the
+[Lua input guide](scriptingLua.md#input) for the exact supported names and focus
+steps. Built-in attributes are `Name`, `Position`, `Size`, `Color`,
 `CanTouch`, `CanCollide`, `Anchored`, and `Parent`.
 
 Commands are applied after the callback, in list order. `set_property` and

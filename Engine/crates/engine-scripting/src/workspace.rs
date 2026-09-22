@@ -219,6 +219,275 @@ Use the `rustic-workspace` MCP tools before editing to confirm the project root 
     ])
 }
 
+/// Installs the Rustic skill, Claude slash command, and Codex plugin for this user.
+///
+/// # Errors
+/// Returns an error when the user profile or integration files cannot be updated.
+pub fn install_user_agent_integrations() -> Result<(), WorkspaceError> {
+    let backend = std::env::current_exe()
+        .ok()
+        .and_then(|path| {
+            path.parent()
+                .map(|parent| parent.join("rustic-agent-backend"))
+        })
+        .map(|path| path.with_extension(std::env::consts::EXE_EXTENSION))
+        .filter(|path| path.is_file())
+        .unwrap_or_else(|| PathBuf::from("rustic-agent-backend"));
+    install_user_agent_integrations_at(&backend, &AtomicFileService::new())
+}
+
+fn install_user_agent_integrations_at(
+    backend: &Path,
+    files: &AtomicFileService,
+) -> Result<(), WorkspaceError> {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(PathBuf::from)
+        .ok_or_else(|| WorkspaceError::Io {
+            path: PathBuf::from("user profile"),
+            source: std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "user profile is unavailable",
+            ),
+        })?;
+    let skill = r#"---
+name: rustic-workspace
+description: Control and inspect the Rustic Game Engine project in the current workspace; use for Rustic scenes, scripts, assets, docs, or engine/project repository routing.
+---
+
+# Rustic workspace
+
+Use the `rustic-workspace` MCP tools first to identify the active project root, inspect scenes, and locate engine documentation. Keep game content in the project reported by `workspace_info`. Only edit the engine source repository when the user explicitly requests engine changes. Use `scene_summary` before changing a scene rather than guessing its serialized structure.
+"#;
+    let codex_skill = home.join(".agents/skills/rustic-workspace");
+    let claude_skill = home.join(".claude/skills/rustic-workspace");
+    let claude_command = home.join(".claude/commands");
+    let plugin = home.join(".agents/plugins/plugins/rustic-workspace");
+    for directory in [
+        &codex_skill,
+        &claude_skill,
+        &claude_command,
+        &plugin.join("skills/rustic-workspace"),
+        &plugin.join(".codex-plugin"),
+    ] {
+        fs::create_dir_all(directory).map_err(|source| WorkspaceError::Io {
+            path: directory.to_path_buf(),
+            source,
+        })?;
+    }
+    files.write_with_options(
+        &codex_skill.join("SKILL.md"),
+        skill.as_bytes(),
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    files.write_with_options(
+        &claude_skill.join("SKILL.md"),
+        skill.as_bytes(),
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    files.write_with_options(
+        &plugin.join("skills/rustic-workspace/SKILL.md"),
+        skill.as_bytes(),
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    let openai_yaml = "interface:\n  display_name: \"Rustic Workspace\"\n  short_description: \"Inspect and edit the active Rustic project\"\n  default_prompt: \"Use Rustic Workspace to inspect the current project and complete my request.\"\n";
+    fs::create_dir_all(codex_skill.join("agents")).map_err(|source| WorkspaceError::Io {
+        path: codex_skill.join("agents"),
+        source,
+    })?;
+    files.write_with_options(
+        &codex_skill.join("agents/openai.yaml"),
+        openai_yaml.as_bytes(),
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    let command = "Use the `rustic-workspace` MCP tools to identify and inspect the current Rustic project, read its agent instructions and relevant docs, inspect the active scene, then complete the user's request in the correct project or engine repository.\n";
+    files.write_with_options(
+        &claude_command.join("rustic-workspace.md"),
+        command.as_bytes(),
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    let command_text = backend.to_string_lossy();
+    let mcp = serde_json::to_vec_pretty(
+        &serde_json::json!({"mcpServers":{"rustic-workspace":{"command":command_text,"args":[]}}}),
+    )
+    .expect("MCP config serializes");
+    files.write_with_options(
+        &plugin.join("mcp.json"),
+        &mcp,
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    let portable = serde_json::to_vec_pretty(&serde_json::json!({
+        "$schema":"https://agent-plugins.org/schemas/1.0.0/plugin.schema.json", "name":"rustic-workspace", "version":env!("CARGO_PKG_VERSION"),
+        "description":"Control and inspect the active Rustic Game Engine workspace", "author":{"name":"Rustic Game Engine Contributors"}
+    })).expect("portable plugin manifest serializes");
+    files.write_with_options(
+        &plugin.join("plugin.json"),
+        &portable,
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    let compat = serde_json::to_vec_pretty(&serde_json::json!({
+        "name":"rustic-workspace", "version":env!("CARGO_PKG_VERSION"), "description":"Control and inspect the active Rustic Game Engine workspace",
+        "author":{"name":"Rustic Game Engine Contributors"}, "skills":"./skills/", "mcpServers":"./mcp.json",
+        "interface":{"displayName":"Rustic Workspace","shortDescription":"Inspect and edit the active Rustic project","longDescription":"Project-aware tools for workspace files, scene structure, and Rustic documentation.","developerName":"Rustic Game Engine Contributors","category":"Developer Tools","capabilities":["Interactive","Write"]}
+    })).expect("compatibility plugin manifest serializes");
+    files.write_with_options(
+        &plugin.join(".codex-plugin/plugin.json"),
+        &compat,
+        AtomicWriteOptions { keep_backup: false },
+    )?;
+    update_codex_mcp(&home.join(".codex/config.toml"), backend, files)?;
+    update_claude_mcp(&home.join(".claude.json"), backend, files)?;
+    update_personal_marketplace(&home.join(".agents/plugins/marketplace.json"), files)?;
+    Ok(())
+}
+
+fn update_codex_mcp(
+    path: &Path,
+    backend: &Path,
+    files: &AtomicFileService,
+) -> Result<(), WorkspaceError> {
+    use toml_edit::{Array, DocumentMut, Item, Table, value};
+
+    let text = if path.is_file() {
+        fs::read_to_string(path).map_err(|source| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?
+    } else {
+        String::new()
+    };
+    let mut document = text
+        .parse::<DocumentMut>()
+        .map_err(|error| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        })?;
+    if !document.contains_key("mcp_servers") {
+        document["mcp_servers"] = Item::Table(Table::new());
+    }
+    let servers = document["mcp_servers"]
+        .as_table_mut()
+        .ok_or_else(|| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Codex mcp_servers must be a TOML table",
+            ),
+        })?;
+    let mut server = Table::new();
+    server["command"] = value(backend.to_string_lossy().as_ref());
+    server["args"] = value(Array::new());
+    server["enabled"] = value(true);
+    servers["rustic-workspace"] = Item::Table(server);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| WorkspaceError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    files.write_with_options(
+        path,
+        document.to_string().as_bytes(),
+        AtomicWriteOptions { keep_backup: true },
+    )?;
+    Ok(())
+}
+
+fn update_claude_mcp(
+    path: &Path,
+    backend: &Path,
+    files: &AtomicFileService,
+) -> Result<(), WorkspaceError> {
+    let mut value = if path.is_file() {
+        let text = fs::read_to_string(path).map_err(|source| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        serde_json::from_str::<serde_json::Value>(&text).map_err(|error| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(std::io::ErrorKind::InvalidData, error),
+        })?
+    } else {
+        serde_json::json!({})
+    };
+    let object = value.as_object_mut().ok_or_else(|| WorkspaceError::Io {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "Claude configuration must be a JSON object",
+        ),
+    })?;
+    let servers = object
+        .entry("mcpServers")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Claude mcpServers must be a JSON object",
+            ),
+        })?;
+    servers.insert(
+        "rustic-workspace".to_owned(),
+        serde_json::json!({"type":"stdio","command":backend.to_string_lossy(),"args":[]}),
+    );
+    let bytes = serde_json::to_vec_pretty(&value).expect("Claude configuration serializes");
+    files.write_with_options(path, &bytes, AtomicWriteOptions { keep_backup: true })?;
+    Ok(())
+}
+
+fn update_personal_marketplace(
+    path: &Path,
+    files: &AtomicFileService,
+) -> Result<(), WorkspaceError> {
+    let mut value = if path.is_file() {
+        fs::read_to_string(path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    } else {
+        serde_json::json!({})
+    };
+    let object = value.as_object_mut().ok_or_else(|| WorkspaceError::Io {
+        path: path.to_path_buf(),
+        source: std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "personal marketplace root must be a JSON object",
+        ),
+    })?;
+    object
+        .entry("name")
+        .or_insert_with(|| serde_json::json!("personal"));
+    object
+        .entry("interface")
+        .or_insert_with(|| serde_json::json!({"displayName":"Personal"}));
+    let plugins = object
+        .entry("plugins")
+        .or_insert_with(|| serde_json::json!([]))
+        .as_array_mut()
+        .ok_or_else(|| WorkspaceError::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "personal marketplace plugins must be an array",
+            ),
+        })?;
+    plugins.retain(|entry| {
+        entry.get("name").and_then(serde_json::Value::as_str) != Some("rustic-workspace")
+    });
+    plugins.push(serde_json::json!({"name":"rustic-workspace","source":{"source":"local","path":"./plugins/rustic-workspace"},"policy":{"installation":"INSTALLED_BY_DEFAULT","authentication":"ON_INSTALL"},"category":"Developer Tools"}));
+    let bytes = serde_json::to_vec_pretty(&value).expect("marketplace serializes");
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).map_err(|source| WorkspaceError::Io {
+            path: parent.to_path_buf(),
+            source,
+        })?;
+    }
+    files.write_with_options(path, &bytes, AtomicWriteOptions { keep_backup: true })?;
+    Ok(())
+}
+
 fn write_generated_or_preserve(
     files: &AtomicFileService,
     path: &Path,
@@ -265,5 +534,31 @@ mod tests {
             .unwrap();
         assert!(cpp.contains("class RusticApi"));
         assert!(cpp.contains("GameApi"));
+    }
+
+    #[test]
+    fn codex_mcp_install_preserves_existing_configuration() {
+        let temp = tempfile::tempdir().unwrap();
+        let config = temp.path().join("config.toml");
+        fs::write(&config, "model = \"example\"\n").unwrap();
+        update_codex_mcp(
+            &config,
+            Path::new("C:/Rustic/rustic-agent-backend.exe"),
+            &AtomicFileService::new(),
+        )
+        .unwrap();
+        let document = fs::read_to_string(config)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        assert_eq!(document["model"].as_str(), Some("example"));
+        assert_eq!(
+            document["mcp_servers"]["rustic-workspace"]["command"].as_str(),
+            Some("C:/Rustic/rustic-agent-backend.exe")
+        );
+        assert_eq!(
+            document["mcp_servers"]["rustic-workspace"]["enabled"].as_bool(),
+            Some(true)
+        );
     }
 }

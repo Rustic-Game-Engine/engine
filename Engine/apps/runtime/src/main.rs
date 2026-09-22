@@ -154,7 +154,7 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
     let event_loop = EventLoop::new()
         .map_err(|error| format!("could not create native runtime event loop: {error}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut window_app = RuntimeWindowApp::new(mode, Arc::clone(&finished), title, size);
+    let mut window_app = RuntimeWindowApp::new(Arc::clone(&finished), title, size);
     window_app.latest_frame = latest_frame;
     event_loop
         .run_app(&mut window_app)
@@ -179,7 +179,6 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
 }
 
 struct RuntimeWindowApp {
-    mode: PlayMode,
     finished: Arc<AtomicBool>,
     title: &'static str,
     initial_size: [f64; 2],
@@ -191,14 +190,8 @@ struct RuntimeWindowApp {
 }
 
 impl RuntimeWindowApp {
-    fn new(
-        mode: PlayMode,
-        finished: Arc<AtomicBool>,
-        title: &'static str,
-        initial_size: [f64; 2],
-    ) -> Self {
+    fn new(finished: Arc<AtomicBool>, title: &'static str, initial_size: [f64; 2]) -> Self {
         Self {
-            mode,
             finished,
             title,
             initial_size,
@@ -272,12 +265,6 @@ impl ApplicationHandler for RuntimeWindowApp {
                 return;
             }
         };
-        eprintln!(
-            "native runtime surface: mode={} adapter={} backend={:?}",
-            self.mode.as_str(),
-            renderer.diagnostics().adapter_name,
-            renderer.diagnostics().backend
-        );
         window.request_redraw();
         self.renderer = Some(renderer);
         self.window = Some(window);

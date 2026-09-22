@@ -61,8 +61,8 @@ const camera = Game.scene.Find("Room.Camera");
 Game.setCurrentCamera(camera);
 instance.add("Cube");
 
-if (rustic.key("Escape").pressed) {
-  rustic.log("info", "escape pressed");
+if (rustic.key("KeyW").held) {
+  rustic.log("info", "forward key held in Play");
 }
 ```
 
@@ -70,6 +70,8 @@ JavaScript mutations are applied in command order after the callback. Properties
 be declared and type-compatible. Scene lookup returns stable IDs; JavaScript
 `Game.scene.List()` currently returns path strings. Instance operations are queued
 and do not return the created ID.
+The [Play input limits](scriptingLua.md#input) also apply to inline JavaScript:
+only held WASD, arrow, and Shift state is forwarded from the embedded Play viewport.
 
 ## Security and limitations
 

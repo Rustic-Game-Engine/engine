@@ -82,6 +82,7 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: (not IsAdminInstallMode) and NeedsAddPath('{app}'); Tasks: addtopath; Flags: preservestringtype
 
 [Run]
+Filename: "{app}\rustic-agent-backend.exe"; Parameters: "--install-user-integrations"; Flags: runhidden waituntilterminated; StatusMsg: "Installing Rustic AI agent skills..."
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]

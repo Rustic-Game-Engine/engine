@@ -47,6 +47,11 @@ are `on_create`, `on_start`, `on_enable`, `fixed_update`, `update`, `on_disable`
 empty for external adapters; raw key state is populated. Collision callbacks are not
 currently represented by the process protocol.
 
+The populated raw key state is currently limited to held WASD, arrow, and Shift
+keys from the editor's embedded Play viewport. Press/release events and other
+key names are not forwarded. See the [Lua input guide](scriptingLua.md#input)
+for the supported names and focus steps.
+
 ## Commands and generated helpers
 
 Valid response operations are:

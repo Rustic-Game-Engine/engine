@@ -4,6 +4,7 @@ use crate::simulation::{ControlAck, ControlRequest, PlayMode};
 use crate::{changes::RuntimeChangeSet, frame_ring::BgraFrame};
 use engine_core::ScriptId;
 use engine_core::logging::{LogMetadata, LogRecord, Severity, SourceLocation};
+use engine_world::{PartAttributes, ScriptComponent};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::{Read, Write};
@@ -26,6 +27,18 @@ pub struct ProtocolVersion {
 
 /// Protocol understood by this engine build.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 2, minor: 0 };
+
+/// Current values for the selected entity while the isolated runtime is active.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveEntityProperties {
+    pub entity_id: String,
+    pub name: Option<String>,
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
+    pub part_attributes: PartAttributes,
+    pub scripts: Vec<ScriptComponent>,
+}
 
 /// Process responsibility carried in every frame and authenticated handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +202,9 @@ pub enum ProtocolMessage {
         fixed_tick: u64,
     },
     Control(ControlRequest),
+    InputKeys(Vec<String>),
+    QueryEntity(String),
+    LiveEntity(Option<LiveEntityProperties>),
     ControlAck(ControlAck),
     Console(Box<ConsoleEvent>),
     Frame(BgraFrame),
@@ -223,6 +239,9 @@ impl ProtocolMessage {
             Self::ServerHello { .. } => 2,
             Self::Ready { .. } => 3,
             Self::Control(_) => 4,
+            Self::InputKeys(_) => 13,
+            Self::QueryEntity(_) => 14,
+            Self::LiveEntity(_) => 15,
             Self::ControlAck(_) => 5,
             Self::Console(_) => 6,
             Self::Frame(_) => 7,

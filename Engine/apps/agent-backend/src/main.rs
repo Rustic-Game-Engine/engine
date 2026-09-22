@@ -8,15 +8,24 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024;
 
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
-    let project_root = match (arguments.next(), arguments.next()) {
+    let first = arguments.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--install-user-integrations")) {
+        if let Err(error) = engine_scripting::install_user_agent_integrations() {
+            eprintln!("Could not install Rustic agent integrations: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let project_root = match (first, arguments.next()) {
         (Some(flag), Some(root)) if flag == "--project" => PathBuf::from(root),
+        (None, None) => std::env::current_dir().unwrap_or_default(),
         _ => {
-            eprintln!("Usage: rustic-agent-backend --project <project-folder>");
+            eprintln!("Usage: rustic-agent-backend [--project <project-folder>]");
             std::process::exit(2);
         }
     };
-    let root = match project_root.canonicalize() {
-        Ok(root) if Project::open(&root).is_ok() => root,
+    let root = match find_project_root(&project_root) {
+        Some(root) => root,
         _ => {
             eprintln!("The supplied folder is not a readable Rustic project");
             std::process::exit(2);
@@ -33,6 +42,14 @@ fn main() {
             let _ = stdout.flush();
         }
     }
+}
+
+fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let canonical = start.canonicalize().ok()?;
+    canonical
+        .ancestors()
+        .find(|path| Project::open(path).is_ok())
+        .map(Path::to_path_buf)
 }
 
 fn handle(root: &Path, request: &Value) -> Option<Value> {

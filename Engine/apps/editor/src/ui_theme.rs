@@ -89,3 +89,24 @@ pub fn property_grid<R>(
         .inner_margin(egui::Margin::same(10))
         .show(ui, add_rows)
 }
+
+pub fn component_card<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    egui::Frame::new()
+        .fill(egui::Color32::from_rgb(26, 29, 34))
+        .stroke(egui::Stroke::new(1.0, BORDER))
+        .corner_radius(3.0)
+        .inner_margin(egui::Margin::symmetric(9, 7))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("▼").size(10.0).color(MUTED));
+                ui.label(egui::RichText::new(title).strong().color(TEXT));
+            });
+            ui.add_space(5.0);
+            add_contents(ui)
+        })
+}

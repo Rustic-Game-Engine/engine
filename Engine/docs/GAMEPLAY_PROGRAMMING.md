@@ -65,6 +65,8 @@ The global `rustic` table exposes `entity_id`, `get_translation`, `set_translati
 `input`, `log`, `delta_time`, `fixed_delta_time`, `get_property`, `set_property`, and
 `set_enabled`. The built-in attributes are `Name`, `Position`, `Size`, `Color`,
 `CanTouch`, `CanCollide`, `Anchored`, and `Parent`.
+Lua also provides `print(...)` for an info Console entry and `warn(...)` for a
+warning Console entry. Use `rustic.log(level, message)` to choose a different level.
 
 Scene objects can be resolved by a dotted or slash-separated path. Lua provides
 `Game.scene.Find("Room.Table")` and `Game.scene.List("Room")`; JavaScript additionally
@@ -85,13 +87,18 @@ Model files from the Game Project Explorer can be instantiated directly, for exa
 the immutable play snapshot with their adjacent `.rmeta` files; the runtime never
 reads from or mutates the live project directory.
 
-Scripts can use named actions or raw physical keys. `rustic.key("KeyW")` returns
-`pressed`, `released`, `held`, and `axis`; `rustic.any_key_pressed()` detects any new
-press; and `rustic.key_events()` returns every ordered press/release event, including
-the key name and auto-repeat flag. Physical names follow W3C/winit conventions such
-as `KeyW`, `Digit1`, `ArrowLeft`, `Escape`, and `F12`. Unknown platform keys remain
-available by name. Focus loss releases all held keys and transient events are cleared
-once per frame.
+**Current Play input:** The editor's embedded Play viewport forwards the held
+state of WASD, arrow keys, and Shift to scripts while that viewport is hovered or
+focused. The supported names are `KeyW`, `KeyA`, `KeyS`, `KeyD`, `ArrowUp`,
+`ArrowDown`, `ArrowLeft`, `ArrowRight`, `ShiftLeft`, and `ShiftRight`.
+`rustic.key(name).held` is available for movement; `axis` is `1` when held and
+`0` otherwise. The API also exposes `pressed`, `released`, `key_events()`,
+`any_key_pressed()`, and named `input()` actions, but the editor does not yet
+forward their events or action state. Press/release fields remain false, event
+lists remain empty, and named actions remain inactive. Other key names and
+keyboard input in New Window or Standalone mode are not forwarded yet. The
+[Lua guide](Scripting/scriptingLua.md#input) gives exact setup steps and a
+copyable controller.
 
 ## JavaScript lifecycle and API 1.0
 

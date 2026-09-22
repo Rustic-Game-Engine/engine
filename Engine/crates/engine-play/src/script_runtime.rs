@@ -1,10 +1,13 @@
-use crate::{RuntimeChange, RuntimeChangeSet, RuntimeChangeTarget, RuntimeValue};
+use crate::{
+    LiveEntityProperties, RuntimeChange, RuntimeChangeSet, RuntimeChangeTarget, RuntimeValue,
+};
 use engine_scripting::{
-    ActionState, EngineValue, ExternalBehavior, GameSettings, GameplayHost, JavaScriptBehavior,
-    LuaBehavior, ScriptId, ScriptLanguage, ScriptReference, WebBehavior, load_manifest,
+    ActionState, EngineValue, ExternalBehavior, GameSettings, GameplayHost, InputFrame,
+    JavaScriptBehavior, LuaBehavior, ScriptId, ScriptLanguage, ScriptReference, WebBehavior,
+    load_manifest,
 };
 use engine_world::{EntityId, Mesh, SceneWorld, WorldCommand, load_scene};
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -181,12 +184,53 @@ impl RuntimeBehavior {
 pub(crate) struct RuntimeScripts {
     behaviors: Vec<RuntimeBehavior>,
     world: Arc<Mutex<SceneWorld>>,
+    input_keys: Arc<Mutex<BTreeSet<String>>>,
     logs: Arc<Mutex<VecDeque<(String, String)>>>,
     dropped_logs: Arc<Mutex<u64>>,
     valid_scene: bool,
 }
 
 impl RuntimeScripts {
+    pub fn live_entity(&self, id: EntityId) -> Result<Option<LiveEntityProperties>, String> {
+        let world = self
+            .world
+            .lock()
+            .map_err(|_| "runtime world lock poisoned")?;
+        if !world.contains(id) {
+            return Ok(None);
+        }
+        let snapshot = world.snapshot(id).map_err(|error| error.to_string())?;
+        drop(world);
+        let mut scripts = snapshot.scripts;
+        for behavior in &self.behaviors {
+            let host = match behavior {
+                RuntimeBehavior::Lua(value) => value.host(),
+                RuntimeBehavior::JavaScript(value) => value.host(),
+                RuntimeBehavior::External(value) => value.host(),
+                RuntimeBehavior::Web(value) => value.host(),
+            };
+            if let Ok(host) = host.lock() {
+                if host.entity_id() == id {
+                    if let Some(script) = scripts
+                        .iter_mut()
+                        .find(|script| script.script_id == behavior.script_id())
+                    {
+                        script.properties = host.properties();
+                        script.enabled = host.enabled();
+                    }
+                }
+            }
+        }
+        Ok(Some(LiveEntityProperties {
+            entity_id: id.to_string(),
+            name: snapshot.name,
+            translation: snapshot.local_transform.translation.to_array(),
+            rotation: snapshot.local_transform.rotation.to_array(),
+            scale: snapshot.local_transform.scale.to_array(),
+            part_attributes: snapshot.part_attributes,
+            scripts,
+        }))
+    }
     #[allow(clippy::too_many_lines)]
     pub fn load(snapshot_root: &std::path::Path, scene_bytes: &[u8]) -> Result<Self, String> {
         let manifest_path = snapshot_root.join("config/scripts.ron");
@@ -209,6 +253,7 @@ impl RuntimeScripts {
         }));
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         let dropped_logs = Arc::new(Mutex::new(0));
+        let input_keys = Arc::new(Mutex::new(BTreeSet::new()));
         let entries = if manifest_path.is_file() {
             load_manifest(&std::fs::read(&manifest_path).map_err(|error| error.to_string())?)
                 .map_err(|error| error.to_string())?
@@ -245,6 +290,7 @@ impl RuntimeScripts {
                 &entries,
                 snapshot_root,
                 &world,
+                &input_keys,
                 &logs,
                 &dropped_logs,
                 &mut behaviors,
@@ -255,6 +301,7 @@ impl RuntimeScripts {
             &entries,
             snapshot_root,
             &world,
+            &input_keys,
             &logs,
             &dropped_logs,
             &mut behaviors,
@@ -280,6 +327,7 @@ impl RuntimeScripts {
                 }
                 let host = RuntimeHost {
                     world: Arc::clone(&world),
+                    input_keys: Arc::clone(&input_keys),
                     snapshot_root: snapshot_root.to_path_buf(),
                     entity: entity.id,
                     properties: Arc::new(Mutex::new(component.properties)),
@@ -301,6 +349,7 @@ impl RuntimeScripts {
         Ok(Self {
             behaviors,
             world,
+            input_keys,
             logs,
             dropped_logs,
             valid_scene,
@@ -314,6 +363,15 @@ impl RuntimeScripts {
         let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
         world.propagate_transforms();
         Ok(render(&world))
+    }
+    pub fn set_input_keys(&mut self, keys: Vec<String>) {
+        if let Ok(mut held) = self.input_keys.lock() {
+            *held = keys
+                .into_iter()
+                .take(128)
+                .filter(|key| key.len() <= 64)
+                .collect();
+        }
     }
     pub fn fixed_update(&mut self, delta: f64) {
         for behavior in &mut self.behaviors {
@@ -465,6 +523,7 @@ fn load_startup_references(
     entries: &BTreeMap<ScriptId, engine_scripting::ScriptManifestEntry>,
     snapshot_root: &Path,
     world: &Arc<Mutex<SceneWorld>>,
+    input_keys: &Arc<Mutex<BTreeSet<String>>>,
     logs: &Arc<Mutex<VecDeque<(String, String)>>>,
     dropped_logs: &Arc<Mutex<u64>>,
     behaviors: &mut Vec<RuntimeBehavior>,
@@ -490,6 +549,7 @@ fn load_startup_references(
         }
         let host = RuntimeHost {
             world: Arc::clone(world),
+            input_keys: Arc::clone(input_keys),
             snapshot_root: snapshot_root.to_path_buf(),
             entity,
             properties: Arc::new(Mutex::new(BTreeMap::new())),
@@ -637,6 +697,7 @@ fn push_log(
 
 struct RuntimeHost {
     world: Arc<Mutex<SceneWorld>>,
+    input_keys: Arc<Mutex<BTreeSet<String>>>,
     snapshot_root: PathBuf,
     entity: EntityId,
     properties: Arc<Mutex<BTreeMap<String, EngineValue>>>,
@@ -929,6 +990,15 @@ impl GameplayHost for RuntimeHost {
     fn input_action(&self, _name: &str) -> ActionState {
         ActionState::default()
     }
+    fn input_frame(&self) -> InputFrame {
+        InputFrame {
+            keys: self
+                .input_keys
+                .lock()
+                .map_or_else(|_| BTreeSet::new(), |keys| keys.clone()),
+            ..InputFrame::default()
+        }
+    }
     fn log(&mut self, level: &str, message: &str) -> Result<(), String> {
         let mut logs = self.logs.lock().map_err(|_| "script log lock poisoned")?;
         if logs.len() >= MAX_SCRIPT_LOGS {
@@ -1072,6 +1142,7 @@ mod tests {
         let world = Arc::new(Mutex::new(world));
         let make_host = || RuntimeHost {
             world: Arc::clone(&world),
+            input_keys: Arc::new(Mutex::new(BTreeSet::new())),
             snapshot_root: PathBuf::new(),
             entity: part.id,
             properties: Arc::new(Mutex::new(BTreeMap::new())),
@@ -1195,6 +1266,10 @@ mod tests {
         runtime.reload(script_id, b"return { fixed_update=function(dt) local x,y,z=rustic.get_translation(); rustic.set_translation(x+2,y,z) end }").unwrap();
         runtime.fixed_update(0.016);
         let changes = runtime.runtime_changes("base", &scene_bytes).unwrap();
+        assert_eq!(
+            runtime.live_entity(entity_id).unwrap().unwrap().translation,
+            [4.0, 0.0, 0.0]
+        );
         assert_eq!(changes.changes.len(), 1);
         assert_eq!(changes.changes[0].target.entity_id, entity_id.to_string());
         assert_eq!(
@@ -1280,6 +1355,67 @@ mod tests {
         assert_eq!(
             changes.changes[0].after,
             RuntimeValue::Vector3([11.0, 0.0, 0.0])
+        );
+    }
+
+    #[test]
+    fn lua_behavior_receives_play_keyboard_state() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("config")).unwrap();
+        std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
+        let script_id = ScriptId::new();
+        let scene = SceneDocument {
+            id: engine_core::SceneId::new(),
+            name: "Keyboard".into(),
+            startup_scripts: Vec::new(),
+            entities: vec![EntitySnapshot {
+                scripts: vec![ScriptComponent::new(script_id)],
+                ..EntitySnapshot::default()
+            }],
+            instances: Vec::new(),
+        };
+        save_manifest_atomic(
+            &temp.path().join("config/scripts.ron"),
+            &ScriptManifest {
+                format_version: 2,
+                scripts: vec![ScriptManifestEntry {
+                    id: script_id,
+                    language: ScriptLanguage::Lua54,
+                    relative_path: "scripts/controller.lua".into(),
+                    api_version: ScriptApiVersion::CURRENT,
+                    public_properties: Vec::new(),
+                }],
+            },
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("scripts/controller.lua"),
+            b"return { FixedUpdate=function(dt) if rustic.key('KeyW').held then local x,y,z=rustic.get_translation(); rustic.set_translation(x,y,z-dt) end end }",
+        )
+        .unwrap();
+        let scene_bytes = scene.to_bytes().unwrap();
+        let mut runtime = RuntimeScripts::load(temp.path(), &scene_bytes).unwrap();
+        runtime.fixed_update(1.0);
+        assert!(
+            runtime
+                .runtime_changes("base", &scene_bytes)
+                .unwrap()
+                .changes
+                .is_empty()
+        );
+        runtime.set_input_keys(vec!["KeyW".into()]);
+        runtime.fixed_update(1.0);
+        let changes = runtime.runtime_changes("base", &scene_bytes).unwrap();
+        assert_eq!(
+            changes.changes[0].after,
+            RuntimeValue::Vector3([0.0, 0.0, -1.0])
+        );
+        runtime.set_input_keys(Vec::new());
+        runtime.fixed_update(1.0);
+        let changes = runtime.runtime_changes("base", &scene_bytes).unwrap();
+        assert_eq!(
+            changes.changes[0].after,
+            RuntimeValue::Vector3([0.0, 0.0, -1.0])
         );
     }
 

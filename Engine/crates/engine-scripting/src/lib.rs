@@ -48,7 +48,9 @@ pub use runtime::{
     ScriptInstanceDescriptor, ScriptInstanceHandle, ScriptRuntimeAdapter, ScriptScheduler,
 };
 pub use settings::{GAME_SETTINGS_FILE, GameSettings};
-pub use workspace::{WorkspaceGeneration, generate_programming_workspace};
+pub use workspace::{
+    WorkspaceGeneration, generate_programming_workspace, install_user_agent_integrations,
+};
 
 /// Compiles source without running gameplay code using the registered adapter.
 ///

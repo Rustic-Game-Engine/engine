@@ -61,7 +61,7 @@ JsonElement health = rustic.get_property("health");
 rustic.set_property("health", 90);
 JsonElement color = rustic.GetAttribute("Color");
 rustic.EditAttribute("Anchored", true);
-JsonElement key = rustic.key("Space");
+JsonElement key = rustic.key("KeyW");
 IEnumerable<JsonElement> events = rustic.key_events();
 bool any = rustic.any_key_pressed();
 rustic.log("info", "message");
@@ -81,7 +81,10 @@ instance.clone("Room.Table");
 `get_property` uses `GetProperty` and therefore throws if the property is absent;
 `GetAttribute` likewise expects a populated built-in name. `input(name)` exists, but
 named actions currently arrive as an empty map, so it returns an undefined
-`JsonElement`; raw `key` data is populated. Inspect `ValueKind` before reading an
+`JsonElement`; only held WASD, arrow, and Shift keys from the embedded Play
+viewport are populated. Press/release and key events remain empty. See the
+[Lua input guide](scriptingLua.md#input) for exact names and setup. Inspect
+`ValueKind` before reading an
 optional value.
 
 Commands are queued and applied in list order after the callback. Public writes must

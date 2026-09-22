@@ -53,9 +53,15 @@ const health = rustic.get_property("health");
 rustic.set_property("health", 90);
 const color = rustic.GetAttribute("Color"); // [red, green, blue]
 rustic.EditAttribute("Anchored", true);
-rustic.log("warn", "message");
+print("loaded", id);
+warn("message");
+console.debug("details");
 rustic.set_enabled(false);
 ```
+
+`print(...)`, `warn(...)`, and `console.log/info/warn/error/debug(...)` write directly
+to the Rustic console. `rustic.log(level, message)` remains available when code needs
+to select a level dynamically.
 
 Lower-case `get_attribute`/`edit_attribute` are equivalent. Set `Color`, `Position`,
 and `Size` with three-number arrays, and `Parent` with an entity ID string or `null`.
@@ -74,12 +80,9 @@ instance.add("Cube");
 instance.clone("assets/models/chair.obj", camera); // optional parent ID
 Game.setCurrentCamera(camera);
 
-const action = rustic.input("Jump");
-const key = rustic.key("Space");
-for (const event of rustic.key_events()) {
-  rustic.log("debug", `${event.key}: ${event.state}`);
+if (rustic.key("KeyW").held) {
+  rustic.log("debug", "forward key is held");
 }
-if (rustic.any_key_pressed()) { /* one or more press edges */ }
 ```
 
 `Find` and direct scene properties return a stable entity ID or `undefined`.
@@ -88,8 +91,14 @@ and the external SDKs, whose `List` returns IDs. An instance source can be a sta
 ID, scene path, model path, or built-in object name. Instance calls queue creation and
 do not return the new ID. A parent, when supplied, must be a stable ID.
 
-Input states expose `pressed`, `released`, `held`, and `axis`; key events also expose
-`repeat`. Use physical names such as `KeyW`, `Space`, `ArrowLeft`, and `Escape`.
+The editor's embedded Play viewport currently forwards held WASD, arrow, and Shift
+keys. Use `rustic.key(name).held` with `KeyW`, `KeyA`, `KeyS`, `KeyD`,
+`ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `ShiftLeft`, or `ShiftRight`.
+The API exposes `pressed`, `released`, `key_events()`, `any_key_pressed()`, and
+named `input()` actions, but those values are not populated by the current Play
+bridge. Other key names and separate runtime windows do not forward input yet.
+For focus and setup steps, see the [Lua input guide](scriptingLua.md#input); the
+input transport and limitations are the same for JavaScript.
 
 ## Sandbox, values, and diagnostics
 

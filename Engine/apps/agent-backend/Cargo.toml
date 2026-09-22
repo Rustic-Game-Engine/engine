@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 engine-project = { path = "../../crates/engine-project", version = "0.1.0" }
+engine-scripting = { path = "../../crates/engine-scripting", version = "0.1.0" }
 engine-world = { path = "../../crates/engine-world", version = "0.1.0" }
 serde_json.workspace = true
 

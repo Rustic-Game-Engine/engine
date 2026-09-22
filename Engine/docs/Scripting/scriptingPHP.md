@@ -60,7 +60,7 @@ $health = $rustic->get_property("health");
 $rustic->set_property("health", 90);
 $color = $rustic->GetAttribute("Color");
 $rustic->EditAttribute("Anchored", true);
-$key = $rustic->key("Space");
+$key = $rustic->key("KeyW");
 $events = $rustic->key_events();
 $any = $rustic->any_key_pressed();
 $rustic->log("info", "message");
@@ -75,7 +75,9 @@ $instance->clone("assets/models/chair.glb", $table);
 
 Lower-case attribute aliases are available. `get_property`/`GetAttribute` return
 `null` when missing. Named actions have no generated PHP helper and the external
-`actions` object is currently empty; use raw `key` and `key_events`.
+`actions` object is currently empty. Only held WASD, arrow, and Shift keys from
+the embedded Play viewport are populated; press/release and key events remain
+empty. See the [Lua input guide](scriptingLua.md#input) for exact names and setup.
 
 Writes are queued and applied in response order. They must preserve property and
 attribute types. Built-ins are `Name`, `Position`, `Size`, `Color`, `CanTouch`,

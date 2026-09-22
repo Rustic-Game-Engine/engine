@@ -23,6 +23,13 @@ Create, move, rename, and attach scripts in the editor. Never edit
 Rustic assigns an Asset ID when the script is created or imported; scene and object
 records retain that ID even if the source file moves.
 
+**Play keyboard status:** The embedded Play viewport currently forwards only held
+WASD, arrow, and Shift keys to scripts. Press/release events, named input actions,
+other key names, and separate runtime-window keyboard input are not wired yet.
+See the [Lua input guide](scriptingLua.md#input) for supported names, setup, a
+copyable controller, and troubleshooting. The same held-key limitation applies
+to other script languages.
+
 Use **Programming > New Script** to create a **Global Startup Script**, **Scene
 Startup Script**, or **Object Component Script**. Use **Programming > Attach Existing
 Script**, **+ Add Component** in the Inspector, or drag a script from Explorer onto

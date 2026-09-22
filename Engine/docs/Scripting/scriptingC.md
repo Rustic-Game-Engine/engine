@@ -50,6 +50,11 @@ Request fields are:
 | `keys`, `key_events`, `any_key_pressed` | raw input snapshot |
 | `actions` | currently an empty object for external adapters |
 
+In the editor's embedded Play viewport, `keys` contains held WASD, arrow, and
+Shift state only. `key_events` is empty and `any_key_pressed` is false. Other
+key names and separate runtime-window input are not forwarded. See the
+[Lua input guide](scriptingLua.md#input) for the supported names and setup.
+
 Collision callbacks are not currently sent to external protocol programs. An ignored
 lifecycle callback still requires an empty response.
 

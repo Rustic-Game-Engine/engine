@@ -29,6 +29,18 @@ const BRIDGE: &str = r#"
     set_enabled: enabled => commands.push({op:"set_enabled", enabled:Boolean(enabled)})
   });
   Object.defineProperty(globalThis, "rustic", {value:rustic, writable:false, configurable:false});
+  const writeLog = level => (...values) => rustic.log(level, values.map(value => String(value)).join(" "));
+  const print = writeLog("info");
+  const warn = writeLog("warn");
+  Object.defineProperty(globalThis, "print", {value:print, writable:false, configurable:false});
+  Object.defineProperty(globalThis, "warn", {value:warn, writable:false, configurable:false});
+  Object.defineProperty(globalThis, "console", {value:Object.freeze({
+    log: print,
+    info: print,
+    warn,
+    error: writeLog("error"),
+    debug: writeLog("debug")
+  }), writable:false, configurable:false});
   const scene = new Proxy(Object.create(null), {get: (_, key) => {
     if (key === "Find") return path => state.scene_paths[path];
     if (key === "List") return () => Object.keys(state.scene_paths);
@@ -182,7 +194,7 @@ impl JavaScriptBehavior {
     /// # Errors
     /// Returns and contains a callback failure.
     pub fn on_create(&mut self) -> Result<(), JavaScriptRuntimeError> {
-        self.call("on_create", None)
+        self.call_compatible("OnCreate", "on_create", None)
     }
 
     /// # Errors
@@ -222,11 +234,7 @@ impl JavaScriptBehavior {
     /// # Errors
     /// Returns and contains a callback failure.
     pub fn on_stop(&mut self) -> Result<(), JavaScriptRuntimeError> {
-        self.call("on_stop", None)
-    }
-
-    fn call(&mut self, callback: &str, delta: Option<f64>) -> Result<(), JavaScriptRuntimeError> {
-        self.call_compatible(callback, callback, delta)
+        self.call_compatible("OnStop", "on_stop", None)
     }
 
     fn call_compatible(
@@ -547,6 +555,28 @@ mod tests {
         let mut behavior =
             JavaScriptBehavior::load(ScriptId::new(), looping, "loop.js", host(), 100).unwrap();
         assert!(behavior.update(0.016).is_err());
+    }
+
+    #[test]
+    fn canonical_lifecycle_and_native_logging_functions_are_available() {
+        let source = br#"globalThis.behavior = {
+            OnCreate() { print("created", 1); warn("careful"); console.debug("detail"); rustic.set_translation(1,2,3); },
+            OnStop() { rustic.set_translation(4,5,6); }
+        };"#;
+        let mut behavior =
+            JavaScriptBehavior::load(ScriptId::new(), source, "native-log.js", host(), 100_000)
+                .unwrap();
+
+        behavior.on_create().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [1.0, 2.0, 3.0]
+        );
+        behavior.on_stop().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [4.0, 5.0, 6.0]
+        );
     }
 
     #[test]

@@ -1156,6 +1156,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "thiserror 2.0.20",
+ "toml_edit",
 ]
 
 [[package]]
@@ -3253,6 +3254,7 @@ name = "rustic-agent-backend"
 version = "0.1.0"
 dependencies = [
  "engine-project",
+ "engine-scripting",
  "engine-world",
  "serde_json",
  "tempfile",
@@ -3903,6 +3905,7 @@ dependencies = [
  "indexmap",
  "toml_datetime",
  "toml_parser",
+ "toml_writer",
  "winnow",
 ]
 

@@ -145,6 +145,26 @@ pub fn run_runtime_server_with_renderer(
             }
             let request = match received.message {
                 ProtocolMessage::Control(request) => request,
+                ProtocolMessage::InputKeys(keys) => {
+                    scripts
+                        .lock()
+                        .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                        .set_input_keys(keys);
+                    continue;
+                }
+                ProtocolMessage::QueryEntity(id) => {
+                    let entity = id.parse().ok();
+                    let live = match entity {
+                        Some(entity) => scripts
+                            .lock()
+                            .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                            .live_entity(entity)
+                            .map_err(RuntimeServerError::Scripts)?,
+                        None => None,
+                    };
+                    connection.send(received.request_id, &ProtocolMessage::LiveEntity(live))?;
+                    continue;
+                }
                 ProtocolMessage::ReloadScript {
                     format_version,
                     script_id,
@@ -344,6 +364,7 @@ fn emit_console(
     message: String,
 ) -> Result<(), ProtocolError> {
     let record = LogRecord::new(severity, message, LogMetadata::new(subsystem));
+    println!("[{}] [{}] {}", severity.as_str(), subsystem, record.message);
     if let Some(logger) = logger {
         let _ = logger.log_record(&record);
     }

@@ -1,5 +1,5 @@
 use crate::{ActionState, EngineValue, EntityId, InputFrame, ScriptId};
-use mlua::{Error as MluaError, Function, Lua, RegistryKey, Table, Value};
+use mlua::{Error as MluaError, Function, Lua, RegistryKey, Table, Value, Variadic};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
@@ -217,7 +217,7 @@ impl LuaBehavior {
     /// # Errors
     /// Returns and contains a callback exception or exhausted instruction budget.
     pub fn on_create(&mut self) -> Result<(), LuaRuntimeError> {
-        self.call("on_create", None)
+        self.call_compatible("OnCreate", "on_create", None)
     }
     /// # Errors
     /// Returns and contains a callback exception or exhausted instruction budget.
@@ -252,11 +252,7 @@ impl LuaBehavior {
     /// # Errors
     /// Returns and contains a callback exception or exhausted instruction budget.
     pub fn on_stop(&mut self) -> Result<(), LuaRuntimeError> {
-        self.call("on_stop", None)
-    }
-
-    fn call(&mut self, name: &str, delta: Option<f64>) -> Result<(), LuaRuntimeError> {
-        self.call_compatible(name, name, delta)
+        self.call_compatible("OnStop", "on_stop", None)
     }
 
     fn call_compatible(
@@ -532,6 +528,22 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
                 .map_err(MluaError::RuntimeError)
         })?,
     )?;
+    for (name, level) in [("print", "info"), ("warn", "warn")] {
+        let h = Arc::clone(&host);
+        lua.globals().set(
+            name,
+            lua.create_function(move |lua, values: Variadic<Value>| {
+                let tostring: Function = lua.globals().get("tostring")?;
+                let mut parts = Vec::with_capacity(values.len());
+                for value in values {
+                    parts.push(tostring.call::<String>(value)?);
+                }
+                lock_host(&h)?
+                    .log(level, &parts.join("\t"))
+                    .map_err(MluaError::RuntimeError)
+            })?,
+        )?;
+    }
     let h = Arc::clone(&host);
     api.set(
         "get_property",
@@ -675,6 +687,26 @@ return { on_create=function() rustic.log('info','created') end, fixed_update=fun
         b.on_create().unwrap();
         b.fixed_update(0.02).unwrap();
         assert!((b.host().lock().unwrap().translation()[0] - 0.02).abs() < f64::EPSILON);
+    }
+    #[test]
+    fn canonical_lifecycle_and_native_logging_functions_are_available() {
+        let source = br#"return {
+            OnCreate=function() print("created", 1); warn("careful"); rustic.set_translation(1,2,3) end,
+            OnStop=function() rustic.set_translation(4,5,6) end
+        }"#;
+        let mut behavior =
+            LuaBehavior::load(ScriptId::new(), source, "native-log.lua", host(), 100_000).unwrap();
+
+        behavior.on_create().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [1.0, 2.0, 3.0]
+        );
+        behavior.on_stop().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [4.0, 5.0, 6.0]
+        );
     }
     #[test]
     fn syntax_error_is_diagnostic_and_infinite_loop_is_contained() {

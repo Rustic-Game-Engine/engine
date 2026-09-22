@@ -192,6 +192,33 @@ impl AuthoringDocument {
         Ok(id)
     }
 
+    /// Creates a model instance through the centralized undo stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a read-only document or failed world edit.
+    pub fn add_model(
+        &mut self,
+        name: impl Into<String>,
+        asset: engine_core::AssetId,
+        parent: Option<EntityId>,
+        local_transform: LocalTransform,
+    ) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        let snapshot = EntitySnapshot {
+            name: Some(name.into()),
+            mesh: Some(engine_world::Mesh { asset }),
+            parent,
+            local_transform,
+            ..EntitySnapshot::default()
+        };
+        let id = snapshot.id;
+        self.undo
+            .execute(&mut self.world, SceneEdit::Create { snapshot })?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
     /// Updates one local transform through the centralized undo stack.
     ///
     /// # Errors
@@ -324,6 +351,27 @@ impl AuthoringDocument {
             .execute(&mut self.world, SceneEdit::Create { snapshot })?;
         self.selected = Some(id);
         Ok(id)
+    }
+
+    /// Moves an entity within the scene hierarchy as one undoable edit.
+    pub fn reparent(
+        &mut self,
+        entity: EntityId,
+        parent: Option<EntityId>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.parent(entity)?;
+        if before != parent {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::Reparent {
+                    entity,
+                    before,
+                    after: parent,
+                },
+            )?;
+        }
+        Ok(())
     }
 
     pub fn set_camera(
@@ -773,6 +821,47 @@ mod tests {
         assert!(folder_snapshot.folder);
         assert_eq!(folder_snapshot.name.as_deref(), Some("Environment"));
         assert_eq!(reopened.world().parent(child).unwrap(), Some(folder));
+    }
+
+    #[test]
+    fn model_instance_is_created_at_drop_transform_and_is_undoable() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("model-instance"),
+            "Model Instance",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let asset = engine_core::AssetId::new();
+        let transform = LocalTransform {
+            translation: Vec3::new(2.0, 0.0, -3.0),
+            ..LocalTransform::IDENTITY
+        };
+
+        let entity = document.add_model("Chair", asset, None, transform).unwrap();
+
+        assert_eq!(document.world().mesh(entity).unwrap().unwrap().asset, asset);
+        assert_eq!(document.world().local_transform(entity).unwrap(), transform);
+        assert!(document.undo().unwrap());
+        assert!(!document.world().contains(entity));
+    }
+
+    #[test]
+    fn hierarchy_reparent_is_undoable() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("reparent");
+        let project = Project::create(&root, "Reparent", ProjectTemplate::Blank).unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let folder = document.add_folder(None).unwrap();
+        let child = document
+            .add_primitive("Cube", Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+
+        document.reparent(child, Some(folder)).unwrap();
+        assert_eq!(document.world().parent(child).unwrap(), Some(folder));
+        assert!(document.undo().unwrap());
+        assert_eq!(document.world().parent(child).unwrap(), None);
     }
 
     #[test]
