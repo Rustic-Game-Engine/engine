@@ -15,6 +15,14 @@ use std::time::Duration;
 use tempfile::TempDir;
 use thiserror::Error;
 
+mod c;
+mod cpp;
+mod csharp;
+mod java;
+mod luau;
+mod php;
+mod python;
+
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -447,7 +455,7 @@ fn web_javascript_error(error: JavaScriptRuntimeError) -> ExternalRuntimeError {
 }
 
 #[derive(Clone, Copy)]
-struct ToolchainSpec {
+pub(super) struct ToolchainSpec {
     candidates: &'static [&'static str],
     version_arguments: &'static [&'static str],
     install_hint: &'static str,
@@ -455,46 +463,18 @@ struct ToolchainSpec {
 
 fn toolchain_spec(language: ScriptLanguage) -> Option<ToolchainSpec> {
     match language {
-        ScriptLanguage::Luau => Some(ToolchainSpec {
-            candidates: &["luau"],
-            version_arguments: &["--version"],
-            install_hint: "the Luau CLI",
-        }),
-        ScriptLanguage::Python => Some(ToolchainSpec {
-            candidates: &["python", "python3"],
-            version_arguments: &["--version"],
-            install_hint: "Python 3",
-        }),
-        ScriptLanguage::C => Some(ToolchainSpec {
-            candidates: &["clang", "gcc", "cl"],
-            version_arguments: &["--version"],
-            install_hint: "Clang, GCC, or MSVC",
-        }),
-        ScriptLanguage::Cpp => Some(ToolchainSpec {
-            candidates: &["clang++", "g++", "cl"],
-            version_arguments: &["--version"],
-            install_hint: "Clang, GCC, or MSVC",
-        }),
-        ScriptLanguage::CSharp => Some(ToolchainSpec {
-            candidates: &["dotnet"],
-            version_arguments: &["--version"],
-            install_hint: ".NET SDK 10 or newer",
-        }),
-        ScriptLanguage::Java => Some(ToolchainSpec {
-            candidates: &["java"],
-            version_arguments: &["--version"],
-            install_hint: "OpenJDK 11 or newer (java and javac)",
-        }),
-        ScriptLanguage::Php => Some(ToolchainSpec {
-            candidates: &["php"],
-            version_arguments: &["--version"],
-            install_hint: "PHP CLI",
-        }),
+        ScriptLanguage::Luau => Some(luau::SPEC),
+        ScriptLanguage::Python => Some(python::SPEC),
+        ScriptLanguage::C => Some(c::SPEC),
+        ScriptLanguage::Cpp => Some(cpp::SPEC),
+        ScriptLanguage::CSharp => Some(csharp::SPEC),
+        ScriptLanguage::Java => Some(java::SPEC),
+        ScriptLanguage::Php => Some(php::SPEC),
         _ => None,
     }
 }
 
-struct PreparedProgram {
+pub(super) struct PreparedProgram {
     directory: TempDir,
     executable: PathBuf,
     arguments: Vec<OsString>,
@@ -502,10 +482,6 @@ struct PreparedProgram {
 }
 
 impl PreparedProgram {
-    #[allow(
-        clippy::too_many_lines,
-        reason = "all build recipes remain together so the language/toolchain matrix is auditable"
-    )]
     fn build(
         language: ScriptLanguage,
         source: &[u8],
@@ -548,97 +524,15 @@ impl PreparedProgram {
             language,
         };
         match language {
-            ScriptLanguage::Python => {
-                run_checked(
-                    language,
-                    Command::new(&program.executable)
-                        .args(["-I", "-m", "py_compile"])
-                        .arg(&source_path),
-                )?;
-                program.arguments = vec![OsString::from("-I"), source_path.into_os_string()];
-            }
-            ScriptLanguage::Php => {
-                run_checked(
-                    language,
-                    Command::new(&program.executable)
-                        .arg("-l")
-                        .arg(&source_path),
-                )?;
-                program.arguments = vec![source_path.into_os_string()];
-            }
-            ScriptLanguage::C | ScriptLanguage::Cpp => {
-                let output = program.directory.path().join(if cfg!(windows) {
-                    "behavior.exe"
-                } else {
-                    "behavior"
-                });
-                let compiler_name = program
-                    .executable
-                    .file_stem()
-                    .and_then(OsStr::to_str)
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let mut command = Command::new(&program.executable);
-                if compiler_name == "cl" {
-                    command
-                        .args(["/nologo", "/W4"])
-                        .arg(&source_path)
-                        .arg(format!("/Fe:{}", output.display()));
-                } else {
-                    command.args(["-Wall", "-Wextra", "-Werror"]);
-                    command.arg(if language == ScriptLanguage::Cpp {
-                        "-std=c++20"
-                    } else {
-                        "-std=c17"
-                    });
-                    command.arg(&source_path).arg("-o").arg(&output);
-                }
-                run_checked(language, &mut command)?;
-                program.executable = output;
-            }
+            ScriptLanguage::Python => python::prepare(&mut program, &source_path)?,
+            ScriptLanguage::Php => php::prepare(&mut program, &source_path)?,
+            ScriptLanguage::C => c::prepare(&mut program, &source_path)?,
+            ScriptLanguage::Cpp => cpp::prepare(&mut program, &source_path)?,
             ScriptLanguage::CSharp => {
-                let version = availability.version.unwrap_or_else(|| "10.0".into());
-                let major = version.split('.').next().unwrap_or("10");
-                let project = program.directory.path().join("RusticBehavior.csproj");
-                std::fs::write(
-                    &project,
-                    format!("<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net{major}.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup></Project>"),
-                ).map_err(|error| runtime_io(language, error))?;
-                run_checked(
-                    language,
-                    Command::new(&program.executable)
-                        .args(["build", "-c", "Release", "--nologo"])
-                        .arg(&project),
-                )?;
-                let dll = program
-                    .directory
-                    .path()
-                    .join(format!("bin/Release/net{major}.0/RusticBehavior.dll"));
-                program.arguments = vec![dll.into_os_string()];
+                csharp::prepare(&mut program, &source_path, availability.version)?
             }
-            ScriptLanguage::Java => {
-                let javac = find_executable(&["javac"]).ok_or(
-                    ExternalRuntimeError::ToolchainUnavailable("Java", "OpenJDK javac"),
-                )?;
-                let classes = program.directory.path().join("classes");
-                std::fs::create_dir(&classes).map_err(|error| runtime_io(language, error))?;
-                run_checked(
-                    language,
-                    Command::new(javac)
-                        .arg("-d")
-                        .arg(&classes)
-                        .arg(&source_path),
-                )?;
-                program.arguments = vec![
-                    OsString::from("-cp"),
-                    classes.into_os_string(),
-                    OsString::from("RusticBehavior"),
-                ];
-            }
-            ScriptLanguage::Luau => {
-                validate_with_stdin(language, source, &["--compile=-", "-"])?;
-                program.arguments = vec![source_path.into_os_string()];
-            }
+            ScriptLanguage::Java => java::prepare(&mut program, &source_path)?,
+            ScriptLanguage::Luau => luau::prepare(&mut program, &source_path, source)?,
             _ => {
                 return Err(ExternalRuntimeError::Runtime(
                     language.display_name(),

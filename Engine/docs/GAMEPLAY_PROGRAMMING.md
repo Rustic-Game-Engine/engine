@@ -162,7 +162,16 @@ applies the change immediately. Luau retains its existing isolated CLI protocol
 execution model. HTML/CSS camera selection runs in inline JavaScript; CSS itself
 does not execute gameplay commands.
 
-Python, C#, C, C++, Java, and PHP use host protocol version 1. Rustic keeps one process
+Python, C#, C, C++, Java, and PHP use host protocol version 1. The engine source keeps
+their toolchain discovery and build recipes in separate files under
+`crates/engine-scripting/src/external_runtime/` (`python.rs`, `csharp.rs`, `c.rs`,
+`cpp.rs`, `java.rs`, and `php.rs`). `luau.rs` contains the external Luau CLI recipe.
+`external_runtime.rs` owns the shared request/response protocol and process lifetime;
+these Rust files are engine adapters, not game scripts. Create game code with the
+editor and attach its registered asset to a global, scene, or object slot as described
+in the [language guides](Scripting/README.md).
+
+Rustic keeps one process
 alive per behavior instance so language-global state survives between callbacks. Each
 invocation reads one newline-delimited JSON request from standard input and writes one
 newline-delimited response:
@@ -173,8 +182,9 @@ newline-delimited response:
 
 The request contains `callback`, `delta`, `entity_id`, `delta_time`,
 `fixed_delta_time`, `translation`, `properties`, `keys`, `key_events`, and
-`any_key_pressed`. Supported commands are `set_translation`, `set_property`, `log`,
-`set_enabled`, `add_instance`, and `clone_instance`. Instance commands use a `source`
+`any_key_pressed`. Supported commands include `set_translation`, `set_property`,
+`edit_attribute`, `log`, `set_enabled`, `add_instance`, `clone_instance`, and
+`set_current_camera`. Instance commands use a `source`
 string and optional stable `parent` entity ID, so every external language can add the
 same Explorer asset:
 
