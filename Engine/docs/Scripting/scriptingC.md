@@ -1,106 +1,123 @@
 # Scripting Rustic games with C
 
-C behaviors are low-level protocol programs. Rustic compiles `.c` files as C17 and
-runs one isolated process per behavior instance. Unlike C++, C currently has no
-generated parser or full Script API SDK: the generated starter only demonstrates the
-response loop and helper functions for instance/camera commands. Production C scripts
-must parse the request JSON and serialize a valid response themselves.
+C behaviors use the built-in Rustic API. Define callbacks and call
+`rustic.get_translation()` (PHP: `$rustic->get_translation()`). Rustic supplies the
+SDK, dispatches lifecycle calls, and handles communication internally. Scripts do
+not parse requests, build commands, serialize JSON, or print responses.
 
-Install `clang`, `gcc`, or MSVC `cl` on `PATH`. Clang/GCC use `-Wall -Wextra -Werror
--std=c17`; MSVC uses `/nologo /W4`. Use `cargo xtask doctor` to see which compiler
-Rustic found.
+## Setup and attachment
 
-## Required process contract
+1. Install Clang, GCC, or MSVC on PATH (C17). Restart the editor after changing PATH.
+   Run `cargo xtask doctor` from the Engine folder to check discovery.
+2. Open your game project and scene. Select a **Part** object for this movement example.
+3. Use **Programming > New Script > Object Component Script** and select C.
+   Save the asset, then attach it to the selected object using
+   **Programming > Attach Existing Script** or **+ Add Component** in the Inspector.
+   Create global or scene scripts through their corresponding Programming commands.
+   Keep the editor-assigned Asset ID; do not edit the registry or scene files by hand.
+4. Paste the complete example below. Press **Play**, then hover or click the embedded
+   Play viewport and hold **W**. The owner moves along positive Z at one unit per
+   second. The Console shows **Behavior started** once. Stop Play to restore the
+   authored scene. Attach to an object with a transform to see movement.
 
-Keep the process alive. For every newline-delimited JSON request on standard input,
-write exactly one newline-delimited JSON response and flush:
+## Complete behavior
 
 ```c
-#include <stdio.h>
+#include "rustic.h"
 
+void start(void) { rustic.log("info", "Behavior started"); }
+void fixed(double dt) {
+    RusticVector3 p = rustic.get_translation();
+    if (rustic.key("KeyW").held) rustic.set_translation(p.x, p.y, p.z + dt);
+}
 int main(void) {
-    char request[1048577];
-    while (fgets(request, sizeof request, stdin)) {
-        /* Parse request, dispatch request.callback, build commands here. */
-        puts("{\"format_version\":1,\"commands\":[]}");
-        fflush(stdout);
-    }
-    return 0;
+    return rustic_run((RusticBehavior){.on_start=start, .fixed_update=fixed});
 }
 ```
 
-Do not use `printf` on standard output for debugging. Add a `log` command to the
-response or write diagnostics to standard error. Use a real bounds-checked JSON
-parser/serializer in nontrivial code; never interpolate untrusted scene names or
-property strings into JSON.
+The SDK is staged automatically beside the source in an engine temporary directory.
+You do not install a package, copy the SDK into your game, or write a process loop.
+**Programming > Open Programming Workspace** also writes editor support files under
+`.rustic/generated/programming`. Regenerate those files after upgrading Rustic.
+Edit your behavior source, not generated SDK files. Run through Rustic Play so the
+engine can supply the API and callback state.
 
-Request fields are:
+## Built-in functions
 
-| Field | Type and meaning |
+All gameplay languages expose owner ID and timing, translation, declared public
+properties, built-in attributes, held-key input, logging, enabled state, scene lookup,
+instance creation, and camera selection. Use native member syntax for your language.
+
+| API | Result or effect |
 | --- | --- |
-| `format_version` | integer; currently `1` |
-| `callback` | `on_create`, `on_start`, `on_enable`, `fixed_update`, `update`, `on_disable`, `on_destroy`, or `on_stop` |
-| `delta` | number for update callbacks, otherwise `null` |
-| `entity_id` | stable entity ID string |
-| `delta_time`, `fixed_delta_time` | current engine time steps |
-| `translation` | three-number array |
-| `properties` | declared public property object |
-| `attributes` | available built-in attributes |
-| `scene_paths` | path-to-entity-ID object |
-| `keys`, `key_events`, `any_key_pressed` | raw input snapshot |
-| `actions` | currently an empty object for external adapters |
+| `rustic.entity_id()` | Stable owner ID string |
+| `rustic.delta_time()`, `rustic.fixed_delta_time()` | Seconds |
+| `rustic.get_translation()` | Three numbers; C uses `RusticVector3` with x/y/z |
+| `rustic.set_translation(x,y,z)` | Queues owner movement |
+| `rustic.get_property(name)`, `rustic.set_property(name,value)` | Reads or updates an already declared property |
+| `rustic.get_attribute(name)`, `rustic.edit_attribute(name,value)` | Reads or edits an owner built-in attribute |
+| `rustic.key(name)`, `rustic.input(name)` | Action state with pressed/released/held/axis |
+| `rustic.key_events()`, `rustic.any_key_pressed()` | Input event snapshot |
+| `rustic.log(level,message)`, `rustic.set_enabled(enabled)` | Logs or queues enabled state |
+| `Game.scene.Find(path)`, `Game.scene.List()` | Finds an ID or lists matching IDs |
+| `instance.add(source,parent)`, `instance.clone(source,parent)` | Queues creation; no immediate new ID |
+| `Game.setCurrentCamera(source)` | Queues camera selection by path or ID |
 
-In the editor's embedded Play viewport, `keys` contains held WASD, arrow, and
-Shift state only. `key_events` is empty and `any_key_pressed` is false. Other
-key names and separate runtime-window input are not forwarded. See the
-[Lua input guide](scriptingLua.md#input) for the supported names and setup.
+Mutations apply after the callback, in call order. Getters read the callback's
+snapshot, so a getter after a setter still reads the original state. Properties and
+attributes must retain their engine types; numbers must be finite. Attribute names
+are `Name`, `Position`, `Size`, `Color`, `CanTouch`, `CanCollide`, `Anchored`, and
+`Parent`. Color is three RGB numbers. Instance parents must be stable entity IDs;
+resolve a path with `Game.scene.Find` first. Scene List returns IDs, not path strings.
 
-Collision callbacks are not currently sent to external protocol programs. An ignored
-lifecycle callback still requires an empty response.
+## Callbacks and values
 
-## Commands
+Supported lifecycle names are `on_create`, `on_start`, `on_enable`, `fixed_update`,
+`update`, `on_disable`, `on_destroy`, and `on_stop`. Only frame callbacks receive
+`dt` (seconds). Omitted callbacks are handled automatically. C and C++ register
+function pointers in `RusticBehavior`; Python passes a callback dictionary to `run`;
+PHP passes one to `rustic_run`; C# and Java dispatch the supplied callback name.
+Luau returns a table and also accepts `Start`, `FixedUpdate`, `Update`, and the other
+capitalized lifecycle aliases used by Lua. State declared outside callbacks persists
+for this behavior instance until teardown or reload.
 
-Return commands in the order they should be applied:
+Python and PHP use native dictionaries/arrays for key state. C#, Java, and C use
+native action structs/objects with `.held`. Luau uses tables and returns translation
+as three separate numbers. C property/attribute reads return `RusticValue`: inspect
+its `type` and use `boolean`, `integer`, `number`, `string`, or `vector`/`length`. C strings and
+read values last until the next callback; copy them if you need to retain them. C strings cannot contain embedded NUL bytes.
+C# property/attribute reads return ordinary `object?` values (bool, long/double,
+string, double[] or null); Java returns Object values (Boolean, Long/Double,
+String, double[] or null). Cast to the declared property type before arithmetic.
+C scene listing takes a path argument, e.g. `Game.scene.List("Game.scene")`, and
+returns a `RusticList` with count/items.
 
-```json
-{"format_version":1,"commands":[
-  {"op":"set_translation","value":[1,2,3]},
-  {"op":"set_property","name":"health","value":90},
-  {"op":"edit_attribute","name":"Color","value":[1,0.5,0.25]},
-  {"op":"log","level":"info","message":"started"},
-  {"op":"set_enabled","enabled":false},
-  {"op":"set_current_camera","source":"Room.Camera"},
-  {"op":"add_instance","source":"Cube","parent":null},
-  {"op":"clone_instance","source":"Room.Table","parent":null}
-]}
-```
+## Current limits and diagnosis
 
-`set_property` only accepts a declared property and must preserve its engine type.
-`edit_attribute` supports `Name`, `Position`, `Size`, `Color`, `CanTouch`,
-`CanCollide`, `Anchored`, and `Parent`, again with the existing type. Instance source
-may be a stable ID, scene path, Explorer model path, or built-in name. `parent`, when
-not null, must be a stable entity ID.
+The embedded Play viewport forwards held WASD, arrows, and Shift. Other keys,
+press/release events, named actions, and separate runtime-window input are not wired
+in this build. Collision callbacks and cross-language event emit/subscribe are not
+exposed by these external SDKs. Coordinate through shared engine state.
 
-The generated starter includes `instance_add`, `instance_clone`, and
-`Game_setCurrentCamera`, but its single-command buffer is illustrative: each helper
-overwrites that buffer, and the starter resets it before every response. Extend it to
-an array builder or JSON library before expecting multiple commands. There is no
-current generated C equivalent of `rustic.get_translation()` or scene lookup; read
-those values from the request structure you parse.
+Each instance runs in its own process with a safe environment allowlist and a
+temporary working directory. Sources and responses are limited to 1 MiB; callbacks
+have three seconds to finish. An exception, invalid engine value, process exit,
+timeout, or rejected call disables the behavior. Failed build/reload validation
+keeps the last good instance running.
 
-## Editor lifecycle and containment
+- **Toolchain unavailable:** check PATH in the editor's environment, then restart it.
+- **Nothing moves:** check attachment, owner transform, Play focus, and held KeyW.
+- **Property rejected:** declare it in the editor and preserve its type.
+- **Wrong parent:** pass the ID returned by Find, not the path string.
+- **SDK missing when running manually:** run the behavior through Rustic Play.
+- **Callback failed:** read the Rustic Console/build diagnostic. Use `rustic.log`
+  for gameplay logs; external stdout belongs to the engine's private transport.
+- **Old script has a request loop:** replace it with the callback setup above.
+  If the old starter defines its own SDK classes, remove those definitions and
+  keep your gameplay logic in the callbacks. Rustic now supplies the SDK.
 
-C cannot call another behavior process directly. API 1.0 does not yet include an
-external command for Engine Event `emit`/`subscribe`; cross-language coordination must
-use shared engine state.
+## Target another scene object
 
-Create/attach C scripts through global, scene, or component commands in the editor so
-their persistent Asset IDs are recorded. Execution is global, then scene, then
-component, with configured order and IDs as tie-breakers. A process-global variable
-belongs only to that behavior instance and persists until teardown.
-
-Source and responses are limited to 1 MiB, and each callback has three seconds to
-respond. The environment is cleared to a safe allowlist and the working directory is
-temporary. A nonzero exit, timeout, malformed response, or rejected command disables
-the behavior. Build/reload validation failures leave the last-known-good instance
-running.
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.

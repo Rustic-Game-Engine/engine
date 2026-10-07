@@ -20,6 +20,14 @@ pub(super) fn prepare(
             .args(["-I", "-m", "py_compile"])
             .arg(source),
     )?;
-    program.arguments = vec![OsString::from("-I"), source.as_os_str().to_os_string()];
+    program.arguments = vec![
+        OsString::from("-I"),
+        OsString::from("-c"),
+        OsString::from(
+            "import sys,runpy;sys.path.insert(0,sys.argv[1]);runpy.run_path(sys.argv[2],run_name='__main__')",
+        ),
+        program.directory.path().as_os_str().to_os_string(),
+        source.as_os_str().to_os_string(),
+    ];
     Ok(())
 }

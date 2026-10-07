@@ -6,7 +6,7 @@ extension you create in the Explorer:
 | Language | Extensions | Runtime | Guide |
 | --- | --- | --- | --- |
 | Lua 5.4 | `.lua` | bundled, embedded | [Lua 5.4](scriptingLua.md) |
-| Luau | `.luau` | external Luau CLI | [Luau](scriptingLuau.md) |
+| Luau | `.luau` | bundled isolated Luau host | [Luau](scriptingLuau.md) |
 | JavaScript | `.js`, `.mjs` | bundled, embedded | [JavaScript](scriptingJavaScript.md) |
 | Python | `.py` | external Python 3 | [Python](scriptingPython.md) |
 | C | `.c` | external C17 compiler | [C](scriptingC.md) |
@@ -15,6 +15,10 @@ extension you create in the Explorer:
 | Java | `.java` | external `java` and `javac` | [Java](scriptingJava.md) |
 | PHP | `.php` | external PHP CLI; `ui/` only | [PHP](scriptingPHP.md) |
 | HTML/CSS | `.html`, `.htm`, `.css` | bundled Web validator and inline-JS sandbox; `ui/` only | [Web](scriptingWeb.md) |
+
+Every gameplay language uses engine-owned built-in functions. Scripts define
+callbacks and call the API; no user-written JSON request/response loop is needed.
+CSS is styling only; use inline JavaScript in HTML for gameplay API calls.
 
 ## Rules shared by every language
 
@@ -59,3 +63,6 @@ All source must be UTF-8 and at most 1 MiB. Play uses an immutable project snaps
 Reload validates before swapping at a simulation boundary; a failed reload leaves the
 last good instance running. External callbacks have a three-second deadline and a
 1 MiB response limit. See each language guide for its exact callback and API surface.
+
+See [Edit scene objects](sceneObjects.md) to target built-in properties on another
+object using `rustic.game.<scene-name>.<hierarchy>` in native language syntax.

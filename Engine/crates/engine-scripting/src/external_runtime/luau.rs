@@ -1,19 +1,26 @@
-use super::{ExternalRuntimeError, PreparedProgram, ToolchainSpec, validate_with_stdin};
+use super::{ExternalRuntimeError, PreparedProgram, ToolchainSpec, run_checked};
 use crate::ScriptLanguage;
+use std::ffi::OsString;
 use std::path::Path;
+use std::process::Command;
 
 pub(super) const SPEC: ToolchainSpec = ToolchainSpec {
-    candidates: &["luau"],
+    candidates: &["rustic-luau-host"],
     version_arguments: &["--version"],
-    install_hint: "the Luau CLI",
+    install_hint: "the bundled Rustic Luau host (rebuild or reinstall Rustic)",
 };
 
 pub(super) fn prepare(
     program: &mut PreparedProgram,
     source: &Path,
-    bytes: &[u8],
+    _bytes: &[u8],
 ) -> Result<(), ExternalRuntimeError> {
-    validate_with_stdin(ScriptLanguage::Luau, bytes, &["--compile=-", "-"])?;
-    program.arguments = vec![source.as_os_str().to_os_string()];
+    run_checked(
+        ScriptLanguage::Luau,
+        Command::new(&program.executable)
+            .arg("--validate")
+            .arg(source),
+    )?;
+    program.arguments = vec![OsString::from(source.as_os_str())];
     Ok(())
 }

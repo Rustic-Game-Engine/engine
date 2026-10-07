@@ -114,3 +114,9 @@ instruction-budget failure disables that behavior, while other scripts continue.
 Generated type declarations are at
 `.rustic/generated/programming/rustic_api.d.ts`; generated files may be regenerated,
 so never put game logic there.
+
+## Target another scene object
+
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.

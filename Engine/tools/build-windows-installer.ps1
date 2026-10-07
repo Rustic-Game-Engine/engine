@@ -62,6 +62,9 @@ if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 Push-Location $workspaceRoot
 try {
+    Write-Host 'Building bundled Luau API host...'
+    & $cargo build --locked --manifest-path 'apps/luau-host/Cargo.toml' --profile distribution --target-dir 'target'
+    if ($LASTEXITCODE -ne 0) { throw "Luau host build failed with exit code $LASTEXITCODE." }
     Write-Host 'Building Rustic Game Engine distribution binaries...'
     & $cargo build --locked --profile distribution `
         --package rustic-project-manager `

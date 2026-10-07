@@ -1,5 +1,6 @@
 /target/
 /dist/
+/examples/api-smoke-test/
 /.tools/
 /.idea/
 /.vscode/

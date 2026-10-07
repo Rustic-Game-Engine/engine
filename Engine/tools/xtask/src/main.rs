@@ -1,6 +1,6 @@
 use engine_scripting::{ScriptLanguage, probe_language_toolchain};
 use std::env;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
 
@@ -62,6 +62,7 @@ fn doctor() -> Result<(), String> {
     println!("Gameplay language adapters:");
     for language in [
         ScriptLanguage::Lua54,
+        ScriptLanguage::Luau,
         ScriptLanguage::JavaScript,
         ScriptLanguage::Python,
         ScriptLanguage::CSharp,
@@ -87,6 +88,23 @@ fn doctor() -> Result<(), String> {
     Ok(())
 }
 
+fn build_luau_host(profile: &OsStr) -> Result<(), String> {
+    let target = env::var_os("CARGO_TARGET_DIR").unwrap_or_else(|| OsString::from("target"));
+    run_owned(
+        "cargo",
+        [
+            OsString::from("build"),
+            OsString::from("--locked"),
+            OsString::from("--manifest-path"),
+            OsString::from("apps/luau-host/Cargo.toml"),
+            OsString::from("--target-dir"),
+            target,
+            OsString::from("--profile"),
+            profile.to_os_string(),
+        ],
+    )
+}
+
 fn build(arguments: &[OsString]) -> Result<(), String> {
     let profile = option_value(arguments, "--profile").unwrap_or_else(|| "dev".into());
     let profile_name = profile.to_string_lossy();
@@ -99,6 +117,7 @@ fn build(arguments: &[OsString]) -> Result<(), String> {
     if arguments.len() > 2 || (arguments.len() == 1 && arguments[0] != "--profile") {
         return Err("build accepts only `--profile <name>`".to_owned());
     }
+    build_luau_host(&profile)?;
     run_owned(
         "cargo",
         [
@@ -113,6 +132,7 @@ fn build(arguments: &[OsString]) -> Result<(), String> {
 }
 
 fn test() -> Result<(), String> {
+    build_luau_host(OsStr::new("dev"))?;
     doctor()?;
     run_tool("cargo", &["fmt", "--all", "--check"])?;
     run_tool(

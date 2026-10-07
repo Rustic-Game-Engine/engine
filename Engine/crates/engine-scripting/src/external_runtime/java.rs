@@ -24,7 +24,11 @@ pub(super) fn prepare(
     std::fs::create_dir(&classes).map_err(|error| runtime_io(ScriptLanguage::Java, error))?;
     run_checked(
         ScriptLanguage::Java,
-        Command::new(javac).arg("-d").arg(&classes).arg(source),
+        Command::new(javac)
+            .arg("-d")
+            .arg(&classes)
+            .arg(program.directory.path().join("Rustic.java"))
+            .arg(source),
     )?;
     program.arguments = vec![
         OsString::from("-cp"),

@@ -2455,11 +2455,18 @@ impl EditorViewer<'_> {
             attributes.color = color;
             attributes_changed |= ui
                 .checkbox(&mut attributes.can_touch, "Can touch")
+                .on_hover_text("Reserved for touch events. Does not affect solid collisions.")
                 .changed();
             attributes_changed |= ui
                 .checkbox(&mut attributes.can_collide, "Can collide")
+                .on_hover_text("Built-in primitives collide in Play when both objects enable this.")
                 .changed();
-            attributes_changed |= ui.checkbox(&mut attributes.anchored, "Anchored").changed();
+            attributes_changed |= ui
+                .checkbox(&mut attributes.anchored, "Anchored")
+                .on_hover_text(
+                    "Prevents gravity and collision response from moving this primitive in Play.",
+                )
+                .changed();
             ui.label(format!(
                 "Parent: {}",
                 snapshot
@@ -4165,165 +4172,9 @@ fn gameplay_script_template(language: ScriptLanguage) -> (&'static str, &'static
             "js",
             b"// Edit in your configured external editor.\nglobalThis.behavior = {\n  Start() { rustic.log(\"info\", \"Behavior started\"); },\n  FixedUpdate(dt) {},\n  Update(dt) {},\n  OnDestroy() { rustic.log(\"info\", \"Behavior destroyed\"); },\n};\n",
         ),
-        ScriptLanguage::Python => (
-            "py",
-            br#"import json, sys
-
-class InstanceApi:
-    def __init__(self): self.commands = []
-    def add(self, source, parent=None):
-        self.commands.append({"op": "add_instance", "source": source, "parent": parent})
-    def clone(self, source, parent=None):
-        self.commands.append({"op": "clone_instance", "source": source, "parent": parent})
-
-instance = InstanceApi()
-
-class RusticApi:
-    def __init__(self): self.state = {}; self.commands = instance.commands
-    def entity_id(self): return self.state["entity_id"]
-    def delta_time(self): return self.state["delta_time"]
-    def fixed_delta_time(self): return self.state["fixed_delta_time"]
-    def get_translation(self): return self.state["translation"][:]
-    def set_translation(self, x, y, z): self.commands.append({"op":"set_translation","value":[x,y,z]})
-    def get_property(self, name): return self.state["properties"].get(name)
-    def set_property(self, name, value): self.commands.append({"op":"set_property","name":name,"value":value})
-    def get_attribute(self, name): return self.state["attributes"].get(name)
-    GetAttribute = get_attribute
-    def edit_attribute(self, name, value): self.commands.append({"op":"edit_attribute","name":name,"value":value})
-    EditAttribute = edit_attribute
-    def input(self, name): return self.state.get("actions", {}).get(name, {"pressed":False,"released":False,"held":False,"axis":0})
-    def key(self, name): return self.state["keys"].get(name, {"pressed":False,"released":False,"held":False,"axis":0})
-    def key_events(self): return self.state["key_events"][:]
-    def any_key_pressed(self): return self.state["any_key_pressed"]
-    def log(self, level, message): self.commands.append({"op":"log","level":str(level),"message":str(message)})
-    def set_enabled(self, enabled): self.commands.append({"op":"set_enabled","enabled":bool(enabled)})
-
-class SceneApi:
-    def __init__(self): self.state = {}
-    def Find(self, path): return self.state.get(path)
-    def List(self, path="Game.scene"):
-        prefix = "" if path in ("", "Game.scene") else path.rstrip("./") + "."
-        return [entity for name, entity in self.state.items() if not prefix or name.startswith(prefix)]
-
-class GameApi:
-    def setCurrentCamera(self, source):
-        instance.commands.append({"op":"set_current_camera","source":source})
-    set_current_camera = setCurrentCamera
-rustic = RusticApi()
-Game = GameApi()
-Game.scene = SceneApi()
-
-for line in sys.stdin:
-    request = json.loads(line)
-    instance.commands = []
-    rustic.commands = instance.commands
-    rustic.state = request
-    Game.scene.state = request.get("scene_paths", {})
-    if request["callback"] == "on_start":
-        instance.commands.append({"op": "log", "level": "info", "message": "Behavior started"})
-    print(json.dumps({"format_version": 1, "commands": instance.commands}), flush=True)
-"#,
-        ),
-        ScriptLanguage::CSharp => (
-            "cs",
-            br#"using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text.Json;
-
-var instance = new InstanceApi();
-var rustic = new RusticApi(instance.Commands);
-var Game = new GameApi(instance.Commands);
-string? line;
-while ((line = Console.ReadLine()) is not null) {
-    instance.Commands.Clear();
-    rustic.State = JsonDocument.Parse(line).RootElement.Clone();
-    Game.scene.State = rustic.State.GetProperty("scene_paths");
-    Console.WriteLine(JsonSerializer.Serialize(new { format_version = 1, commands = instance.Commands }));
-}
-
-sealed class InstanceApi {
-    public List<object> Commands { get; } = new();
-    public void Add(string source, string? parent = null) => Commands.Add(new { op = "add_instance", source, parent });
-    public void Clone(string source, string? parent = null) => Commands.Add(new { op = "clone_instance", source, parent });
-    public void add(string source, string? parent = null) => Add(source, parent);
-    public void clone(string source, string? parent = null) => Clone(source, parent);
-}
-
-sealed class RusticApi {
-    public JsonElement State { get; set; }
-    public List<object> Commands { get; }
-    public RusticApi(List<object> commands) => Commands = commands;
-    public string entity_id() => State.GetProperty("entity_id").GetString()!;
-    public double delta_time() => State.GetProperty("delta_time").GetDouble();
-    public double fixed_delta_time() => State.GetProperty("fixed_delta_time").GetDouble();
-    public double[] get_translation() => State.GetProperty("translation").EnumerateArray().Select(x => x.GetDouble()).ToArray();
-    public void set_translation(double x,double y,double z) => Commands.Add(new { op="set_translation", value=new[]{x,y,z} });
-    public JsonElement get_property(string name) => State.GetProperty("properties").GetProperty(name);
-    public void set_property(string name, object value) => Commands.Add(new { op="set_property", name, value });
-    public JsonElement GetAttribute(string name) => State.GetProperty("attributes").GetProperty(name);
-    public void EditAttribute(string name, object value) => Commands.Add(new { op="edit_attribute", name, value });
-    public JsonElement get_attribute(string name) => GetAttribute(name);
-    public void edit_attribute(string name, object value) => EditAttribute(name, value);
-    public JsonElement input(string name) => State.GetProperty("actions").TryGetProperty(name, out var value) ? value : default;
-    public JsonElement key(string name) => State.GetProperty("keys").TryGetProperty(name, out var value) ? value : default;
-    public IEnumerable<JsonElement> key_events() => State.GetProperty("key_events").EnumerateArray();
-    public bool any_key_pressed() => State.GetProperty("any_key_pressed").GetBoolean();
-    public void log(string level,string message) => Commands.Add(new { op="log", level, message });
-    public void set_enabled(bool enabled) => Commands.Add(new { op="set_enabled", enabled });
-}
-
-sealed class SceneApi {
-    public JsonElement State { get; set; }
-    public string? Find(string path) => State.TryGetProperty(path, out var value) ? value.GetString() : null;
-    public IEnumerable<string> List(string path="Game.scene") => State.EnumerateObject().Where(x => path=="Game.scene" || x.Name.StartsWith(path+".")).Select(x => x.Value.GetString()!);
-}
-sealed class GameApi {
-    public SceneApi scene { get; } = new();
-    private readonly List<object> commands;
-    public GameApi(List<object> commands) => this.commands = commands;
-    public void SetCurrentCamera(string source) => commands.Add(new { op="set_current_camera", source });
-    public void setCurrentCamera(string source) => SetCurrentCamera(source);
-}
-"#,
-        ),
-        ScriptLanguage::C => (
-            "c",
-            br#"#include <stdio.h>
-#include <string.h>
-
-static char instance_commands[1048576];
-static void instance_command(const char *op, const char *source, const char *parent) {
-    snprintf(instance_commands, sizeof instance_commands,
-        "{\"op\":\"%s\",\"source\":\"%s\",\"parent\":%s}",
-        op, source, parent ? parent : "null");
-}
-static void instance_add(const char *source, const char *parent) { instance_command("add_instance", source, parent); }
-static void instance_clone(const char *source, const char *parent) { instance_command("clone_instance", source, parent); }
-static void Game_setCurrentCamera(const char *source) {
-    char escaped[1048500];
-    size_t n = 0;
-    for (const unsigned char *p = (const unsigned char *)source; *p; ++p) {
-        if (n + 6 >= sizeof escaped) { fputs("camera path too long\n", stderr); return; }
-        if (*p < 32 || *p == '"' || *p == '\\') {
-            n += (size_t)snprintf(escaped + n, sizeof escaped - n, "\\u%04x", *p);
-        } else escaped[n++] = (char)*p;
-    }
-    escaped[n] = '\0';
-    instance_command("set_current_camera", escaped, NULL);
-}
-
-int main(void) {
-    char request[1048577];
-    while (fgets(request, sizeof request, stdin)) {
-        instance_commands[0] = '\0';
-        printf("{\"format_version\":1,\"commands\":[%s]}\n", instance_commands);
-        fflush(stdout);
-    }
-    return 0;
-}
-"#,
-        ),
+        ScriptLanguage::Python => ("py", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.py")),
+        ScriptLanguage::CSharp => ("cs", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.cs")),
+        ScriptLanguage::C => ("c", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.c")),
         ScriptLanguage::Cpp => (
             "cpp",
             br#"#include "rustic.hpp"
@@ -4353,100 +4204,8 @@ int main() {
 }
 "#,
         ),
-        ScriptLanguage::Java => (
-            "java",
-            br#"class RusticBehavior {
-    static final class InstanceApi {
-        final java.util.List<String> commands = new java.util.ArrayList<>();
-        void add(String source) { add(source, null); }
-        void add(String source, String parent) { push("add_instance", source, parent); }
-        void clone(String source) { clone(source, null); }
-        void clone(String source, String parent) { push("clone_instance", source, parent); }
-        void push(String op, String source, String parent) {
-            commands.add("{\"op\":\""+op+"\",\"source\":\""+source+"\",\"parent\":"+(parent==null?"null":"\""+parent+"\"")+"}");
-        }
-    }
-    static final class GameApi {
-        final InstanceApi instance;
-        GameApi(InstanceApi instance) { this.instance = instance; }
-        void setCurrentCamera(String source) {
-            var escaped = new StringBuilder();
-            for (char c : source.toCharArray()) {
-                if (c < 32 || c == '"' || c == '\\') escaped.append(String.format("\\u%04x", (int)c));
-                else escaped.append(c);
-            }
-            instance.push("set_current_camera", escaped.toString(), null);
-        }
-    }
-    public static void main(String[] args) throws Exception {
-        var instance = new InstanceApi();
-        var Game = new GameApi(instance);
-        var input = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
-        while (input.readLine() != null) {
-            instance.commands.clear();
-            System.out.println("{\"format_version\":1,\"commands\":["+String.join(",",instance.commands)+"]}");
-            System.out.flush();
-        }
-    }
-}
-"#,
-        ),
-        ScriptLanguage::Php => (
-            "php",
-            br#"<?php
-final class InstanceApi {
-    public array $commands = [];
-    public function add(string $source, ?string $parent = null): void {
-        $this->commands[] = ["op" => "add_instance", "source" => $source, "parent" => $parent];
-    }
-    public function clone(string $source, ?string $parent = null): void {
-        $this->commands[] = ["op" => "clone_instance", "source" => $source, "parent" => $parent];
-    }
-}
-final class RusticApi {
-    public array $state = [];
-    public function __construct(public InstanceApi $instance) {}
-    public function entity_id(): string { return $this->state["entity_id"]; }
-    public function delta_time(): float { return $this->state["delta_time"]; }
-    public function fixed_delta_time(): float { return $this->state["fixed_delta_time"]; }
-    public function get_translation(): array { return $this->state["translation"]; }
-    public function set_translation(float $x,float $y,float $z): void { $this->instance->commands[]=["op"=>"set_translation","value"=>[$x,$y,$z]]; }
-    public function get_property(string $name): mixed { return $this->state["properties"][$name] ?? null; }
-    public function set_property(string $name,mixed $value): void { $this->instance->commands[]=["op"=>"set_property","name"=>$name,"value"=>$value]; }
-    public function GetAttribute(string $name): mixed { return $this->state["attributes"][$name] ?? null; }
-    public function get_attribute(string $name): mixed { return $this->GetAttribute($name); }
-    public function EditAttribute(string $name,mixed $value): void { $this->instance->commands[]=["op"=>"edit_attribute","name"=>$name,"value"=>$value]; }
-    public function edit_attribute(string $name,mixed $value): void { $this->EditAttribute($name,$value); }
-    public function key(string $name): array { return $this->state["keys"][$name] ?? ["pressed"=>false,"released"=>false,"held"=>false,"axis"=>0]; }
-    public function key_events(): array { return $this->state["key_events"]; }
-    public function any_key_pressed(): bool { return $this->state["any_key_pressed"]; }
-    public function log(string $level,string $message): void { $this->instance->commands[]=["op"=>"log","level"=>$level,"message"=>$message]; }
-    public function set_enabled(bool $enabled): void { $this->instance->commands[]=["op"=>"set_enabled","enabled"=>$enabled]; }
-}
-final class SceneApi {
-    public array $state=[];
-    public function Find(string $path): ?string { return $this->state[$path] ?? null; }
-    public function List(string $path="Game.scene"): array { return array_values(array_filter($this->state, fn($id,$name)=>$path==="Game.scene" || str_starts_with($name,$path."."), ARRAY_FILTER_USE_BOTH)); }
-}
-final class GameApi {
-    public SceneApi $scene;
-    public function __construct(private InstanceApi $instance){ $this->scene=new SceneApi(); }
-    public function setCurrentCamera(string $source): void { $this->instance->commands[]=["op"=>"set_current_camera","source"=>$source]; }
-}
-$instance = new InstanceApi();
-$rustic = new RusticApi($instance);
-$Game = new GameApi($instance);
-while (($line = fgets(STDIN)) !== false) {
-    $request = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
-    $instance->commands = [];
-    $rustic->state = $request;
-    $Game->scene->state = $request["scene_paths"] ?? [];
-    // Example: $instance->clone("assets/models/chair.obj");
-    echo json_encode(["format_version" => 1, "commands" => $instance->commands], JSON_THROW_ON_ERROR), PHP_EOL;
-    flush();
-}
-"#,
-        ),
+        ScriptLanguage::Java => ("java", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.java")),
+        ScriptLanguage::Php => ("php", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.php")),
         ScriptLanguage::Web => (
             "html",
             br#"<!doctype html>
@@ -4463,23 +4222,7 @@ globalThis.behavior = {
 </html>
 "#,
         ),
-        ScriptLanguage::Luau => (
-            "luau",
-            br#"-- Luau uses the isolated CLI host protocol.
-local commands = {}
-local Game = {}
-function Game.setCurrentCamera(source)
-    if type(source) == "table" then source = source[1] end
-    assert(type(source) == "string", "expected a camera path or {cameraPath}")
-    local escaped = string.gsub(source, '[%c\\"]', function(c)
-        return string.format("\\u%04x", string.byte(c))
-    end)
-    table.insert(commands, '{"op":"set_current_camera","source":"' .. escaped .. '"}')
-end
--- Example: Game.setCurrentCamera({"Game.scene.Camera"})
-print('{"format_version":1,"commands":[' .. table.concat(commands, ",") .. ']}')
-"#,
-        ),
+        ScriptLanguage::Luau => ("luau", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.luau")),
     }
 }
 

@@ -9,7 +9,14 @@ const BRIDGE: &str = r#"
 (() => {
   let state = Object.create(null);
   let commands = [];
+  const objectAt = source => new Proxy(Object.create(null), {get: (_, key) => {
+    if (key === "EditAttribute" || key === "edit_attribute") return (name, value) => commands.push({op:"edit_attribute", source, name, value});
+    if (typeof key !== "string") return undefined;
+    return objectAt(source + "." + key);
+  }});
   const rustic = Object.freeze({
+    game: objectAt("rustic.game"),
+    edit_object_attribute: (source, name, value) => commands.push({op:"edit_attribute", source, name, value}),
     entity_id: () => state.entity_id,
     delta_time: () => state.delta_time,
     fixed_delta_time: () => state.fixed_delta_time,
@@ -347,6 +354,8 @@ enum Command {
         value: Value,
     },
     EditAttribute {
+        #[serde(default)]
+        source: Option<String>,
         name: String,
         value: Value,
     },
@@ -380,11 +389,23 @@ fn apply_command(
                     .and_then(|converted| host.set_property(&name, converted))
             },
         ),
-        Command::EditAttribute { name, value } => host.attribute(&name).and_then(|current| {
-            let current = current.ok_or_else(|| format!("unknown attribute `{name}`"))?;
-            json_to_engine(value, &current)
-                .and_then(|converted| host.edit_attribute(&name, converted))
-        }),
+        Command::EditAttribute {
+            source,
+            name,
+            value,
+        } => source
+            .as_ref()
+            .map_or_else(
+                || host.attribute(&name),
+                |source| host.object_attribute(source, &name),
+            )
+            .and_then(|current| {
+                let current = current.ok_or_else(|| format!("unknown attribute `{name}`"))?;
+                json_to_engine(value, &current).and_then(|converted| match &source {
+                    Some(source) => host.edit_object_attribute(source, &name, converted),
+                    None => host.edit_attribute(&name, converted),
+                })
+            }),
         Command::Log { level, message } => host.log(&level, &message),
         Command::SetEnabled { enabled } => {
             host.set_enabled(enabled);

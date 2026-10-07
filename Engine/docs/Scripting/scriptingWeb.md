@@ -84,3 +84,9 @@ larger than 1 MiB. Syntax/structure is validated before Play or reload. A valida
 failure leaves the previous good instance running; a callback failure disables only
 the failing behavior. Use Web assets for lifecycle-driven UI logic or future-facing
 content organization, not for browser rendering in the current release.
+
+## Target another scene object
+
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.

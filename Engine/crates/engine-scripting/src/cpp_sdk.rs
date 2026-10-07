@@ -1,5 +1,8 @@
 pub(crate) const HEADER: &str = r#"#pragma once
 #include <array>
+#include <charconv>
+#include <cstdint>
+#include <limits>
 #include <cctype>
 #include <cmath>
 #include <functional>
@@ -16,13 +19,13 @@ namespace rustic_detail {
 struct Value {
     using Array = std::vector<Value>;
     using Object = std::map<std::string, Value>;
-    std::variant<std::nullptr_t, bool, double, std::string, Array, Object> data = nullptr;
+    std::variant<std::nullptr_t, bool, std::int64_t, double, std::string, Array, Object> data = nullptr;
     Value() = default; Value(std::nullptr_t):data(nullptr){} Value(bool v):data(v){}
-    Value(double v):data(v){} Value(int v):data(double(v)){} Value(std::string v):data(std::move(v)){}
+    Value(double v):data(v){} Value(int v):data(std::int64_t(v)){} Value(std::int64_t v):data(v){} Value(std::string v):data(std::move(v)){}
     Value(const char* v):data(std::string(v)){} Value(Array v):data(std::move(v)){} Value(Object v):data(std::move(v)){}
     bool is_null() const { return std::holds_alternative<std::nullptr_t>(data); }
     bool boolean() const { return std::get<bool>(data); }
-    double number() const { return std::get<double>(data); }
+    double number() const { if(auto p=std::get_if<double>(&data))return *p;return double(std::get<std::int64_t>(data)); }
     const std::string& string() const { return std::get<std::string>(data); }
     const Array& array() const { return std::get<Array>(data); }
     const Object& object() const { return std::get<Object>(data); }
@@ -34,11 +37,14 @@ class Parser {
     void ws(){ while(at<text.size() && std::isspace(static_cast<unsigned char>(text[at]))) ++at; }
     char take(){ if(at>=text.size()) throw std::runtime_error("unexpected end of JSON"); return text[at++]; }
     void word(const char* value){ while(*value) if(take()!=*value++) throw std::runtime_error("invalid JSON token"); }
+    unsigned hex4(){unsigned value=0;for(int i=0;i<4;++i){char c=take();unsigned digit=c>='0'&&c<='9'?unsigned(c-'0'):c>='a'&&c<='f'?unsigned(c-'a'+10):c>='A'&&c<='F'?unsigned(c-'A'+10):16;if(digit>15)throw std::runtime_error("invalid Unicode escape");value=value*16+digit;}return value;}
+    static void utf8(std::string& out,unsigned v){if(v<128)out+=char(v);else if(v<2048){out+=char(0xc0|(v>>6));out+=char(0x80|(v&63));}else if(v<65536){out+=char(0xe0|(v>>12));out+=char(0x80|((v>>6)&63));out+=char(0x80|(v&63));}else{out+=char(0xf0|(v>>18));out+=char(0x80|((v>>12)&63));out+=char(0x80|((v>>6)&63));out+=char(0x80|(v&63));}}
     std::string string(){
         if(take()!='\"') throw std::runtime_error("expected JSON string"); std::string out;
         while(true){ char c=take(); if(c=='\"') return out; if(c!='\\'){ out+=c; continue; }
             c=take(); switch(c){case '\"':out+='\"';break;case '\\':out+='\\';break;case '/':out+='/';break;
             case 'b':out+='\b';break;case 'f':out+='\f';break;case 'n':out+='\n';break;case 'r':out+='\r';break;case 't':out+='\t';break;
+            case 'u': {unsigned v=hex4();if(v>=0xd800&&v<=0xdbff){if(take()!='\\'||take()!='u')throw std::runtime_error("missing Unicode surrogate");unsigned low=hex4();if(low<0xdc00||low>0xdfff)throw std::runtime_error("invalid Unicode surrogate");v=0x10000+((v-0xd800)<<10)+(low-0xdc00);}else if(v>=0xdc00&&v<=0xdfff)throw std::runtime_error("invalid Unicode surrogate");utf8(out,v);break;}
             default: throw std::runtime_error("unsupported JSON escape");}
         }
     }
@@ -47,14 +53,15 @@ class Parser {
         if(c=='['){take();Value::Array a;ws();if(text.at(at)==']'){take();return a;}while(true){a.push_back(value());ws();c=take();if(c==']')return a;if(c!=',')throw std::runtime_error("expected comma");}}
         if(c=='{'){take();Value::Object o;ws();if(text.at(at)=='}'){take();return o;}while(true){ws();auto k=string();ws();if(take()!=':')throw std::runtime_error("expected colon");o.emplace(std::move(k),value());ws();c=take();if(c=='}')return o;if(c!=',')throw std::runtime_error("expected comma");}}
         std::size_t start=at; while(at<text.size() && (std::isdigit(static_cast<unsigned char>(text[at])) || std::string("-+.eE").find(text[at])!=std::string::npos))++at;
-        return std::stod(text.substr(start,at-start));
+        auto token=text.substr(start,at-start);if(token.find_first_of(".eE")==std::string::npos)return Value(std::int64_t(std::stoll(token)));return Value(std::stod(token));
     }
 public: explicit Parser(const std::string& input):text(input){} Value parse(){auto result=value();ws();if(at!=text.size())throw std::runtime_error("trailing JSON");return result;}
 };
-inline std::string escape(const std::string& value){std::string out="\"";for(char c:value){switch(c){case '\"':out+="\\\"";break;case '\\':out+="\\\\";break;case '\n':out+="\\n";break;case '\r':out+="\\r";break;case '\t':out+="\\t";break;default:out+=c;}}return out+'\"';}
+inline std::string escape(const std::string& value){std::string out="\"";for(char c:value){switch(c){case '\"':out+="\\\"";break;case '\\':out+="\\\\";break;case '\n':out+="\\n";break;case '\r':out+="\\r";break;case '\t':out+="\\t";break;default:if(static_cast<unsigned char>(c)<32){const char* hex="0123456789abcdef";out+="\\u00";out+=hex[(static_cast<unsigned char>(c)>>4)&15];out+=hex[static_cast<unsigned char>(c)&15];}else out+=c;}}return out+'\"';}
 inline std::string dump(const Value& v){
     if(v.is_null())return "null"; if(auto p=std::get_if<bool>(&v.data))return *p?"true":"false";
-    if(auto p=std::get_if<double>(&v.data)){if(!std::isfinite(*p))throw std::runtime_error("non-finite number");auto s=std::to_string(*p);while(s.size()>1&&s.back()=='0')s.pop_back();if(s.back()=='.')s+='0';return s;}
+    if(auto p=std::get_if<std::int64_t>(&v.data))return std::to_string(*p);
+    if(auto p=std::get_if<double>(&v.data)){if(!std::isfinite(*p))throw std::runtime_error("non-finite number");char b[64];auto result=std::to_chars(b,b+sizeof b,*p,std::chars_format::general,std::numeric_limits<double>::max_digits10);if(result.ec!=std::errc{})throw std::runtime_error("number conversion failed");return std::string(b,result.ptr);}
     if(auto p=std::get_if<std::string>(&v.data))return escape(*p); if(auto p=std::get_if<Value::Array>(&v.data)){std::string s="[";for(std::size_t i=0;i<p->size();++i)s+=(i?",":"")+dump((*p)[i]);return s+"]";}
     std::string s="{";std::size_t i=0;for(auto& [k,x]:std::get<Value::Object>(v.data))s+=(i++?",":"")+escape(k)+":"+dump(x);return s+"}";
 }
@@ -66,11 +73,20 @@ struct RusticVector3 { double x=0,y=0,z=0; };
 struct RusticActionState { bool pressed=false,released=false,held=false; double axis=0; };
 struct RusticKeyEvent { std::string key,state; bool repeat=false; };
 
+class ObjectPath {
+    std::vector<RusticValue>** commands; std::string source;
+public:
+    ObjectPath(std::vector<RusticValue>** commands,std::string source="rustic.game"):commands(commands),source(std::move(source)){}
+    ObjectPath operator[](const std::string& name)const{return ObjectPath(commands,source+"."+name);}
+    void EditAttribute(const std::string& name,RusticValue value){(*commands)->push_back(rustic_detail::object({{"op","edit_attribute"},{"source",source},{"name",name},{"value",std::move(value)}}));}
+    void edit_attribute(const std::string& name,RusticValue value){EditAttribute(name,std::move(value));}
+};
 class RusticApi {
     friend int rustic_run(const struct RusticBehavior&); const RusticValue* state=nullptr; std::vector<RusticValue>* commands=nullptr;
     const RusticValue* lookup(const char* group,const std::string& name) const {auto& o=state->at(group).object();auto i=o.find(name);return i==o.end()?nullptr:&i->second;}
     static RusticActionState action(const RusticValue* v){if(!v)return {};auto& o=v->object();return {o.at("pressed").boolean(),o.at("released").boolean(),o.at("held").boolean(),o.at("axis").number()};}
 public:
+    ObjectPath game{&commands};
     std::string entity_id() const{return state->at("entity_id").string();} double delta_time() const{return state->at("delta_time").number();} double fixed_delta_time() const{return state->at("fixed_delta_time").number();}
     RusticVector3 get_translation() const{auto&a=state->at("translation").array();return{a[0].number(),a[1].number(),a[2].number()};}
     void set_translation(double x,double y,double z){commands->push_back(rustic_detail::object({{"op","set_translation"},{"value",RusticValue::Array{x,y,z}}}));}
@@ -84,6 +100,6 @@ public:
 class InstanceApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;void push(const char*op,const std::string&s,const std::optional<std::string>&p){commands->push_back(rustic_detail::object({{"op",op},{"source",s},{"parent",p?RusticValue(*p):RusticValue()}}));}public:void add(const std::string&s,std::optional<std::string>p={}){push("add_instance",s,p);}void clone(const std::string&s,std::optional<std::string>p={}){push("clone_instance",s,p);}};
 class SceneApi {friend int rustic_run(const struct RusticBehavior&);const RusticValue*state=nullptr;public:std::optional<std::string> Find(const std::string&p)const{auto&o=state->object();auto i=o.find(p);return i==o.end()?std::nullopt:std::optional(i->second.string());}std::vector<std::string> List(const std::string&p="Game.scene")const{std::vector<std::string>r;std::string prefix=p=="Game.scene"?"":p+".";for(auto&[n,v]:state->object())if(prefix.empty()||n.starts_with(prefix))r.push_back(v.string());return r;}};
 class GameApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;public:SceneApi scene;void setCurrentCamera(const std::string&source){commands->push_back(rustic_detail::object({{"op","set_current_camera"},{"source",source}}));}}; inline RusticApi rustic; inline InstanceApi instance; inline GameApi Game;
-struct RusticBehavior {std::function<void()> on_create,on_start,on_destroy,on_stop;std::function<void(double)> fixed_update,update;};
-inline int rustic_run(const RusticBehavior& b){std::string line;while(std::getline(std::cin,line)){try{auto state=rustic_detail::Parser(line).parse();std::vector<RusticValue> commands;rustic.state=&state;rustic.commands=&commands;instance.commands=&commands;Game.commands=&commands;Game.scene.state=&state.at("scene_paths");auto cb=state.at("callback").string();double d=state.at("delta").is_null()?0:state.at("delta").number();if(cb=="on_create"&&b.on_create)b.on_create();else if(cb=="on_start"&&b.on_start)b.on_start();else if(cb=="fixed_update"&&b.fixed_update)b.fixed_update(d);else if(cb=="update"&&b.update)b.update(d);else if(cb=="on_destroy"&&b.on_destroy)b.on_destroy();else if(cb=="on_stop"&&b.on_stop)b.on_stop();std::cout<<rustic_detail::dump(rustic_detail::object({{"format_version",1},{"commands",commands}}))<<std::endl;}catch(const std::exception&e){std::cerr<<"Rustic C++ SDK: "<<e.what()<<std::endl;return 1;}}return 0;}
+struct RusticBehavior {std::function<void()> on_create={},on_start={},on_enable={},on_disable={},on_destroy={},on_stop={};std::function<void(double)> fixed_update={},update={};};
+inline int rustic_run(const RusticBehavior& b){std::string line;while(std::getline(std::cin,line)){try{auto state=rustic_detail::Parser(line).parse();std::vector<RusticValue> commands;rustic.state=&state;rustic.commands=&commands;instance.commands=&commands;Game.commands=&commands;Game.scene.state=&state.at("scene_paths");auto cb=state.at("callback").string();double d=state.at("delta").is_null()?0:state.at("delta").number();if(cb=="on_create"&&b.on_create)b.on_create();else if(cb=="on_start"&&b.on_start)b.on_start();else if(cb=="on_enable"&&b.on_enable)b.on_enable();else if(cb=="on_disable"&&b.on_disable)b.on_disable();else if(cb=="fixed_update"&&b.fixed_update)b.fixed_update(d);else if(cb=="update"&&b.update)b.update(d);else if(cb=="on_destroy"&&b.on_destroy)b.on_destroy();else if(cb=="on_stop"&&b.on_stop)b.on_stop();std::cout<<rustic_detail::dump(rustic_detail::object({{"format_version",1},{"commands",commands}}))<<std::endl;}catch(const std::exception&e){std::cerr<<"Rustic C++ SDK: "<<e.what()<<std::endl;return 1;}}return 0;}
 "#;

@@ -46,6 +46,17 @@ pub trait GameplayHost: Send {
     fn edit_attribute(&mut self, _name: &str, _value: EngineValue) -> Result<(), String> {
         Err("attribute editing is unavailable".into())
     }
+    fn object_attribute(&self, _source: &str, _name: &str) -> Result<Option<EngineValue>, String> {
+        Err("object attribute access is unavailable".into())
+    }
+    fn edit_object_attribute(
+        &mut self,
+        _source: &str,
+        _name: &str,
+        _value: EngineValue,
+    ) -> Result<(), String> {
+        Err("object attribute editing is unavailable".into())
+    }
     fn input_action(&self, name: &str) -> ActionState;
     fn input_frame(&self) -> InputFrame {
         InputFrame::default()
@@ -317,6 +328,54 @@ fn lock_host(
         .map_err(|_| MluaError::RuntimeError("gameplay host lock poisoned".into()))
 }
 
+// Resolve at call time so rename/reparent and stale references never silently target another owner.
+fn object_proxy(
+    lua: &Lua,
+    host: Arc<Mutex<Box<dyn GameplayHost>>>,
+    path: String,
+) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    let meta = lua.create_table()?;
+    meta.set(
+        "__index",
+        lua.create_function(move |lua, (_table, key): (Table, String)| {
+            let h = Arc::clone(&host);
+            let source = path.clone();
+            match key.as_str() {
+                "EditAttribute" | "edit_attribute" => Ok(Value::Function(lua.create_function(
+                    move |_, (_self, name, value): (Table, String, Value)| {
+                        let mut host = lock_host(&h)?;
+                        let current = host
+                            .object_attribute(&source, &name)
+                            .map_err(MluaError::RuntimeError)?;
+                        host.edit_object_attribute(
+                            &source,
+                            &name,
+                            lua_attribute_value(value, current)?,
+                        )
+                        .map_err(MluaError::RuntimeError)
+                    },
+                )?)),
+                "GetAttribute" | "get_attribute" => Ok(Value::Function(lua.create_function(
+                    move |lua, (_self, name): (Table, String)| {
+                        let value = lock_host(&h)?
+                            .object_attribute(&source, &name)
+                            .map_err(MluaError::RuntimeError)?;
+                        engine_to_lua(lua, value)
+                    },
+                )?)),
+                _ => Ok(Value::Table(object_proxy(
+                    lua,
+                    h,
+                    format!("{source}.{key}"),
+                )?)),
+            }
+        })?,
+    )?;
+    table.set_metatable(Some(meta))?;
+    Ok(table)
+}
+
 #[allow(clippy::too_many_lines)]
 fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Result<()> {
     let api = lua.create_table()?;
@@ -376,12 +435,29 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
     api.set("GetAttribute", get_attribute)?;
     let h = Arc::clone(&host);
     let edit_attribute = lua.create_function(move |_, (name, value): (String, Value)| {
-        lock_host(&h)?
-            .edit_attribute(&name, lua_to_engine(value)?)
+        let mut host = lock_host(&h)?;
+        let current = host.attribute(&name).map_err(MluaError::RuntimeError)?;
+        host.edit_attribute(&name, lua_attribute_value(value, current)?)
             .map_err(MluaError::RuntimeError)
     })?;
     api.set("edit_attribute", edit_attribute.clone())?;
     api.set("EditAttribute", edit_attribute)?;
+    api.set(
+        "game",
+        object_proxy(lua, Arc::clone(&host), "rustic.game".into())?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "edit_object_attribute",
+        lua.create_function(move |_, (source, name, value): (String, String, Value)| {
+            let mut host = lock_host(&h)?;
+            let current = host
+                .object_attribute(&source, &name)
+                .map_err(MluaError::RuntimeError)?;
+            host.edit_object_attribute(&source, &name, lua_attribute_value(value, current)?)
+                .map_err(MluaError::RuntimeError)
+        })?,
+    )?;
     let scene = lua.create_table()?;
     let h = Arc::clone(&host);
     scene.set(
@@ -594,6 +670,49 @@ fn engine_to_lua(lua: &Lua, value: Option<EngineValue>) -> mlua::Result<Value> {
         }
     })
 }
+fn lua_attribute_value(value: Value, current: Option<EngineValue>) -> mlua::Result<EngineValue> {
+    match current {
+        Some(EngineValue::Vec3(_)) => {
+            let Value::Table(table) = value else {
+                return Err(MluaError::RuntimeError(
+                    "expected a three-number attribute vector".into(),
+                ));
+            };
+            if table.raw_len() != 3 {
+                return Err(MluaError::RuntimeError(
+                    "expected exactly three vector components".into(),
+                ));
+            }
+            let result = [
+                table.get::<f64>(1)?,
+                table.get::<f64>(2)?,
+                table.get::<f64>(3)?,
+            ];
+            if !result.iter().all(|v| v.is_finite()) {
+                return Err(MluaError::RuntimeError(
+                    "attribute vector must be finite".into(),
+                ));
+            }
+            Ok(EngineValue::Vec3(result))
+        }
+        Some(EngineValue::Entity(_)) => match value {
+            Value::Nil => Ok(EngineValue::Entity(None)),
+            Value::String(value) => value
+                .to_str()?
+                .parse::<EntityId>()
+                .map(|id| EngineValue::Entity(Some(id)))
+                .map_err(|_| {
+                    MluaError::RuntimeError("expected a stable parent entity ID or nil".into())
+                }),
+            _ => Err(MluaError::RuntimeError(
+                "expected a stable parent entity ID or nil".into(),
+            )),
+        },
+        Some(_) => lua_to_engine(value),
+        None => Err(MluaError::RuntimeError("unknown attribute".into())),
+    }
+}
+
 fn lua_to_engine(value: Value) -> mlua::Result<EngineValue> {
     match value {
         Value::Boolean(v) => Ok(EngineValue::Boolean(v)),

@@ -71,7 +71,21 @@ pub fn probe_language_toolchain(language: ScriptLanguage) -> LanguageAvailabilit
         };
     }
     let specification = toolchain_spec(language);
-    let executable = specification.and_then(|spec| find_executable(spec.candidates));
+    let executable = if language == ScriptLanguage::Luau {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| {
+                let candidate = path.parent()?.join(if cfg!(windows) {
+                    "rustic-luau-host.exe"
+                } else {
+                    "rustic-luau-host"
+                });
+                candidate.is_file().then_some(candidate)
+            })
+            .or_else(|| specification.and_then(|spec| find_executable(spec.candidates)))
+    } else {
+        specification.and_then(|spec| find_executable(spec.candidates))
+    };
     let version = executable.as_ref().and_then(|path| {
         let spec = specification?;
         let output = Command::new(path)
@@ -110,9 +124,6 @@ pub fn validate_external(
     validate_source_bytes(language, source, maximum_bytes)?;
     if language == ScriptLanguage::Web {
         return validate_web(source, source_name);
-    }
-    if language == ScriptLanguage::Luau {
-        return validate_with_stdin(language, source, &["--compile=-", "-"]);
     }
     PreparedProgram::build(language, source, source_name).map(|_| ())
 }
@@ -319,6 +330,12 @@ impl ExternalBehavior {
                         format!("unsupported response version {}", response.format_version),
                     ));
                 }
+                if let Some(message) = response.error {
+                    return Err(ExternalRuntimeError::Runtime(
+                        self.language.display_name(),
+                        message,
+                    ));
+                }
                 let mut host = self.host.lock().map_err(|_| {
                     ExternalRuntimeError::Runtime(
                         self.language.display_name(),
@@ -510,6 +527,10 @@ impl PreparedProgram {
         std::fs::write(&source_path, source).map_err(|error| runtime_io(language, error))?;
         if language == ScriptLanguage::Cpp {
             std::fs::write(directory.path().join("rustic.hpp"), crate::cpp_sdk::HEADER)
+                .map_err(|error| runtime_io(language, error))?;
+        }
+        for (name, content) in crate::external_sdk::files(language) {
+            std::fs::write(directory.path().join(name), content)
                 .map_err(|error| runtime_io(language, error))?;
         }
         let availability = probe_language_toolchain(language);
@@ -738,6 +759,8 @@ struct InvocationResponse {
     format_version: u32,
     #[serde(default)]
     commands: Vec<ExternalCommand>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -754,6 +777,8 @@ enum ExternalCommand {
         value: Value,
     },
     EditAttribute {
+        #[serde(default)]
+        source: Option<String>,
         name: String,
         value: Value,
     },
@@ -788,17 +813,27 @@ fn apply_command(
                     .and_then(|converted| host.set_property(&name, converted))
             },
         ),
-        ExternalCommand::EditAttribute { name, value } => {
-            host.attribute(&name).and_then(|current| {
+        ExternalCommand::EditAttribute {
+            source,
+            name,
+            value,
+        } => source
+            .as_ref()
+            .map_or_else(
+                || host.attribute(&name),
+                |source| host.object_attribute(source, &name),
+            )
+            .and_then(|current| {
                 current.map_or_else(
                     || Err(format!("attribute `{name}` is unavailable")),
                     |current| {
-                        json_to_engine(value, &current)
-                            .and_then(|converted| host.edit_attribute(&name, converted))
+                        json_to_engine(value, &current).and_then(|converted| match &source {
+                            Some(source) => host.edit_object_attribute(source, &name, converted),
+                            None => host.edit_attribute(&name, converted),
+                        })
                     },
                 )
-            })
-        }
+            }),
         ExternalCommand::Log { level, message } => host.log(&level, &message),
         ExternalCommand::SetEnabled { enabled } => {
             host.set_enabled(enabled);
@@ -901,47 +936,6 @@ pub(crate) fn extract_inline_scripts(text: &str) -> Result<String, ExternalRunti
         remaining = &remaining[after_open + close + "</script>".len()..];
     }
     Ok(output)
-}
-
-fn validate_with_stdin(
-    language: ScriptLanguage,
-    source: &[u8],
-    arguments: &[&str],
-) -> Result<(), ExternalRuntimeError> {
-    let availability = probe_language_toolchain(language);
-    let executable = availability.executable.ok_or_else(|| {
-        let spec = toolchain_spec(language).expect("external language has toolchain spec");
-        ExternalRuntimeError::ToolchainUnavailable(language.display_name(), spec.install_hint)
-    })?;
-    let mut child = Command::new(executable)
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| runtime_io(language, error))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| {
-            ExternalRuntimeError::Build(
-                language.display_name(),
-                "compiler stdin unavailable".into(),
-            )
-        })?
-        .write_all(source)
-        .map_err(|error| runtime_io(language, error))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| runtime_io(language, error))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(ExternalRuntimeError::Build(
-            language.display_name(),
-            diagnostic_text(&output.stderr),
-        ))
-    }
 }
 
 fn run_checked(
@@ -1108,6 +1102,32 @@ mod tests {
         ) -> Result<EntityId, String> {
             Ok(EntityId::new())
         }
+        fn object_attribute(
+            &self,
+            source: &str,
+            name: &str,
+        ) -> Result<Option<EngineValue>, String> {
+            if source != "rustic.game.Demo.Player" {
+                return Err("target missing".into());
+            }
+            Ok((name == "Position").then_some(EngineValue::Vec3(self.translation)))
+        }
+        fn edit_object_attribute(
+            &mut self,
+            source: &str,
+            name: &str,
+            value: EngineValue,
+        ) -> Result<(), String> {
+            if source != "rustic.game.Demo.Player" || name != "Position" {
+                return Err("target missing".into());
+            }
+            if let EngineValue::Vec3(value) = value {
+                self.translation = value;
+                Ok(())
+            } else {
+                Err("type mismatch".into())
+            }
+        }
         fn input_action(&self, _name: &str) -> ActionState {
             ActionState::default()
         }
@@ -1124,6 +1144,197 @@ mod tests {
             Err("not declared".into())
         }
         fn set_enabled(&mut self, _enabled: bool) {}
+    }
+
+    #[test]
+    fn builtin_sdks_dispatch_persistent_callbacks_without_user_protocol_code() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Python, "test.py", br#"from rustic import rustic, run
+count = 0
+def on_start():
+    rustic.log('info', 'quote " slash \\ snow unicode')
+def on_enable():
+    rustic.set_translation(10, 0, 0)
+def on_disable():
+    rustic.set_translation(20, 0, 0)
+def fixed_update(dt):
+    global count
+    count += 1
+    x,y,z = rustic.get_translation()
+    rustic.set_translation(x + count, y, z)
+    rustic.log('info', str(count))
+run(globals())
+"#),
+            (ScriptLanguage::CSharp, "test.cs", br#"using static Rustic;
+int count=0;
+Run((cb,dt)=>{
+    if(cb=="on_start") rustic.log("info", "quote \" slash \\ snow unicode");
+    if(cb=="on_enable") rustic.set_translation(10,0,0);
+    if(cb=="on_disable") rustic.set_translation(20,0,0);
+    if(cb=="fixed_update"){var p=rustic.get_translation();rustic.set_translation(p[0]+ ++count,p[1],p[2]);rustic.log("info",count.ToString());}
+});"#),
+            (ScriptLanguage::Java, "test.java", br#"class RusticBehavior extends Rustic {
+public static void main(String[] args)throws Exception{int[] count={0};run((cb,dt)->{
+if(cb.equals("on_start"))rustic.log("info","quote \" slash \\ snow unicode");
+if(cb.equals("on_enable"))rustic.set_translation(10,0,0);
+if(cb.equals("on_disable"))rustic.set_translation(20,0,0);
+if(cb.equals("fixed_update")){double[] p=rustic.get_translation();rustic.set_translation(p[0]+ ++count[0],p[1],p[2]);rustic.log("info","tick");}
+});}}"#),
+            (ScriptLanguage::C, "test.c", br#"#include "rustic.h"
+static int count=0;
+void start(void){rustic.log("info","quote \" slash \\ snow");}
+void enable(void){rustic.set_translation(10,0,0);}
+void disable(void){rustic.set_translation(20,0,0);}
+void fixed(double dt){(void)dt;RusticVector3 p=rustic.get_translation();rustic.set_translation(p.x+ ++count,p.y,p.z);rustic.log("info","tick");}
+int main(void){return rustic_run((RusticBehavior){.on_start=start,.on_enable=enable,.on_disable=disable,.fixed_update=fixed});}"#),
+            (ScriptLanguage::Cpp, "test.cpp", br#"#include "rustic.hpp"
+int count=0;
+void start(){rustic.log("info","quote \" slash \\ snow");}
+void enable(){rustic.set_translation(10,0,0);}
+void disable(){rustic.set_translation(20,0,0);}
+void fixed(double dt){(void)dt;auto p=rustic.get_translation();rustic.set_translation(p.x+ ++count,p.y,p.z);rustic.log("info","tick");}
+int main(){return rustic_run(RusticBehavior{.on_start=start,.on_enable=enable,.on_disable=disable,.fixed_update=fixed});}"#),
+            (ScriptLanguage::Php, "test.php", br#"<?php
+require __DIR__.'/rustic.php';
+$count=0;
+rustic_run([
+'on_start'=>function()use($rustic){$rustic->log('info','quote " slash \\ snow unicode');},
+'on_enable'=>function()use($rustic){$rustic->set_translation(10,0,0);},
+'on_disable'=>function()use($rustic){$rustic->set_translation(20,0,0);},
+'fixed_update'=>function($dt)use($rustic,&$count){[$x,$y,$z]=$rustic->get_translation();$rustic->set_translation($x+ ++$count,$y,$z);$rustic->log('info','tick');}
+]);"#),
+            (ScriptLanguage::Luau, "test.luau", br#"local count: number = 0
+return {
+on_start=function() rustic.log('info','quote " slash \\ snow unicode') end,
+on_enable=function() rustic.set_translation(10,0,0) end,
+on_disable=function() rustic.set_translation(20,0,0) end,
+fixed_update=function(dt) count+=1;local x,y,z=rustic.get_translation();rustic.set_translation(x+count,y,z);rustic.log('info','tick') end,
+}"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !probe_language_toolchain(*language).available {
+                eprintln!("skipped {}: unavailable", language.display_name());
+                continue;
+            }
+            let mut behavior = ExternalBehavior::load(
+                ScriptId::new(),
+                *language,
+                source,
+                name,
+                Box::new(Host {
+                    entity: EntityId::new(),
+                    translation: [0.0; 3],
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{} build: {e}", language.display_name()));
+            behavior.on_create().unwrap();
+            behavior.on_start().unwrap();
+            behavior.on_enable().unwrap();
+            behavior.fixed_update(0.5).unwrap();
+            behavior.fixed_update(0.5).unwrap();
+            assert_eq!(
+                behavior.host().lock().unwrap().translation(),
+                [13.0, 0.0, 0.0],
+                "{}",
+                language.display_name()
+            );
+            behavior.on_disable().unwrap();
+            assert_eq!(
+                behavior.host().lock().unwrap().translation(),
+                [20.0, 0.0, 0.0]
+            );
+            behavior.on_destroy().unwrap();
+            behavior.on_stop().unwrap();
+        }
+    }
+
+    #[test]
+    fn targeted_attribute_command_is_shared_by_all_external_languages() {
+        for language in [
+            ScriptLanguage::Luau,
+            ScriptLanguage::Python,
+            ScriptLanguage::C,
+            ScriptLanguage::Cpp,
+            ScriptLanguage::CSharp,
+            ScriptLanguage::Java,
+            ScriptLanguage::Php,
+        ] {
+            let mut host = Host {
+                entity: EntityId::new(),
+                translation: [0.; 3],
+            };
+            let command=serde_json::from_str(r#"{"op":"edit_attribute","source":"rustic.game.Demo.Player","name":"Position","value":[1,2,3]}"#).unwrap();
+            apply_command(language, &mut host, command).unwrap();
+            assert_eq!(host.translation, [1., 2., 3.]);
+            for bad in [
+                r#"{"op":"edit_attribute","source":"Missing","name":"Position","value":[4,5,6]}"#,
+                r#"{"op":"edit_attribute","source":"rustic.game.Demo.Player","name":"Position","value":true}"#,
+            ] {
+                assert!(
+                    apply_command(language, &mut host, serde_json::from_str(bad).unwrap()).is_err()
+                );
+                assert_eq!(host.translation, [1., 2., 3.]);
+            }
+        }
+    }
+
+    #[test]
+    fn native_sdks_preserve_integer_precision_and_escaped_strings() {
+        for (language, source) in [
+            (ScriptLanguage::C, br#"#include "rustic.h"
+void start(void){rustic.set_property("count",rustic.get_property("count"));rustic.log("info",rustic.get_attribute("Name").string);}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#.as_slice()),
+            (ScriptLanguage::Cpp, br#"#include "rustic.hpp"
+void start(){rustic.set_property("count",rustic.get_property("count"));rustic.log("info",rustic.GetAttribute("Name").string());}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#.as_slice()),
+        ] {
+            if !probe_language_toolchain(language).available { continue; }
+            let program=PreparedProgram::build(language, source, "native").unwrap();
+            let mut session=ProcessSession::start(&program).unwrap();
+            let count=9_007_199_254_740_993_i64;
+            let name = "Unicode \u{96ea} \u{1} quote \" slash \\ newline\n";
+            let request=Invocation {format_version:1,callback:"on_start".into(),delta:None,
+                entity_id:EntityId::new().to_string(),delta_time:0.5,fixed_delta_time:0.5,
+                translation:[0.0;3],properties:Map::from_iter([("count".into(), json!(count))]),
+                attributes:Map::from_iter([("Name".into(), json!(name))]),
+                actions:Map::new(),scene_paths:Map::new(),keys:Map::new(),key_events:vec![],any_key_pressed:false};
+            let response=session.invoke(language,&request).unwrap();
+            assert_eq!(response.commands.len(),2);
+            assert!(matches!(&response.commands[0],ExternalCommand::SetProperty{value,..} if value.as_i64()==Some(count)));
+            assert!(matches!(&response.commands[1],ExternalCommand::Log{message,..} if message==name));
+        }
+    }
+
+    #[test]
+    fn luau_validation_and_callback_errors_are_contained() {
+        if !probe_language_toolchain(ScriptLanguage::Luau).available {
+            return;
+        }
+        validate_external(
+            ScriptLanguage::Luau,
+            b"error('validation must not execute source')",
+            "test.luau",
+            1024,
+        )
+        .unwrap();
+        assert!(
+            validate_external(ScriptLanguage::Luau, b"return {broken=", "test.luau", 1024).is_err()
+        );
+        let mut behavior = ExternalBehavior::load(
+            ScriptId::new(),
+            ScriptLanguage::Luau,
+            b"return {on_start=function() error('expected callback error') end}",
+            "test.luau",
+            Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            }),
+        )
+        .unwrap();
+        behavior.on_create().unwrap();
+        let error = behavior.on_start().unwrap_err();
+        assert!(error.to_string().contains("expected callback error"));
+        assert!(!behavior.enabled());
     }
 
     #[test]
@@ -1319,7 +1530,7 @@ for line in sys.stdin:
         match language {
             ScriptLanguage::Python => ("behavior.py", b"import json,sys\nfor line in sys.stdin:\n print(json.dumps({'format_version':1,'commands':[]}),flush=True)\n"),
             ScriptLanguage::CSharp => ("behavior.cs", b"using System; string? line; while ((line = Console.ReadLine()) is not null) Console.WriteLine(\"{\\\"format_version\\\":1,\\\"commands\\\":[]}\");"),
-            ScriptLanguage::C => ("behavior.c", b"#include <stdio.h>\nint main(void){char line[1048577];while(fgets(line,sizeof line,stdin)){puts(\"{\\\"format_version\\\":1,\\\"commands\\\":[]}\");fflush(stdout);}return 0;}\n"),
+            ScriptLanguage::C => ("behavior.c", b"#include <stdio.h>\nint main(void){static char line[1048577];while(fgets(line,sizeof line,stdin)){puts(\"{\\\"format_version\\\":1,\\\"commands\\\":[]}\");fflush(stdout);}return 0;}\n"),
             ScriptLanguage::Cpp => ("behavior.cpp", br#"#include "rustic.hpp"
 void start(){rustic.log("info", "C++ SDK started");}
 void fixed(double dt){auto p=rustic.get_translation();rustic.set_translation(p.x+dt,p.y,p.z);auto key=rustic.key("KeyW");(void)key;auto found=Game.scene.Find("Room.Table");(void)found;rustic.EditAttribute("Position",RusticValue::Array{1.0,2.0,3.0});}

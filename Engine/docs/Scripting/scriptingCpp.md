@@ -1,6 +1,6 @@
 # Scripting Rustic games with C++
 
-C++ is the most complete external-language adapter. Rustic supplies `rustic.hpp`,
+C++ uses the built-in Rustic API, like every gameplay language. Rustic supplies `rustic.hpp`,
 compiles each `.cc`, `.cpp`, or `.cxx` behavior as C++20, and runs one isolated
 process per instance. The header parses protocol requests and exposes typed native
 helpers, so ordinary game code should not emit JSON.
@@ -43,11 +43,10 @@ int main() {
 }
 ```
 
-`RusticBehavior` currently has `on_create`, `on_start`, `fixed_update`, `update`,
-`on_destroy`, and `on_stop` function slots. The external runtime also sends
-`on_enable` and `on_disable`, but the current generated C++ header has no slots for
-them; the host loop safely returns an empty response. Collision callbacks are not in
-the external protocol. Omitted `std::function` members are not called.
+`RusticBehavior` has `on_create`, `on_start`, `on_enable`, `on_disable`,
+`on_destroy`, `on_stop`, `fixed_update`, and `update` slots. Omitted callbacks
+are handled automatically. Frame callbacks receive seconds. Collision callbacks
+are not exposed by this external SDK.
 
 ## Typed API
 
@@ -118,3 +117,9 @@ three-second deadline and 1 MiB response limit. The process environment and work
 directory are isolated. Syntax/build failures prevent replacement; runtime failures
 disable the instance. Legacy C++ behavior members are the current native contract and
 remain backward compatible.
+
+## Target another scene object
+
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.

@@ -1,20 +1,22 @@
 # Gameplay API smoke-test entry scripts
 
-This directory contains one minimal entry script for every language accepted by
-Rustic Game Engine. Each script reads the API's state, exercises the harmless
-mutation commands, logs a success message, and leaves the behavior enabled.
+This directory contains entries for all supported language types. Import the
+chosen file into your project's scripts/ directory (ui/ for PHP/Web), then attach
+it through Programming or the Inspector. Keep the editor-assigned Asset ID.
 
-Copy the desired file into a project's `scripts/` directory (or `ui/` for PHP and
-Web), add it through **Programming > Create Behavior**, and attach it to an entity.
-The `set_property` check runs when the behavior declares a public Number property
-named `smoke_value`; entries also run safely when that optional property is absent.
-
-The native Lua/JavaScript/Web scripts exercise the complete in-process API. External
-languages exercise every host-protocol command (`set_translation`, `set_property`,
-`edit_attribute`, `log`, `set_enabled`, `add_instance`, and `clone_instance`) and
-read every field supplied by protocol version 1. Structural `add`/`clone` checks run
-only once, during `on_start`.
+Lua, JavaScript, C++ and HTML demonstrate additional API operations. Python, C#,
+C, Java, PHP and Luau use the editor's API-only movement starters described below.
+All scripts call engine-owned functions; none require a user-written JSON loop.
 
 `entry.css` is included because CSS is an accepted Web entry type, but CSS has no
 callable gameplay API. Use `entry.html` to test the Web JavaScript bridge.
 
+
+## Built-in API starters
+
+Python, C#, C, Java, PHP, and Luau entries use the same API-only starter as the
+editor. Attach each entry to a Part using the editor, press Play, focus the embedded
+viewport, and hold W. Each should log Behavior started once and move along positive
+Z at one unit per second. Rustic supplies all SDK files; do not add transport code.
+The engine-scripting integration suite separately checks callback persistence,
+multiple commands, enable/disable callbacks and string escaping across toolchains.

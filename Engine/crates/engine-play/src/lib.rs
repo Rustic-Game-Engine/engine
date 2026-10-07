@@ -7,6 +7,7 @@
 pub mod changes;
 pub mod frame_ring;
 pub mod local_ipc;
+mod physics;
 pub mod protocol;
 pub mod runtime_server;
 mod script_runtime;
