@@ -61,9 +61,9 @@ class FullReviewTests(unittest.TestCase):
     @patch.object(full.ai, "git")
     def test_inventory_reads_blobs_without_checking_out_or_executing_sources(self, git):
         git.side_effect = [
-            b"100644 blob " + b"a" * 40 + b" 8\tEngine/source.rs\0" +
-            b"100644 blob " + b"b" * 40 + b" 8\tEngine/target/debug/app\0" +
-            b"100644 blob " + b"c" * 40 + b" 8\timage.png\0",
+            b"100644 blob " + b"a" * 40 + b"\tEngine/source.rs\0" +
+            b"100644 blob " + b"b" * 40 + b"\tEngine/target/debug/app\0" +
+            b"100644 blob " + b"c" * 40 + b"\timage.png\0",
             b"", b"content\n",
         ]
         sources, coverage = full.collect_sources("d" * 40)
@@ -71,6 +71,8 @@ class FullReviewTests(unittest.TestCase):
         self.assertEqual(coverage["generated_files_excluded"], 1)
         self.assertEqual(coverage["omitted_files"], [{"file": "image.png", "reason": "binary asset"}])
         self.assertEqual([call.args[0] for call in git.call_args_list], ["ls-tree", "fetch", "cat-file"])
+        self.assertNotIn("-l", git.call_args_list[0].args)
+        self.assertNotIn("b" * 40, git.call_args_list[1].args)
 
     @patch.object(full.ai, "review")
     def test_sweep_uses_high_effort_full_sources_and_allows_existing_findings(self, review):
