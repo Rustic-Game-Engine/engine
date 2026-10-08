@@ -117,6 +117,13 @@ instructions.
 
 ## Local validation
 
+To test the pull request flow, create a branch from `work`, make a small
+documentation change, and open a pull request targeting `work`. Documentation-only
+pull requests also run the complete checks. Look for `Required checks`, the
+`GPT-6 Luna review` status on the PR's head commit, and Luna's review comment.
+The full report is also available in the run summary and the
+`gpt-6-luna-review` artifact; the review step's console log does not print it.
+
 ```sh
 python3 -m unittest discover -s .github/tests -v
 actionlint .github/workflows/*.yml
