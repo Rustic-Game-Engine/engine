@@ -122,8 +122,11 @@ def collect_diff(base, head, is_pr):
     diff = git("diff", "--no-ext-diff", "--no-textconv", "--unified=30", base, head, "--", *paths, env=fetch_env)
     if len(diff) > MAX_DIFF_BYTES:
         raise RuntimeError("The diff exceeds the 300 KB review limit. Split this change into smaller pull requests; no partial review was accepted.")
-    # Binary source/config changes cannot be meaningfully reviewed as a text diff.
-    if b"Binary files " in diff or b"GIT binary patch" in diff:
+    # Inspect Git's metadata, not marker words that may also occur in source code.
+    stats = git("diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, head, "--", *paths, env=fetch_env)
+    binary_paths = [entry.split(b"\t", 2)[2] for entry in stats.split(b"\0")
+                    if entry.startswith(b"-\t-\t")]
+    if binary_paths:
         raise RuntimeError("The diff contains binary changes outside generated build outputs. A manual review is required.")
     names = git("diff", "--name-only", "-z", base, head, "--", *paths, env=fetch_env)
     return diff.decode("utf-8", errors="replace"), set(names.decode("utf-8").rstrip("\0").split("\0")) - {""}

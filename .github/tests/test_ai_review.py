@@ -65,7 +65,7 @@ class ReviewTests(unittest.TestCase):
     @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
     @patch.object(review, "git")
     def test_pr_diff_uses_merge_base_and_disables_external_diff_tools(self, git):
-        git.side_effect = [b"", b"c" * 40, b"diff", b"file.rs\0"]
+        git.side_effect = [b"", b"c" * 40, b"diff", b"1\t1\tfile.rs\0", b"file.rs\0"]
         diff, names = review.collect_diff("a" * 40, "b" * 40, True)
         self.assertEqual((diff, names), ("diff", {"file.rs"}))
         args = git.call_args_list[2].args
@@ -97,7 +97,7 @@ class ReviewTests(unittest.TestCase):
             run("add", ".")
             run("commit", "-m", "base")
             base = run("rev-parse", "HEAD")
-            (source / "example.rs").write_text("new code\n")
+            (source / "example.rs").write_text("new code\n// Binary files and GIT binary patch are ordinary source text here.\n")
             run("commit", "-am", "head")
             head = run("rev-parse", "HEAD")
             run("clone", "--depth=1", "--filter=blob:none", "--sparse", source.as_uri(), str(checkout), cwd=root)
@@ -113,6 +113,13 @@ class ReviewTests(unittest.TestCase):
                 self.assertIn("-old code", diff)
             finally:
                 os.chdir(previous_directory)
+
+    @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
+    @patch.object(review, "git")
+    def test_actual_binary_changes_fail_using_git_metadata(self, git):
+        git.side_effect = [b"", b"text diff", b"-\t-\tasset.bin\0"]
+        with self.assertRaisesRegex(RuntimeError, "binary changes"):
+            review.collect_diff("a" * 40, "b" * 40, False)
 
     @patch.object(review.urllib.request, "urlopen")
     def test_api_errors_never_reveal_response_body_or_key(self, urlopen):
