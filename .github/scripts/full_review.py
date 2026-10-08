@@ -182,7 +182,8 @@ def numbered(path, text, first=1):
 def partition(sources):
     """Every source line appears in a batch; large files retain original numbers."""
     batches, batch, size = [], [], 0
-    for path, text in sorted(sources.items()):
+    # Inspect critical shared/configuration files first, then the rest of source.
+    for path, text in sorted(sources.items(), key=lambda item: (item[0] not in SHARED_FILES, item[0])):
         lines = text.splitlines() or [""]
         segment, first, segment_size = [], 1, 0
         for index, line in enumerate(lines, 1):
@@ -224,7 +225,26 @@ def shared_context(sources, diff, evidence, pr_event, base):
             "pull_request": {"title": pr.get("title", ""), "description": pr.get("body", "")}}
 
 
-def sweep(sources, shared, coverage):
+class IncompleteSweep(RuntimeError):
+    def __init__(self, message, result):
+        super().__init__(message)
+        self.result = result
+
+
+def combine_results(results, coverage):
+    unique = {}
+    for result in results:
+        for finding in result["findings"]:
+            unique.setdefault((finding["file"], finding["line"], finding["title"].casefold()), finding)
+    order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    findings = sorted(unique.values(), key=lambda item: (order[item["severity"]], item["file"], item["line"]))
+    complete = coverage["batches_completed"] == coverage["batches_total"]
+    summary = (f"Reviewed {len(coverage['reviewed_files'])} tracked text files in {coverage['batches_total']} batches" if complete else
+               f"INCOMPLETE: {coverage['batches_completed']}/{coverage['batches_total']} batches completed; {len(coverage['reviewed_files'])} text files were planned")
+    return {"summary": summary + f"; found {len(findings)} actionable concerns. Existing issues are included.", "findings": findings}
+
+
+def sweep(sources, shared, coverage, on_progress=None):
     batches = partition(sources)
     coverage["batches_total"] = len(batches)
     coverage["batches_completed"] = 0
@@ -234,7 +254,13 @@ def sweep(sources, shared, coverage):
     def review_batch(batch):
         allowed = {item["file"] for item in batch} | {item["file"] for item in shared["shared_complete_files"]}
         text = json.dumps({"scope": "Full source sweep; unchanged code is included", "context": shared, "source_segments": batch}, ensure_ascii=False)
-        result = ai.review(text, allowed, instructions=INSTRUCTIONS, effort="high")
+        try:
+            result = ai.review(text, allowed, instructions=INSTRUCTIONS, effort="high", max_output_tokens=32000, timeout_seconds=300)
+        except ai.IncompleteReviewError as error:
+            if error.reason != "max_output_tokens":
+                raise
+            print("Retrying an output-limited source batch with a larger response budget.", flush=True)
+            result = ai.review(text, allowed, instructions=INSTRUCTIONS, effort="high", max_output_tokens=64000, timeout_seconds=600)
         for finding in result["findings"]:
             if finding["line"] > max(1, len(sources[finding["file"]].splitlines())):
                 raise RuntimeError("A sweep finding references a line outside the supplied source. No passing sweep was recorded.")
@@ -247,18 +273,19 @@ def sweep(sources, shared, coverage):
                 results.append(future.result())
                 coverage["batches_completed"] += 1
                 Path("review-coverage.json").write_text(json.dumps(coverage, indent=2))
+                Path("review-findings.json").write_text(json.dumps(combine_results(results, coverage), indent=2))
                 print(f"Source review batches completed: {coverage['batches_completed']}/{len(batches)}", flush=True)
-        except Exception:
+                if on_progress:
+                    try:
+                        on_progress(combine_results(results, coverage), coverage)
+                    except Exception:
+                        print("Could not publish interim progress; final publication remains required.", flush=True)
+        except Exception as error:
             for future in pending:
                 future.cancel()
-            raise
-    unique = {}
-    for result in results:
-        for finding in result["findings"]:
-            unique.setdefault((finding["file"], finding["line"], finding["title"].casefold()), finding)
-    order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-    findings = sorted(unique.values(), key=lambda item: (order[item["severity"]], item["file"], item["line"]))
-    return {"summary": f"Reviewed {len(sources)} tracked text files in {len(batches)} batches; found {len(findings)} actionable concerns. Existing issues are included.", "findings": findings}
+            message = str(error) if isinstance(error, RuntimeError) else "A source review batch failed."
+            raise IncompleteSweep(message, combine_results(results, coverage)) from None
+    return combine_results(results, coverage)
 
 
 def final_state(result, evidence):
@@ -267,13 +294,21 @@ def final_state(result, evidence):
     return "success" if evidence["state"] == "success" else "pending"
 
 
-def report(result, evidence, coverage, head):
+def report(result, evidence, coverage, head, *, incomplete=False, in_progress=False):
+    if in_progress:
+        result = dict(result, summary=result["summary"].replace("INCOMPLETE:", "IN PROGRESS:", 1))
     text = ai.render_report(result, head)
     text = text.replace(ai.MARKER, MARKER).replace("## GPT-6 Luna review", "## GPT-6 Luna full sweep", 1)
+    if incomplete:
+        text = text.replace("## GPT-6 Luna full sweep", "## GPT-6 Luna full sweep (incomplete)", 1)
+    elif in_progress:
+        text = text.replace("## GPT-6 Luna full sweep", "## GPT-6 Luna full sweep (in progress)", 1)
     # Diff-specific claims do not describe a repository sweep.
     text = text.split("**Diff review:", 1)[0]
-    if not result["findings"]:
+    if not result["findings"] and not incomplete and not in_progress:
         text = text.replace("in the reviewed text diff", "in the supplied repository text")
+    elif incomplete or in_progress:
+        text = text.replace("No actionable concerns were found in the reviewed text diff.", "Unfinished batches remain unreviewed; no clean result is claimed.")
     text += "\n### Exact-commit CI evidence\n\n| Check | Result | Failed steps |\n| --- | --- | --- |\n"
     for job in evidence["jobs"]:
         text += f"| {ai.safe_text(job['name'])} | {job['conclusion'] or job['status']} | {ai.safe_text(', '.join(job['failed_steps']))} |\n"
@@ -281,7 +316,7 @@ def report(result, evidence, coverage, head):
         text += f"\n[CI run]({evidence['url']})\n"
     if not evidence["jobs"]:
         text += "\nNo CI evidence is available for this exact commit. Validation remains pending.\n"
-    state = final_state(result, evidence)
+    state = "pending" if in_progress else "failure" if incomplete else final_state(result, evidence)
     text += f"\n**Overall sweep status: {state.upper()}** — code findings and CI results both count.\n"
     text += f"\nCoverage: {len(coverage['reviewed_files'])} text files, {coverage['batches_completed']}/{coverage['batches_total']} batches; {coverage['generated_files_excluded']} generated files excluded.\n"
     if coverage["omitted_files"]:
@@ -294,7 +329,7 @@ def report(result, evidence, coverage, head):
 def main():
     ai.STATUS = STATUS
     event = json.loads(Path(os.environ["GITHUB_EVENT_PATH"]).read_text())
-    head, pr_event = None, {}
+    head, pr_event, comment_id = None, {}, None
     try:
         base, head, pr_event, run_id = resolve_target(event, os.environ["GITHUB_EVENT_NAME"])
         ai.publish_status(head, "pending", "Full source sweep and exact-commit CI validation in progress")
@@ -306,20 +341,28 @@ def main():
             raise RuntimeError("No tracked text source was available; no complete sweep was recorded.")
         evidence = ci_evidence(head, run_id)
         shared = shared_context(sources, diff, evidence, pr_event, base)
-        result = sweep(sources, shared, coverage)
+        def progress(partial, coverage):
+            nonlocal comment_id
+            ai.publish_status(head, "pending", f"Reviewed {coverage['batches_completed']}/{coverage['batches_total']} source batches; full result pending")
+            posted = ai.publish_comment(pr_event, report(partial, evidence, coverage, head, in_progress=True), comment_id)
+            if posted:
+                comment_id = int(posted["id"])
+
+        result = sweep(sources, shared, coverage, on_progress=progress)
         output = report(result, evidence, coverage, head)
         ai.write_report(output)
-        ai.publish_comment(pr_event, output)
+        ai.publish_comment(pr_event, output, comment_id)
         state = final_state(result, evidence)
         ai.publish_status(head, state, "Code concerns or CI failures found; see full sweep report" if state == "failure" else "Source reviewed; CI validation still pending" if state == "pending" else "Full text source reviewed and exact-commit CI passed")
         return 1 if state == "failure" else 0
     except Exception as error:
         message = str(error) if isinstance(error, RuntimeError) else "Full sweep failed unexpectedly. No complete or passing sweep was recorded."
-        ai.write_report(f"{MARKER}\n## GPT-6 Luna full sweep incomplete\n\n{ai.safe_text(message)}\n")
+        output = report(error.result, evidence, coverage, head, incomplete=True) if isinstance(error, IncompleteSweep) else f"{MARKER}\n## GPT-6 Luna full sweep incomplete\n"
+        ai.write_report(output + f"\nIncomplete reason: {ai.safe_text(message)}\n")
         if head:
             try:
                 ai.publish_status(head, "failure", "Full sweep incomplete; see report for required action")
-                ai.publish_comment(pr_event, Path("review-report.md").read_text())
+                ai.publish_comment(pr_event, Path("review-report.md").read_text(), comment_id)
             except Exception:
                 print("Could not publish incomplete sweep status/comment.", file=sys.stderr)
         return 1
