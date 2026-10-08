@@ -23,14 +23,25 @@ New-Item -ItemType Directory -Force -Path $toolRoot | Out-Null
 
 if (-not (Test-Path -LiteralPath $cargo -PathType Leaf)) {
     Write-Host 'Installing the pinned Rust toolchain locally under .tools...'
+    $rustupUri = 'https://static.rust-lang.org/rustup/dist/x86_64-pc-windows-msvc/rustup-init.exe'
     if (-not (Test-Path -LiteralPath $rustupInit -PathType Leaf)) {
-        Invoke-WebRequest -UseBasicParsing `
-            -Uri 'https://win.rustup.rs/x86_64' `
-            -OutFile $rustupInit
-        $rustupSignature = Get-AuthenticodeSignature -LiteralPath $rustupInit
-        if ($rustupSignature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
-            throw "The downloaded rustup installer has an invalid signature: $($rustupSignature.Status)."
-        }
+        Invoke-WebRequest -UseBasicParsing -Uri $rustupUri -OutFile $rustupInit
+    }
+    # Official rustup executables are unsigned; verify the published checksum instead.
+    $checksumResponse = Invoke-WebRequest -UseBasicParsing -Uri "$rustupUri.sha256"
+    $checksumText = if ($checksumResponse.Content -is [byte[]]) {
+        [System.Text.Encoding]::UTF8.GetString($checksumResponse.Content)
+    } else {
+        [string]$checksumResponse.Content
+    }
+    $expectedChecksum = ($checksumText.Trim() -split '\s+')[0]
+    if ($expectedChecksum -notmatch '^[0-9a-fA-F]{64}$') {
+        throw 'The published rustup SHA-256 checksum is invalid.'
+    }
+    $actualChecksum = (Get-FileHash -LiteralPath $rustupInit -Algorithm SHA256).Hash
+    if ($actualChecksum -ne $expectedChecksum) {
+        Remove-Item -LiteralPath $rustupInit -Force
+        throw 'The downloaded rustup installer does not match its published SHA-256 checksum.'
     }
     $env:CARGO_HOME = $localCargoHome
     $env:RUSTUP_HOME = $localRustupHome
