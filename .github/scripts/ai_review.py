@@ -80,7 +80,8 @@ def git(*args, env=None):
     result = subprocess.run(["git", *args], env=env, capture_output=True, check=False)
     if result.returncode:
         # Git stderr can contain credentials, repository-controlled text, or URLs.
-        raise RuntimeError("Could not fetch or compare the exact commits. Check repository access and shared history.")
+        operation = args[0] if args and args[0] in {"fetch", "cat-file", "hash-object", "merge-base", "diff"} else "operation"
+        raise RuntimeError(f"Git {operation} failed while reading the exact commits. Check repository access and shared history.")
     return result.stdout
 
 
@@ -92,8 +93,10 @@ def commits(event, event_name):
     head = os.environ["GITHUB_SHA"]
     if event_name == "push":
         return event["before"], head
-    parents = git("rev-list", "--parents", "-n", "1", head).decode().split()
-    return (parents[1] if len(parents) > 1 else "0" * 40), head
+    # rev-list hides parents at a shallow boundary, even when the commit has one.
+    headers = git("cat-file", "-p", head).decode().split("\n\n", 1)[0]
+    parents = [line.removeprefix("parent ") for line in headers.splitlines() if line.startswith("parent ")]
+    return (parents[0] if parents else "0" * 40), head
 
 
 def collect_diff(base, head, is_pr):
@@ -108,19 +111,21 @@ def collect_diff(base, head, is_pr):
         "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {auth}",
         "GIT_TERMINAL_PROMPT": "0",
     })
-    git("fetch", "--no-tags", "--depth=1024", "origin", *([head] if empty_base else [base, head]), env=fetch_env)
+    git("fetch", "--no-tags", "--filter=blob:none", "--depth=1024", "origin", *([head] if empty_base else [base, head]), env=fetch_env)
     if empty_base:
-        base = git("hash-object", "-t", "tree", "/dev/null").decode().strip()
+        base = git("hash-object", "-w", "-t", "tree", "/dev/null", env=fetch_env).decode().strip()
     elif is_pr:
-        base = git("merge-base", base, head).decode().strip()
+        base = git("merge-base", base, head, env=fetch_env).decode().strip()
     paths = ["."] + [":(exclude)" + pattern for pattern in EXCLUSIONS]
-    diff = git("diff", "--no-ext-diff", "--no-textconv", "--unified=30", base, head, "--", *paths)
+    # Diff can lazily fetch blobs in the sparse/partial checkout. Those fetches
+    # need the same ephemeral authentication as the explicit commit fetch.
+    diff = git("diff", "--no-ext-diff", "--no-textconv", "--unified=30", base, head, "--", *paths, env=fetch_env)
     if len(diff) > MAX_DIFF_BYTES:
         raise RuntimeError("The diff exceeds the 300 KB review limit. Split this change into smaller pull requests; no partial review was accepted.")
     # Binary source/config changes cannot be meaningfully reviewed as a text diff.
     if b"Binary files " in diff or b"GIT binary patch" in diff:
         raise RuntimeError("The diff contains binary changes outside generated build outputs. A manual review is required.")
-    names = git("diff", "--name-only", "-z", base, head, "--", *paths)
+    names = git("diff", "--name-only", "-z", base, head, "--", *paths, env=fetch_env)
     return diff.decode("utf-8", errors="replace"), set(names.decode("utf-8").rstrip("\0").split("\0")) - {""}
 
 
