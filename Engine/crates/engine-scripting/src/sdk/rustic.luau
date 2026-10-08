@@ -7,7 +7,7 @@ local function push(op, fields)
 end
 local function inactive() return {pressed=false,released=false,held=false,axis=0} end
 local function objectPath(source)
-    return setmetatable({}, {__index=function(_, name)
+    return setmetatable({__source=source}, {__index=function(_, name)
         if name=='EditAttribute' or name=='edit_attribute' then
             return function(_, attribute, value) push('edit_attribute',{source=source,name=attribute,value=value}) end
         end
@@ -32,6 +32,14 @@ function rustic.key_events() return table.clone(state.key_events) end
 function rustic.any_key_pressed() return state.any_key_pressed end
 function rustic.log(level,message) push('log',{level=tostring(level),message=tostring(message)}) end
 function rustic.set_enabled(enabled) push('set_enabled',{enabled=enabled}) end
+function rustic.query(request)
+    local pending=commands; commands={}
+    return __rustic_query({query=request,commands=pending})
+end
+function rustic.gameplay(request) push('gameplay',{request=request}) end
+function rustic.gameplay_connections() return state.gameplay_connections or {} end
+function rustic.gameplay_states() return state.gameplay_states or {} end
+function rustic.gameplay_callbacks() return state.gameplay_callbacks or {} end
 instance = {}
 function instance.add(source,parent) push('add_instance',{source=source,parent=parent}) end
 function instance.clone(source,parent) push('clone_instance',{source=source,parent=parent}) end
@@ -65,7 +73,8 @@ local function encode(v)
         for _,x in ipairs(v) do table.insert(result,encode(x)) end
         return '[' .. table.concat(result,',') .. ']'
     end
-    for k,x in pairs(v) do table.insert(result,quote(k)..':'..encode(x)) end
+    local arrays={commands=true,actions=true,mask=true,tracks=true,keys=true,markers=true,points=true,ignore=true,arguments=true}
+    for k,x in pairs(v) do local encoded=(arrays[k] and type(x)=='table' and next(x)==nil) and '[]' or encode(x);table.insert(result,quote(k)..':'..encoded) end
     return '{' .. table.concat(result,',') .. '}'
 end
 print = function(...) local a={};for _,v in ipairs({...}) do table.insert(a,tostring(v)) end;rustic.log('info',table.concat(a,'\t')) end
@@ -76,6 +85,7 @@ function __rustic_invoke(nextState)
     local response
     local ok,err=pcall(function()
         if not __rustic_behavior then __rustic_behavior=assert(__rustic_load(),'return a behavior table') end
+        if state.callback=='update' and __rustic_gameplay_dispatch then __rustic_gameplay_dispatch() end
         local callback=__rustic_behavior[state.callback] or __rustic_behavior[aliases[state.callback]]
         if callback then
             if state.callback=='update' or state.callback=='fixed_update' then callback(state.delta or 0) else callback() end

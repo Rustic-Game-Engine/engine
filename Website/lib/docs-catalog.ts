@@ -7,6 +7,9 @@ export const docGroups: DocGroup[] = [
     { slug: "callbacks", title: "Lifecycle callbacks", description: "Choose the correct callback for setup, frames, physics, and teardown.", source: "api:callbacks" },
   ] },
   { label: "Core API", docs: [
+    { slug: "api/gameplay", title: "Gameplay actions", description: "All-language easing, actions, animation, physics, audio and signals.", source: "api:gameplay" },
+    { slug: "guides/gameplay-actions", title: "Use gameplay actions", description: "Attach scripts, play clips, compose actions and use physics, audio and callbacks.", source: "docs/Scripting/gameplayActions.md" },
+    { slug: "guides/gameplay-architecture", title: "Gameplay API architecture", description: "Core services, property adapters, clip handles, timing and lifetime boundaries.", source: "docs/GAMEPLAY_API_ARCHITECTURE.md" },
     { slug: "api/entity", title: "Entity & time", description: "Read the current entity ID and frame timing.", source: "api:entity" },
     { slug: "api/transforms", title: "Transforms", description: "Read and change the owning entity's position.", source: "api:transforms" },
     { slug: "api/properties", title: "Public properties", description: "Read and update declared script properties.", source: "api:properties" },

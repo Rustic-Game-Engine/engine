@@ -1,12 +1,61 @@
 use crate::{ActionState, EngineValue, EntityId, InputFrame, ScriptId};
-use mlua::{Error as MluaError, Function, Lua, RegistryKey, Table, Value, Variadic};
+use mlua::{Error as MluaError, Function, Lua, LuaSerdeExt, RegistryKey, Table, Value, Variadic};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub(crate) fn normalize_query(value: &mut serde_json::Value) {
+    if let serde_json::Value::Object(fields) = value {
+        for (key, value) in fields {
+            if matches!(
+                key.as_str(),
+                "commands"
+                    | "actions"
+                    | "mask"
+                    | "tracks"
+                    | "keys"
+                    | "markers"
+                    | "points"
+                    | "ignore"
+                    | "arguments"
+            ) && value.as_object().is_some_and(serde_json::Map::is_empty)
+            {
+                *value = serde_json::Value::Array(Vec::new());
+            }
+            normalize_query(value);
+        }
+    } else if let serde_json::Value::Array(values) = value {
+        for value in values {
+            normalize_query(value);
+        }
+    }
+}
+
 /// Engine-owned runtime surface. Implementations live in the isolated runtime process.
 #[allow(clippy::missing_errors_doc)]
 pub trait GameplayHost: Send {
+    fn gameplay_query(&mut self, query: serde_json::Value) -> Result<serde_json::Value, String> {
+        let query: engine_core::gameplay::query::Query =
+            serde_json::from_value(query).map_err(|e| e.to_string())?;
+        serde_json::to_value(query.evaluate()?).map_err(|e| e.to_string())
+    }
+    fn gameplay_request(&mut self, _request: engine_core::gameplay::Request) -> Result<(), String> {
+        Err("high-level gameplay API is unavailable in this host".into())
+    }
+    fn gameplay_connections(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn gameplay_states(&self) -> Vec<engine_core::gameplay::OperationState> {
+        Vec::new()
+    }
+    fn gameplay_callbacks(&mut self) -> Vec<engine_core::gameplay::Delivery> {
+        Vec::new()
+    }
+    fn cleanup_gameplay(&mut self) {}
+    fn fork_for_reload(&self) -> Option<Box<dyn GameplayHost>> {
+        None
+    }
+
     fn set_current_camera(&mut self, _source: &str) -> Result<(), String> {
         Err("camera selection is unavailable".into())
     }
@@ -172,6 +221,9 @@ impl LuaBehavior {
             std::str::from_utf8(source).map_err(|e| LuaRuntimeError::InvalidUtf8(e.to_string()))?;
         let lua = sandbox_lua().map_err(|error| runtime_error(&error))?;
         install_api(&lua, Arc::clone(&host)).map_err(|error| runtime_error(&error))?;
+        lua.load(include_str!("sdk/gameplay.lua"))
+            .exec()
+            .map_err(|error| runtime_error(&error))?;
         let budget_remaining = Arc::new(AtomicU64::new(instruction_budget.max(1)));
         let hook_budget = Arc::clone(&budget_remaining);
         lua.set_hook(
@@ -278,6 +330,15 @@ impl LuaBehavior {
         self.budget_remaining
             .store(self.instruction_budget, Ordering::Relaxed);
         let result = (|| {
+            if canonical == "Update" {
+                if let Some(dispatch) = self
+                    .lua
+                    .globals()
+                    .get::<Option<Function>>("__rustic_gameplay_dispatch")?
+                {
+                    dispatch.call::<()>(())?;
+                }
+            }
             let table: Table = self.lua.registry_value(&self.behavior)?;
             let callback = table
                 .get::<Option<Function>>(canonical)?
@@ -335,6 +396,7 @@ fn object_proxy(
     path: String,
 ) -> mlua::Result<Table> {
     let table = lua.create_table()?;
+    table.raw_set("__source", path.clone())?;
     let meta = lua.create_table()?;
     meta.set(
         "__index",
@@ -379,6 +441,49 @@ fn object_proxy(
 #[allow(clippy::too_many_lines)]
 fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Result<()> {
     let api = lua.create_table()?;
+    let h = Arc::clone(&host);
+    api.set(
+        "query",
+        lua.create_function(move |lua, value: Value| {
+            let mut query = lua.from_value(value)?;
+            normalize_query(&mut query);
+            let result = lock_host(&h)?
+                .gameplay_query(query)
+                .map_err(MluaError::RuntimeError)?;
+            lua.to_value(&result)
+        })?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay",
+        lua.create_function(move |lua, value: Value| {
+            let mut request = lua.from_value::<serde_json::Value>(value)?;
+            normalize_query(&mut request);
+            let request = serde_json::from_value(request).map_err(MluaError::external)?;
+            lock_host(&h)?
+                .gameplay_request(request)
+                .map_err(MluaError::RuntimeError)
+        })?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay_connections",
+        lua.create_function(move |lua, ()| lua.to_value(&lock_host(&h)?.gameplay_connections()))?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay_states",
+        lua.create_function(move |lua, ()| lua.to_value(&lock_host(&h)?.gameplay_states()))?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay_callbacks",
+        lua.create_function(move |lua, ()| lua.to_value(&lock_host(&h)?.gameplay_callbacks()))?,
+    )?;
+    api.set(
+        "new_handle",
+        lua.create_function(|_, ()| Ok(EntityId::new().to_string()))?,
+    )?;
     let h = Arc::clone(&host);
     api.set(
         "entity_id",

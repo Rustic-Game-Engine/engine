@@ -23,6 +23,76 @@ struct Body {
 }
 
 impl PhysicsWorld {
+    pub fn colliders(
+        world: &mut SceneWorld,
+    ) -> Result<Vec<engine_core::gameplay::physics::Collider>, String> {
+        world.propagate_transforms();
+        let mut result = Vec::new();
+        for id in world.entity_ids() {
+            let Some(primitive) = world.primitive(id).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            if !world
+                .part_attributes(id)
+                .map_err(|e| e.to_string())?
+                .can_collide
+            {
+                continue;
+            }
+            let (min, max) = bounds(primitive);
+            let m = world.world_transform(id).map_err(|e| e.to_string())?.0;
+            let center = m.transform_point3((min + max) * 0.5);
+            let h = (max - min) * 0.5;
+            let half = m.x_axis.truncate().abs() * h.x
+                + m.y_axis.truncate().abs() * h.y
+                + m.z_axis.truncate().abs() * h.z;
+            result.push(engine_core::gameplay::physics::Collider {
+                entity: id,
+                center: center.as_dvec3().to_array(),
+                half: half.as_dvec3().to_array(),
+            });
+        }
+        Ok(result)
+    }
+    pub fn impulse(
+        &mut self,
+        world: &SceneWorld,
+        id: EntityId,
+        impulse: [f64; 3],
+    ) -> Result<(), String> {
+        let v = glam::DVec3::from_array(impulse).as_vec3();
+        if !v.is_finite() {
+            return Err("impulse must be finite and representable".into());
+        }
+        if world.primitive(id).map_err(|e| e.to_string())?.is_none() {
+            return Err("physics requires an authored primitive collider".into());
+        }
+        if world
+            .part_attributes(id)
+            .map_err(|e| e.to_string())?
+            .anchored
+        {
+            return Err("cannot impulse an anchored body".into());
+        }
+        let velocity = self.velocities.entry(id).or_default();
+        let next = *velocity + v;
+        if !next.is_finite() {
+            return Err("velocity overflow".into());
+        }
+        *velocity = next;
+        Ok(())
+    }
+    pub fn launch(
+        &mut self,
+        world: &SceneWorld,
+        id: EntityId,
+        velocity: [f64; 3],
+    ) -> Result<(), String> {
+        self.impulse(world, id, velocity)?;
+        self.velocities
+            .insert(id, glam::DVec3::from_array(velocity).as_vec3());
+        Ok(())
+    }
     pub fn step(&mut self, world: &mut SceneWorld, delta: f64) -> Result<(), WorldError> {
         if !delta.is_finite() || delta <= 0.0 {
             return Ok(());

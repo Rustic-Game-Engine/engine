@@ -390,11 +390,16 @@ fn render_runtime(
     config: RuntimeServerConfig,
     latest: Option<Arc<Mutex<Option<engine_play::BgraFrame>>>>,
 ) -> Result<(), String> {
+    let models = engine_assets::load_model_library(&config.snapshot_root)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(id, (_, model))| (id, model))
+        .collect();
     let game_ui = game_ui::GameUi::load(&config.snapshot_root)?;
     let mut renderer = renderer_wgpu::SceneViewportRenderer::new(BackendRequest::Auto)
         .map_err(|e| e.to_string())?;
     run_runtime_server_with_renderer(config, move |world, tick| {
-        let scene = renderer_wgpu::game_scene(world, 16.0 / 9.0);
+        let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &models);
         let frame = renderer
             .render(640, 360, &scene)
             .map_err(|e| e.to_string())?
