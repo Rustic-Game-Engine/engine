@@ -35,7 +35,13 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --yes libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+          sudo apt-get install --yes libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libegl1 libgl1-mesa-dri mesa-vulkan-drivers
+          # Headless runtime tests still render frames; use Mesa's CPU Vulkan driver.
+          vulkan_driver="$(dpkg -L mesa-vulkan-drivers | rg '/lvp_icd.*\.json$')"
+          test -f "$vulkan_driver"
+          install -d -m 700 "$RUNNER_TEMP/xdg-runtime"
+          echo "VK_DRIVER_FILES=$vulkan_driver" >> "$GITHUB_ENV"
+          echo "XDG_RUNTIME_DIR=$RUNNER_TEMP/xdg-runtime" >> "$GITHUB_ENV"
       - name: Install repository-pinned Rust toolchain
         run: rustup show active-toolchain
       - name: Check formatting
