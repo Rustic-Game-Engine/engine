@@ -1,6 +1,6 @@
 name: GPT-6 Luna review
 
-# The privileged review reads diffs as data. It never checks out or executes PR code.
+# The privileged review reads diffs and requested Git blobs as data; it never executes PR code.
 on:
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review]
@@ -22,7 +22,7 @@ jobs:
   review:
     name: GPT-6 Luna review
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 75
     steps:
       - name: Checkout trusted review tooling
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
