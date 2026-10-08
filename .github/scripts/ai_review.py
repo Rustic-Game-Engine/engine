@@ -126,6 +126,10 @@ def collect_diff(base, head, is_pr):
     # need the same ephemeral authentication as the explicit commit fetch.
     diff = git("diff", "--no-ext-diff", "--no-textconv", "--unified=30", base, head, "--", *paths, env=fetch_env)
     if len(diff) > MAX_DIFF_BYTES:
+        # Keep every changed line and file; reduce only surrounding context.
+        # The same size limit still rejects changes too large to review fully.
+        diff = git("diff", "--no-ext-diff", "--no-textconv", "--unified=5", base, head, "--", *paths, env=fetch_env)
+    if len(diff) > MAX_DIFF_BYTES:
         raise RuntimeError("The diff exceeds the 300 KB review limit. Split this change into smaller pull requests; no partial review was accepted.")
     # Inspect Git's metadata, not marker words that may also occur in source code.
     stats = git("diff", "--numstat", "-z", "--no-renames", "--no-ext-diff", "--no-textconv", base, head, "--", *paths, env=fetch_env)
