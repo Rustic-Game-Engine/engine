@@ -111,6 +111,10 @@ impl GameplayWorld for GameplayScene<'_> {
         clippy::cast_possible_truncation,
         reason = "Scene storage is f32 and conversions are checked for finite range first"
     )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep property-specific writes and validation in one dispatch"
+    )]
     fn write(&mut self, target: &Target, value: Value) -> Result<(), String> {
         value.validate()?;
         if let Some(voice) = self.1.voices.get_mut(&target.entity) {

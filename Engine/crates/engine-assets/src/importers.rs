@@ -5,6 +5,7 @@ use crate::{
     PbrMaterialArtifact, StaticMeshArtifact, TextureArtifact, TexturePixels,
     validate_asset_relative_path,
 };
+use base64::Engine as _;
 use image::ImageFormat;
 use lewton::inside_ogg::OggStreamReader;
 use num_traits::ToPrimitive as _;
@@ -283,51 +284,56 @@ fn import_obj(request: &ImportRequest) -> Result<ModelArtifact, AssetError> {
 }
 
 /// Validated external buffer/image dependencies without decoding mesh payloads.
+/// # Errors
+/// Returns an error for invalid glTF data or unsafe dependency paths.
 pub fn model_dependencies(bytes: &[u8]) -> Result<Vec<String>, AssetError> {
     preflight_gltf_uris(bytes)?;
     let parsed = gltf::Gltf::from_slice(bytes).map_err(|e| AssetError::Decode(e.to_string()))?;
     let mut uris = BTreeSet::new();
     for buffer in parsed.buffers() {
-        if let gltf::buffer::Source::Uri(uri) = buffer.source() {
-            if !uri.starts_with("data:") {
-                validate_dependency_uri(uri)?;
-                uris.insert(uri.to_owned());
-            }
+        if let gltf::buffer::Source::Uri(uri) = buffer.source()
+            && !uri.starts_with("data:")
+        {
+            validate_dependency_uri(uri)?;
+            uris.insert(uri.to_owned());
         }
     }
     for image in parsed.images() {
-        if let gltf::image::Source::Uri { uri, .. } = image.source() {
-            if !uri.starts_with("data:") {
-                validate_dependency_uri(uri)?;
-                uris.insert(uri.to_owned());
-            }
+        if let gltf::image::Source::Uri { uri, .. } = image.source()
+            && !uri.starts_with("data:")
+        {
+            validate_dependency_uri(uri)?;
+            uris.insert(uri.to_owned());
         }
     }
     Ok(uris.into_iter().collect())
 }
+#[allow(
+    clippy::too_many_lines,
+    reason = "decode glTF buffers, meshes, skins, and animation data from one parsed source"
+)]
 fn import_gltf(request: &ImportRequest) -> Result<ModelArtifact, AssetError> {
     preflight_gltf_uris(&request.source_bytes)?;
     let parsed = gltf::Gltf::from_slice(&request.source_bytes)
         .map_err(|error| AssetError::Decode(error.to_string()))?;
     let blob = parsed.blob.as_deref();
-    use base64::Engine as _;
     let mut inline = std::collections::BTreeMap::new();
     for buffer in parsed.buffers() {
-        if let gltf::buffer::Source::Uri(uri) = buffer.source() {
-            if uri.starts_with("data:") {
-                let (_, encoded) = uri.split_once(";base64,").ok_or_else(|| {
-                    AssetError::Decode("embedded glTF buffers must be base64 data URIs".into())
-                })?;
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(encoded)
-                    .map_err(|e| AssetError::Decode(e.to_string()))?;
-                if bytes.len() > MAX_SOURCE_BYTES {
-                    return Err(AssetError::Limit(
-                        "embedded buffer exceeds source limit".into(),
-                    ));
-                }
-                inline.insert(buffer.index(), bytes);
+        if let gltf::buffer::Source::Uri(uri) = buffer.source()
+            && uri.starts_with("data:")
+        {
+            let (_, encoded) = uri.split_once(";base64,").ok_or_else(|| {
+                AssetError::Decode("embedded glTF buffers must be base64 data URIs".into())
+            })?;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .map_err(|e| AssetError::Decode(e.to_string()))?;
+            if bytes.len() > MAX_SOURCE_BYTES {
+                return Err(AssetError::Limit(
+                    "embedded buffer exceeds source limit".into(),
+                ));
             }
+            inline.insert(buffer.index(), bytes);
         }
     }
     let mut meshes = Vec::new();
@@ -542,9 +548,9 @@ fn import_gltf(request: &ImportRequest) -> Result<ModelArtifact, AssetError> {
                             "cubic animation accessor count differs".into(),
                         ));
                     }
-                    let incoming = values.chunks_exact(3).map(|v| v[0]).collect();
-                    let outgoing = values.chunks_exact(3).map(|v| v[2]).collect();
-                    let values = values.chunks_exact(3).map(|v| v[1]).collect();
+                    let incoming = values.as_chunks::<3>().0.iter().map(|v| v[0]).collect();
+                    let outgoing = values.as_chunks::<3>().0.iter().map(|v| v[2]).collect();
+                    let values = values.as_chunks::<3>().0.iter().map(|v| v[1]).collect();
                     (
                         TrackInterpolation::CubicSpline { incoming, outgoing },
                         values,
@@ -575,8 +581,7 @@ fn import_gltf(request: &ImportRequest) -> Result<ModelArtifact, AssetError> {
             let clip = Clip {
                 name: animation
                     .name()
-                    .map(str::to_owned)
-                    .unwrap_or_else(|| format!("Animation{}", animation.index())),
+                    .map_or_else(|| format!("Animation{}", animation.index()), str::to_owned),
                 duration,
                 tracks,
                 markers: Vec::new(),
@@ -800,7 +805,326 @@ fn validate_dependency_uri(uri: &str) -> Result<(), AssetError> {
     validate_asset_relative_path(Path::new(uri))
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "decode FBX meshes, skins, and animation takes from one loaded scene"
+)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "FBX doubles become GPU floats; artifact validation rejects non-finite results"
+)]
+fn import_fbx(request: &ImportRequest) -> Result<ModelArtifact, AssetError> {
+    use engine_core::gameplay::{
+        Ease, Value,
+        animation::{Clip, Keyframe, Track, TrackInterpolation},
+    };
+    let scene = ufbx::load_memory(
+        &request.source_bytes,
+        ufbx::LoadOpts {
+            temp_allocator: ufbx::AllocatorOpts {
+                memory_limit: MAX_SOURCE_BYTES * 2,
+                ..Default::default()
+            },
+            result_allocator: ufbx::AllocatorOpts {
+                memory_limit: MAX_SOURCE_BYTES * 2,
+                ..Default::default()
+            },
+            load_external_files: false,
+            ..Default::default()
+        },
+    )
+    .map_err(|e| AssetError::Decode(format!("{e:?}")))?;
+    let v3 = |v: ufbx::Vec3| [v.x, v.y, v.z];
+    let q4 = |v: ufbx::Quat| [v.x, v.y, v.z, v.w];
+    let nodes = scene
+        .nodes
+        .iter()
+        .map(|n| crate::ModelNode {
+            name: n.element.name.to_string(),
+            parent: n.parent.as_ref().map(|p| p.element.typed_id as usize),
+            translation: v3(n.local_transform.translation),
+            rotation: q4(n.local_transform.rotation),
+            scale: v3(n.local_transform.scale),
+        })
+        .collect();
+    let mut meshes = Vec::new();
+    for mesh in &scene.meshes {
+        if mesh.num_indices > MAX_MESH_ELEMENTS || mesh.num_triangles > MAX_MESH_ELEMENTS / 3 {
+            return Err(AssetError::Limit("FBX mesh exceeds element limit".into()));
+        }
+        let positions = (0..mesh.num_indices)
+            .map(|i| v3(mesh.vertex_position[i]).map(|v| v as f32))
+            .collect::<Vec<_>>();
+        let normals = if mesh.vertex_normal.exists {
+            (0..mesh.num_indices)
+                .map(|i| v3(mesh.vertex_normal[i]).map(|v| v as f32))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let texcoords = if mesh.vertex_uv.exists {
+            (0..mesh.num_indices)
+                .map(|i| {
+                    let v = mesh.vertex_uv[i];
+                    [v.x as f32, v.y as f32]
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut indices = Vec::new();
+        let mut scratch = vec![0; mesh.max_face_triangles * 3];
+        for face in &mesh.faces {
+            let count = ufbx::triangulate_face(&mut scratch, mesh, *face) as usize;
+            indices.extend_from_slice(&scratch[..count * 3]);
+        }
+        validate_mesh(&positions, &normals, &texcoords, &indices)?;
+        let source_node = scene
+            .nodes
+            .iter()
+            .find(|n| {
+                n.mesh
+                    .as_ref()
+                    .is_some_and(|m| m.element.typed_id == mesh.element.typed_id)
+            })
+            .map(|n| n.element.typed_id as usize);
+        let mut joints = Vec::new();
+        let mut weights = Vec::new();
+        let skin = if let Some(deformer) = mesh.skin_deformers.first() {
+            if deformer.clusters.len() > usize::from(u16::MAX) {
+                return Err(AssetError::Limit("FBX joint palette too large".into()));
+            }
+            let palette = deformer
+                .clusters
+                .iter()
+                .map(|c| {
+                    c.bone_node
+                        .as_ref()
+                        .map_or(0, |n| n.element.typed_id as usize)
+                })
+                .collect();
+            let inverse_bind = deformer
+                .clusters
+                .iter()
+                .map(|c| {
+                    let m = c.geometry_to_bone;
+                    [
+                        m.m00 as f32,
+                        m.m10 as f32,
+                        m.m20 as f32,
+                        0.,
+                        m.m01 as f32,
+                        m.m11 as f32,
+                        m.m21 as f32,
+                        0.,
+                        m.m02 as f32,
+                        m.m12 as f32,
+                        m.m22 as f32,
+                        0.,
+                        m.m03 as f32,
+                        m.m13 as f32,
+                        m.m23 as f32,
+                        1.,
+                    ]
+                })
+                .collect();
+            for i in 0..mesh.num_indices {
+                let vertex = &deformer.vertices[mesh.vertex_indices[i] as usize];
+                let mut j = [0; 4];
+                let mut w = [0.; 4];
+                for k in 0..(vertex.num_weights as usize).min(4) {
+                    let weight = &deformer.weights[vertex.weight_begin as usize + k];
+                    j[k] = u16::try_from(weight.cluster_index).map_err(|_| {
+                        AssetError::Limit("FBX joint index exceeds palette limit".into())
+                    })?;
+                    w[k] = weight.weight as f32;
+                }
+                let total: f32 = w.iter().sum();
+                if total > 0.0 {
+                    for v in &mut w {
+                        *v /= total;
+                    }
+                }
+                joints.push(j);
+                weights.push(w);
+            }
+            Some(crate::ModelSkin {
+                joints: palette,
+                inverse_bind,
+            })
+        } else {
+            None
+        };
+        meshes.push(StaticMeshArtifact {
+            material_index: None,
+            source_node,
+            skin,
+            joints,
+            weights,
+            positions,
+            normals,
+            texcoords,
+            indices,
+        });
+    }
+    let mut animations = Vec::new();
+    for stack in &scene.anim_stacks {
+        let baked = ufbx::bake_anim(
+            &scene,
+            &stack.anim,
+            ufbx::BakeOpts {
+                trim_start_time: true,
+                resample_rate: 60.0,
+                maximum_sample_rate: 120.0,
+                max_keyframe_segments: 100_000,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| AssetError::Decode(format!("{e:?}")))?;
+        let mut tracks = Vec::new();
+        for n in &baked.nodes {
+            let convert = |property: &str, keys: Vec<Keyframe>| Track {
+                interpolation: TrackInterpolation::Linear,
+                target: format!("node_{}/{property}", n.typed_id),
+                keys,
+            };
+            if !n.translation_keys.is_empty() {
+                tracks.push(convert(
+                    "Position",
+                    n.translation_keys
+                        .iter()
+                        .map(|k| Keyframe {
+                            time: k.time,
+                            value: Value::Vector(v3(k.value)),
+                            easing: Ease::Linear,
+                        })
+                        .collect(),
+                ));
+            }
+            if !n.rotation_keys.is_empty() {
+                tracks.push(convert(
+                    "Rotation",
+                    n.rotation_keys
+                        .iter()
+                        .map(|k| Keyframe {
+                            time: k.time,
+                            value: Value::Rotation(q4(k.value)),
+                            easing: Ease::Linear,
+                        })
+                        .collect(),
+                ));
+            }
+            if !n.scale_keys.is_empty() {
+                tracks.push(convert(
+                    "Scale",
+                    n.scale_keys
+                        .iter()
+                        .map(|k| Keyframe {
+                            time: k.time,
+                            value: Value::Vector(v3(k.value)),
+                            easing: Ease::Linear,
+                        })
+                        .collect(),
+                ));
+            }
+        }
+        let duration = baked.playback_duration.max(baked.key_time_max);
+        if duration > 0.0 {
+            let clip = Clip {
+                name: stack.element.name.to_string(),
+                duration,
+                tracks,
+                markers: Vec::new(),
+            };
+            clip.validate().map_err(AssetError::Decode)?;
+            animations.push(clip);
+        }
+    }
+    Ok(ModelArtifact {
+        meshes,
+        materials: vec![default_material()],
+        external_dependencies: Vec::new(),
+        animations,
+        nodes,
+    })
+}
+
+/// Loads model sources and validated dependencies from a play snapshot's assets directory.
+/// # Errors
+/// Returns an error for unreadable or invalid models, metadata, or dependencies.
+pub fn load_model_library(
+    root: &Path,
+) -> Result<
+    std::collections::BTreeMap<engine_core::AssetId, (std::path::PathBuf, ModelArtifact)>,
+    AssetError,
+> {
+    fn visit(
+        root: &Path,
+        directory: &Path,
+        out: &mut std::collections::BTreeMap<
+            engine_core::AssetId,
+            (std::path::PathBuf, ModelArtifact),
+        >,
+    ) -> Result<(), AssetError> {
+        if !directory.exists() {
+            return Ok(());
+        }
+        for entry in std::fs::read_dir(directory).map_err(|e| crate::io_error(directory, e))? {
+            let entry = entry.map_err(|e| crate::io_error(directory, e))?;
+            let kind = entry
+                .file_type()
+                .map_err(|e| crate::io_error(entry.path(), e))?;
+            if kind.is_symlink() {
+                continue;
+            }
+            if kind.is_dir() {
+                visit(root, &entry.path(), out)?;
+                continue;
+            }
+            let path = entry.path();
+            let extension = path
+                .extension()
+                .and_then(|v| v.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !matches!(extension.as_str(), "obj" | "gltf" | "glb" | "fbx") {
+                continue;
+            }
+            let metadata = crate::load_meta(&crate::sidecar_path(&path))?;
+            let relative = path
+                .strip_prefix(root)
+                .map_err(|_| AssetError::UnsafePath(path.clone()))?
+                .to_path_buf();
+            let bytes = std::fs::read(&path).map_err(|e| crate::io_error(&path, e))?;
+            let mut request = ImportRequest::new(&relative, bytes);
+            if matches!(extension.as_str(), "gltf" | "glb") {
+                for uri in model_dependencies(&request.source_bytes)? {
+                    let dependency = path
+                        .parent()
+                        .ok_or_else(|| AssetError::UnsafePath(path.clone()))?
+                        .join(&uri);
+                    request.external_bytes.insert(
+                        uri,
+                        std::fs::read(&dependency).map_err(|e| crate::io_error(&dependency, e))?,
+                    );
+                }
+            }
+            if let DerivedArtifact::Model(model) = ImporterRegistry::import(&request)? {
+                out.insert(metadata.asset_id, (relative, model));
+            }
+        }
+        Ok(())
+    }
+    let mut result = std::collections::BTreeMap::new();
+    visit(root, &root.join("assets"), &mut result)?;
+    Ok(result)
+}
+
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
 
@@ -923,307 +1247,4 @@ mod tests {
             Err(AssetError::UnsafePath(_))
         ));
     }
-}
-
-fn import_fbx(request: &ImportRequest) -> Result<ModelArtifact, AssetError> {
-    use engine_core::gameplay::{
-        Ease, Value,
-        animation::{Clip, Keyframe, Track, TrackInterpolation},
-    };
-    let scene = ufbx::load_memory(
-        &request.source_bytes,
-        ufbx::LoadOpts {
-            temp_allocator: ufbx::AllocatorOpts {
-                memory_limit: MAX_SOURCE_BYTES * 2,
-                ..Default::default()
-            },
-            result_allocator: ufbx::AllocatorOpts {
-                memory_limit: MAX_SOURCE_BYTES * 2,
-                ..Default::default()
-            },
-            load_external_files: false,
-            ..Default::default()
-        },
-    )
-    .map_err(|e| AssetError::Decode(format!("{e:?}")))?;
-    let v3 = |v: ufbx::Vec3| [v.x, v.y, v.z];
-    let q4 = |v: ufbx::Quat| [v.x, v.y, v.z, v.w];
-    let nodes = scene
-        .nodes
-        .iter()
-        .map(|n| crate::ModelNode {
-            name: n.element.name.to_string(),
-            parent: n.parent.as_ref().map(|p| p.element.typed_id as usize),
-            translation: v3(n.local_transform.translation),
-            rotation: q4(n.local_transform.rotation),
-            scale: v3(n.local_transform.scale),
-        })
-        .collect();
-    let mut meshes = Vec::new();
-    for mesh in &scene.meshes {
-        if mesh.num_indices > MAX_MESH_ELEMENTS || mesh.num_triangles > MAX_MESH_ELEMENTS / 3 {
-            return Err(AssetError::Limit("FBX mesh exceeds element limit".into()));
-        }
-        let positions = (0..mesh.num_indices)
-            .map(|i| v3(mesh.vertex_position[i]).map(|v| v as f32))
-            .collect::<Vec<_>>();
-        let normals = if mesh.vertex_normal.exists {
-            (0..mesh.num_indices)
-                .map(|i| v3(mesh.vertex_normal[i]).map(|v| v as f32))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let texcoords = if mesh.vertex_uv.exists {
-            (0..mesh.num_indices)
-                .map(|i| {
-                    let v = mesh.vertex_uv[i];
-                    [v.x as f32, v.y as f32]
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let mut indices = Vec::new();
-        let mut scratch = vec![0; mesh.max_face_triangles * 3];
-        for face in &mesh.faces {
-            let count = ufbx::triangulate_face(&mut scratch, mesh, *face) as usize;
-            indices.extend_from_slice(&scratch[..count * 3]);
-        }
-        validate_mesh(&positions, &normals, &texcoords, &indices)?;
-        let source_node = scene
-            .nodes
-            .iter()
-            .find(|n| {
-                n.mesh
-                    .as_ref()
-                    .is_some_and(|m| m.element.typed_id == mesh.element.typed_id)
-            })
-            .map(|n| n.element.typed_id as usize);
-        let mut joints = Vec::new();
-        let mut weights = Vec::new();
-        let skin = if let Some(deformer) = mesh.skin_deformers.first() {
-            if deformer.clusters.len() > usize::from(u16::MAX) {
-                return Err(AssetError::Limit("FBX joint palette too large".into()));
-            }
-            let palette = deformer
-                .clusters
-                .iter()
-                .map(|c| {
-                    c.bone_node
-                        .as_ref()
-                        .map_or(0, |n| n.element.typed_id as usize)
-                })
-                .collect();
-            let inverse_bind = deformer
-                .clusters
-                .iter()
-                .map(|c| {
-                    let m = c.geometry_to_bone;
-                    [
-                        m.m00 as f32,
-                        m.m10 as f32,
-                        m.m20 as f32,
-                        0.,
-                        m.m01 as f32,
-                        m.m11 as f32,
-                        m.m21 as f32,
-                        0.,
-                        m.m02 as f32,
-                        m.m12 as f32,
-                        m.m22 as f32,
-                        0.,
-                        m.m03 as f32,
-                        m.m13 as f32,
-                        m.m23 as f32,
-                        1.,
-                    ]
-                })
-                .collect();
-            for i in 0..mesh.num_indices {
-                let vertex = &deformer.vertices[mesh.vertex_indices[i] as usize];
-                let mut j = [0; 4];
-                let mut w = [0.; 4];
-                for k in 0..(vertex.num_weights as usize).min(4) {
-                    let weight = &deformer.weights[vertex.weight_begin as usize + k];
-                    j[k] = weight.cluster_index as u16;
-                    w[k] = weight.weight as f32;
-                }
-                let total: f32 = w.iter().sum();
-                if total > 0.0 {
-                    for v in &mut w {
-                        *v /= total;
-                    }
-                }
-                joints.push(j);
-                weights.push(w);
-            }
-            Some(crate::ModelSkin {
-                joints: palette,
-                inverse_bind,
-            })
-        } else {
-            None
-        };
-        meshes.push(StaticMeshArtifact {
-            material_index: None,
-            source_node,
-            skin,
-            joints,
-            weights,
-            positions,
-            normals,
-            texcoords,
-            indices,
-        });
-    }
-    let mut animations = Vec::new();
-    for stack in &scene.anim_stacks {
-        let baked = ufbx::bake_anim(
-            &scene,
-            &stack.anim,
-            ufbx::BakeOpts {
-                trim_start_time: true,
-                resample_rate: 60.0,
-                maximum_sample_rate: 120.0,
-                max_keyframe_segments: 100000,
-                ..Default::default()
-            },
-        )
-        .map_err(|e| AssetError::Decode(format!("{e:?}")))?;
-        let mut tracks = Vec::new();
-        for n in &baked.nodes {
-            let convert = |property: &str, keys: Vec<Keyframe>| Track {
-                interpolation: TrackInterpolation::Linear,
-                target: format!("node_{}/{property}", n.typed_id),
-                keys,
-            };
-            if !n.translation_keys.is_empty() {
-                tracks.push(convert(
-                    "Position",
-                    n.translation_keys
-                        .iter()
-                        .map(|k| Keyframe {
-                            time: k.time,
-                            value: Value::Vector(v3(k.value)),
-                            easing: Ease::Linear,
-                        })
-                        .collect(),
-                ));
-            }
-            if !n.rotation_keys.is_empty() {
-                tracks.push(convert(
-                    "Rotation",
-                    n.rotation_keys
-                        .iter()
-                        .map(|k| Keyframe {
-                            time: k.time,
-                            value: Value::Rotation(q4(k.value)),
-                            easing: Ease::Linear,
-                        })
-                        .collect(),
-                ));
-            }
-            if !n.scale_keys.is_empty() {
-                tracks.push(convert(
-                    "Scale",
-                    n.scale_keys
-                        .iter()
-                        .map(|k| Keyframe {
-                            time: k.time,
-                            value: Value::Vector(v3(k.value)),
-                            easing: Ease::Linear,
-                        })
-                        .collect(),
-                ));
-            }
-        }
-        let duration = baked.playback_duration.max(baked.key_time_max);
-        if duration > 0.0 {
-            let clip = Clip {
-                name: stack.element.name.to_string(),
-                duration,
-                tracks,
-                markers: Vec::new(),
-            };
-            clip.validate().map_err(AssetError::Decode)?;
-            animations.push(clip);
-        }
-    }
-    Ok(ModelArtifact {
-        meshes,
-        materials: vec![default_material()],
-        external_dependencies: Vec::new(),
-        animations,
-        nodes,
-    })
-}
-
-/// Loads model sources and validated dependencies from a play snapshot's assets directory.
-pub fn load_model_library(
-    root: &Path,
-) -> Result<
-    std::collections::BTreeMap<engine_core::AssetId, (std::path::PathBuf, ModelArtifact)>,
-    AssetError,
-> {
-    fn visit(
-        root: &Path,
-        directory: &Path,
-        out: &mut std::collections::BTreeMap<
-            engine_core::AssetId,
-            (std::path::PathBuf, ModelArtifact),
-        >,
-    ) -> Result<(), AssetError> {
-        if !directory.exists() {
-            return Ok(());
-        }
-        for entry in std::fs::read_dir(directory).map_err(|e| crate::io_error(directory, e))? {
-            let entry = entry.map_err(|e| crate::io_error(directory, e))?;
-            let kind = entry
-                .file_type()
-                .map_err(|e| crate::io_error(entry.path(), e))?;
-            if kind.is_symlink() {
-                continue;
-            }
-            if kind.is_dir() {
-                visit(root, &entry.path(), out)?;
-                continue;
-            }
-            let path = entry.path();
-            let extension = path
-                .extension()
-                .and_then(|v| v.to_str())
-                .unwrap_or("")
-                .to_ascii_lowercase();
-            if !matches!(extension.as_str(), "obj" | "gltf" | "glb" | "fbx") {
-                continue;
-            }
-            let metadata = crate::load_meta(&crate::sidecar_path(&path))?;
-            let relative = path
-                .strip_prefix(root)
-                .map_err(|_| AssetError::UnsafePath(path.clone()))?
-                .to_path_buf();
-            let bytes = std::fs::read(&path).map_err(|e| crate::io_error(&path, e))?;
-            let mut request = ImportRequest::new(&relative, bytes);
-            if matches!(extension.as_str(), "gltf" | "glb") {
-                for uri in model_dependencies(&request.source_bytes)? {
-                    let dependency = path
-                        .parent()
-                        .ok_or_else(|| AssetError::UnsafePath(path.clone()))?
-                        .join(&uri);
-                    request.external_bytes.insert(
-                        uri,
-                        std::fs::read(&dependency).map_err(|e| crate::io_error(&dependency, e))?,
-                    );
-                }
-            }
-            if let DerivedArtifact::Model(model) = ImporterRegistry::import(&request)? {
-                out.insert(metadata.asset_id, (relative, model));
-            }
-        }
-        Ok(())
-    }
-    let mut result = std::collections::BTreeMap::new();
-    visit(root, &root.join("assets"), &mut result)?;
-    Ok(result)
 }

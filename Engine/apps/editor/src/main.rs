@@ -109,9 +109,13 @@ fn app_icon() -> egui::IconData {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent editor panel and interaction flags are not mutually exclusive states"
+)]
 struct EditorApp {
     document: AuthoringDocument,
-    _project_lock: Option<engine_editor::ProjectLock>,
+    project_lock: Option<engine_editor::ProjectLock>,
     dock: Tree<EditorTab>,
     workspace: EditorWorkspace,
     workspace_path: PathBuf,
@@ -151,6 +155,10 @@ struct EditorApp {
 }
 
 impl EditorApp {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "initialize related editor services and state in their dependency order"
+    )]
     fn new(project: Project, context: &egui::Context) -> Result<Self, String> {
         egui_extras::install_image_loaders(context);
         ui_theme::apply(context);
@@ -211,7 +219,7 @@ impl EditorApp {
         let show_dependency_prompt = !missing_dependencies.is_empty();
         let mut app = Self {
             document,
-            _project_lock: project_lock,
+            project_lock,
             dock,
             workspace,
             workspace_path,
@@ -431,7 +439,7 @@ impl EditorApp {
 
         let selected = self.document.selected();
         let project = self.document.project().clone();
-        let read_only = self._project_lock.is_none();
+        let read_only = self.project_lock.is_none();
         match AuthoringDocument::open(project, read_only) {
             Ok(mut document) => {
                 document.select(selected);
@@ -1200,7 +1208,7 @@ impl EditorApp {
                                 "Opened the dependency installer",
                             ),
                             Err(error) => {
-                                self.log(Severity::Error, "programming.dependencies", error)
+                                self.log(Severity::Error, "programming.dependencies", error);
                             }
                         }
                         self.show_dependency_prompt = false;
@@ -1376,12 +1384,10 @@ impl Behavior<EditorTab> for EditorViewer<'_> {
             EditorTab::Viewport3d => self.viewport(ui, false),
             EditorTab::Viewport2d => self.viewport(ui, true),
             EditorTab::Hierarchy => self.hierarchy(ui),
-            EditorTab::Inspector => self.inspector(ui),
+            EditorTab::Inspector | EditorTab::Settings => self.inspector(ui),
             // Kept as a compatibility fallback for an in-memory legacy dock.
             EditorTab::ContentBrowser => self.project_explorer(ui),
             EditorTab::Console => self.console(ui),
-            // Legacy workspace files can still deserialize this removed pane.
-            EditorTab::Settings => self.inspector(ui),
         }
         UiResponse::None
     }
@@ -1502,7 +1508,7 @@ impl EditorViewer<'_> {
                 let relative = path
                     .strip_prefix("scene")
                     .or_else(|_| path.strip_prefix("scenes"))
-                    .unwrap_or(&path);
+                    .unwrap_or(path);
                 match self.document.insert_scene(relative, None) {
                     Ok(ids) => {
                         self.request_preview = true;
@@ -1518,7 +1524,7 @@ impl EditorViewer<'_> {
                         error.to_string(),
                     )),
                 }
-            } else if is_model_asset(&path) {
+            } else if is_model_asset(path) {
                 if is_2d || self.playing {
                     self.console.push(simple_console(
                         Severity::Warning,
@@ -1532,7 +1538,7 @@ impl EditorViewer<'_> {
                             viewport_ground_position(*self.camera, response.rect, pointer)
                         })
                         .unwrap_or(self.camera.focus);
-                    match import_model_asset(self.project_root, &path).and_then(
+                    match import_model_asset(self.project_root, path).and_then(
                         |(asset_id, model)| {
                             let name = path
                                 .file_stem()
@@ -1561,21 +1567,24 @@ impl EditorViewer<'_> {
                         }
                         Err(error) => {
                             self.console
-                                .push(simple_console(Severity::Error, "assets", error))
+                                .push(simple_console(Severity::Error, "assets", error));
                         }
                     }
                 }
-            } else if ScriptLanguage::from_path(&path).is_some() {
+            } else if ScriptLanguage::from_path(path).is_some() {
                 if let Some(entity) = self.document.selected() {
-                    match attach_script_to_entity(self.document, entity, &path) {
+                    match attach_script_to_entity(self.document, entity, path) {
                         Ok(()) => self.console.push(simple_console(
                             Severity::Info,
                             "programming",
                             format!("Attached {} to selected object", path.display()),
                         )),
                         Err(error) => {
-                            self.console
-                                .push(simple_console(Severity::Error, "programming", error))
+                            self.console.push(simple_console(
+                                Severity::Error,
+                                "programming",
+                                error,
+                            ));
                         }
                     }
                 } else {
@@ -1756,6 +1765,10 @@ impl EditorViewer<'_> {
         self.request_preview = true;
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep translation and scale interaction in one immediate-mode layout"
+    )]
     fn gizmo_overlay(&mut self, ui: &egui::Ui, rect: egui::Rect) {
         let Some(entity) = self.document.selected() else {
             return;
@@ -1908,6 +1921,10 @@ impl EditorViewer<'_> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the rotation overlay needs the viewport projection and selected transform"
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep rotation ring drawing and pointer interaction together"
     )]
     fn rotation_gizmo_overlay(
         &mut self,
@@ -2224,14 +2241,12 @@ impl EditorViewer<'_> {
                         });
                     action = root.inner;
                     if action.is_none() {
-                        action = dropped.as_deref().and_then(|payload| match payload {
+                        action = dropped.as_deref().map(|payload| match payload {
                             ViewportDrop::ProjectFile(path)
-                            | ViewportDrop::ProjectDirectory(path) => {
-                                Some(ProjectFileAction::Move {
-                                    source: path.clone(),
-                                    destination: PathBuf::new(),
-                                })
-                            }
+                            | ViewportDrop::ProjectDirectory(path) => ProjectFileAction::Move {
+                                source: path.clone(),
+                                destination: PathBuf::new(),
+                            },
                         });
                     }
                     if !filter.is_empty() && !project_directory_matches(tree, &filter) {
@@ -2327,6 +2342,10 @@ impl EditorViewer<'_> {
             });
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep conditional inspector controls and their authoring actions together"
+    )]
     fn inspector_contents(&mut self, ui: &mut egui::Ui) {
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
@@ -2348,22 +2367,23 @@ impl EditorViewer<'_> {
         if let Some(live) = self.play.as_ref().and_then(|play| play.live_entity())
             && live.entity_id == entity.to_string()
         {
-            snapshot.name = live.name.clone();
+            snapshot.name.clone_from(&live.name);
             snapshot.local_transform.translation = live.translation.into();
             snapshot.local_transform.rotation = glam::Quat::from_array(live.rotation);
             snapshot.local_transform.scale = live.scale.into();
             snapshot.part_attributes = live.part_attributes;
-            snapshot.scripts = live.scripts.clone();
+            snapshot.scripts.clone_from(&live.scripts);
         }
         let mut name = snapshot.name.clone().unwrap_or_else(|| "Entity".into());
-        if ui.text_edit_singleline(&mut name).changed() && !self.document.is_read_only() {
-            if let Err(error) = self.document.set_name(entity, name) {
-                self.console.push(simple_console(
-                    Severity::Error,
-                    "inspector",
-                    error.to_string(),
-                ));
-            }
+        if ui.text_edit_singleline(&mut name).changed()
+            && !self.document.is_read_only()
+            && let Err(error) = self.document.set_name(entity, name)
+        {
+            self.console.push(simple_console(
+                Severity::Error,
+                "inspector",
+                error.to_string(),
+            ));
         }
         ui.label(
             egui::RichText::new(entity.to_string())
@@ -2412,14 +2432,14 @@ impl EditorViewer<'_> {
             ui.separator();
             ui_theme::section(ui, "Camera", "Game view during Play");
             ui.label("Looks along local +Z. Highest active priority is used.");
-            if ui.button("Align to editor view").clicked() && !self.document.is_read_only() {
-                if self
+            if ui.button("Align to editor view").clicked()
+                && !self.document.is_read_only()
+                && self
                     .document
                     .set_transform(entity, camera_placement(*self.camera))
                     .is_ok()
-                {
-                    self.request_preview = true;
-                }
+            {
+                self.request_preview = true;
             }
             if edit_camera(ui, &mut camera) && !self.document.is_read_only() {
                 match self.document.set_camera(entity, camera) {
@@ -2473,14 +2493,14 @@ impl EditorViewer<'_> {
                     .parent
                     .map_or_else(|| "Scene root".into(), |id| id.to_string())
             ));
-            if attributes_changed && !self.document.is_read_only() {
-                if self
+            if attributes_changed
+                && !self.document.is_read_only()
+                && self
                     .document
                     .set_part_attributes(entity, attributes)
                     .is_ok()
-                {
-                    self.request_preview = true;
-                }
+            {
+                self.request_preview = true;
             }
         }
         if let Some(mut primitive) = snapshot.primitive {
@@ -2714,7 +2734,7 @@ fn projected_rotation_ring(
     rect: egui::Rect,
     radius: f32,
 ) -> Vec<egui::Pos2> {
-    const SEGMENTS: usize = 64;
+    const SEGMENTS: u16 = 64;
     let reference = if axis_world.dot(Vec3::Y).abs() < 0.9 {
         Vec3::Y
     } else {
@@ -2722,9 +2742,9 @@ fn projected_rotation_ring(
     };
     let tangent = axis_world.cross(reference).normalize();
     let bitangent = axis_world.cross(tangent).normalize();
-    let mut points = Vec::with_capacity(SEGMENTS);
+    let mut points = Vec::with_capacity(usize::from(SEGMENTS));
     for index in 0..SEGMENTS {
-        let angle = index as f32 * std::f32::consts::TAU / SEGMENTS as f32;
+        let angle = f32::from(index) * std::f32::consts::TAU / f32::from(SEGMENTS);
         let circle_point = origin_world + tangent * angle.cos() + bitangent * angle.sin();
         let Some(projected) = project_to_rect(view_projection, circle_point, rect) else {
             return Vec::new();
@@ -3124,10 +3144,10 @@ fn light_guide_vertices(light: engine_world::Light, transform: Mat4) -> Vec<[f32
         }
         engine_world::LightKind::Spot => {
             let radius = light.range * light.spot_outer_angle_radians.tan();
-            let segments = 32;
+            let segments = 32u16;
             for index in 0..segments {
-                let a = std::f32::consts::TAU * index as f32 / segments as f32;
-                let b = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+                let a = std::f32::consts::TAU * f32::from(index) / f32::from(segments);
+                let b = std::f32::consts::TAU * f32::from(index + 1) / f32::from(segments);
                 let first = Vec3::new(radius * a.cos(), radius * a.sin(), light.range);
                 let second = Vec3::new(radius * b.cos(), radius * b.sin(), light.range);
                 push_local_line(&mut output, transform, first, second);
@@ -3143,11 +3163,11 @@ fn light_guide_vertices(light: engine_world::Light, transform: Mat4) -> Vec<[f32
             );
         }
         engine_world::LightKind::Point => {
-            let segments = 32;
+            let segments = 32u16;
             for axis in 0..3 {
                 for index in 0..segments {
-                    let a = std::f32::consts::TAU * index as f32 / segments as f32;
-                    let b = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+                    let a = std::f32::consts::TAU * f32::from(index) / f32::from(segments);
+                    let b = std::f32::consts::TAU * f32::from(index + 1) / f32::from(segments);
                     let circle_point = |angle: f32| match axis {
                         0 => Vec3::new(0.0, angle.cos(), angle.sin()) * light.range,
                         1 => Vec3::new(angle.cos(), 0.0, angle.sin()) * light.range,
@@ -4365,7 +4385,7 @@ fn edit_camera(ui: &mut egui::Ui, camera: &mut engine_world::Camera) -> bool {
         } => {
             ui.add(
                 egui::DragValue::new(vertical_size)
-                    .range(0.01..=100000.0)
+                    .range(0.01..=100_000.0)
                     .speed(0.1)
                     .prefix("Vertical size "),
             );
@@ -4380,7 +4400,7 @@ fn edit_camera(ui: &mut egui::Ui, camera: &mut engine_world::Camera) -> bool {
     );
     ui.add(
         egui::DragValue::new(far)
-            .range((*near + 0.001)..=1000000.0)
+            .range((*near + 0.001)..=1_000_000.0)
             .speed(1.0)
             .prefix("Far clip "),
     );
@@ -4415,7 +4435,7 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
     if light.kind != engine_world::LightKind::Directional {
         ui.add(
             egui::DragValue::new(&mut light.range)
-                .range(0.01..=100000.0)
+                .range(0.01..=100_000.0)
                 .speed(0.1)
                 .prefix("Range "),
         );

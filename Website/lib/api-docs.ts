@@ -126,7 +126,7 @@ const docs: Record<string, ApiDoc> = {
     calls: ["rustic.log(level, message, fields?)", "print(...) — Lua and JavaScript info", "warn(...) — Lua and JavaScript warning"],
     parameters: [p("level", "string", true, "debug, info, warn, or error."), p("message", "string", true, "Human-readable diagnostic text."), p("fields", "table / object", false, "Optional structured fields where supported; omit for portability.")],
     returns: "No value. The message is queued for the bounded console sink.",
-    examples: simpleMutationExamples("rustic.log('info', 'player spawned')", "rustic.log(\"info\", \"player spawned\");", "log", "level", "info", "message", "player spawned"),
+    examples: simpleMutationExamples("rustic.log('info', 'player spawned')", "rustic.log(\"info\", \"player spawned\");"),
     notes: ["In Lua and JavaScript, print(...) writes an info entry and warn(...) writes a warning entry to the Rustic Console. Lua separates multiple arguments with tabs; JavaScript separates them with spaces. Use rustic.log for an explicit level. External programs must not print diagnostics to stdout; stdout is reserved for protocol responses.", protocolNote],
   },
   enabled: {
@@ -134,7 +134,7 @@ const docs: Record<string, ApiDoc> = {
     when: "Disable an entity when its behavior should stop after the current callback. Re-enable it from a controlling behavior or editor action. Use a local boolean instead when the entity should remain active.",
     calls: ["rustic.set_enabled(enabled)"], parameters: [p("enabled", "boolean", true, "True to enable; false to disable.")],
     returns: "No value. The change applies after the callback and can trigger enable/disable lifecycle callbacks.",
-    examples: simpleMutationExamples("rustic.set_enabled(false)", "rustic.set_enabled(false);", "set_enabled", "enabled", false), notes: [protocolNote],
+    examples: simpleMutationExamples("rustic.set_enabled(false)", "rustic.set_enabled(false);"), notes: [protocolNote],
   },
   scene: {
     title: "Scene lookup API", summary: "Resolve stable scene paths to entity IDs and list paths in the play snapshot.",
@@ -159,12 +159,12 @@ const docs: Record<string, ApiDoc> = {
     when: "Call when gameplay changes viewpoints—vehicles, players, cutscenes, or returning to the main camera. Do not call every frame when unchanged.",
     calls: ["Game.setCurrentCamera(source)"], parameters: [p("source", "string or camera reference", true, "Stable camera entity ID or scene path.")],
     returns: "No camera object. Selection is queued for the next render.",
-    examples: simpleMutationExamples("Game.setCurrentCamera('Game.scene.Room.Camera')", "Game.setCurrentCamera(\"Game.scene.Room.Camera\");", "set_current_camera", "source", "Game.scene.Room.Camera"),
+    examples: simpleMutationExamples("Game.setCurrentCamera('Game.scene.Room.Camera')", "Game.setCurrentCamera(\"Game.scene.Room.Camera\");"),
     notes: ["The target must resolve to a camera in the play snapshot.", protocolNote],
   },
 };
 
-function simpleMutationExamples(dynamic: string, compiled: string, _op: string, ..._pairs: unknown[]): Record<string, string> {
+function simpleMutationExamples(dynamic: string, compiled: string): Record<string, string> {
   const php = dynamic.replace(/^(rustic|Game|instance)\./, "$$$1->") + ";";
   return { "Lua 5.4": dynamic, JavaScript: dynamic + ";", Python: dynamic.replace("false", "False"),
     "C++": compiled, "C#": compiled, Luau: dynamic, C: compiled, Java: compiled, PHP: php,

@@ -284,7 +284,7 @@ mod tests {
             mounts
                 .resolve_write(&path)
                 .unwrap()
-                .starts_with(directory.path())
+                .starts_with(directory.path().canonicalize().unwrap())
         );
     }
 

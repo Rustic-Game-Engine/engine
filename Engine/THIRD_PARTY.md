@@ -26,3 +26,13 @@ license policy on the complete transitive graph.
 
 Development-only `tempfile` is used for isolated persistence and corruption fixtures
 and is not an engine runtime API.
+## Dependency maintenance exceptions
+
+`cargo deny` continues to check vulnerabilities, yanked versions, sources, and
+licenses. Two maintenance-only advisories are temporarily excepted by ID in
+`deny.toml`: `RUSTSEC-2026-0206` (`rustybuzz`) and `RUSTSEC-2026-0192`
+(`ttf-parser`). Both arrive through the `resvg`/`usvg`/`fontdb` SVG loaders used
+by the editor and runtime. The current compatible upstream releases still use
+them, and neither advisory has a fixed version. Remove these exceptions when
+the SVG dependency chain migrates to maintained font parsing and shaping crates.
+Other advisories for these packages remain enforced.

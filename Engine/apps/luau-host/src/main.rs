@@ -50,17 +50,34 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             out.flush().map_err(mlua::Error::external)
         })?,
     )?;
-    lua.globals().set("__rustic_query",lua.create_function(|lua,message:Value| {
-        let message:serde_json::Value=lua.from_value(message)?;
-        let mut out=std::io::stdout().lock();
-        serde_json::to_writer(&mut out,&message).map_err(mlua::Error::external)?;
-        out.write_all(b"\n").and_then(|()|out.flush()).map_err(mlua::Error::external)?;drop(out);
-        let mut line=String::new();std::io::stdin().read_line(&mut line).map_err(mlua::Error::external)?;
-        if line.len()>1024*1024{return Err(mlua::Error::external("query response exceeds 1 MiB"))}
-        let response:serde_json::Value=serde_json::from_str(&line).map_err(mlua::Error::external)?;
-        if let Some(error)=response.get("error").and_then(serde_json::Value::as_str){return Err(mlua::Error::external(error.to_owned()))}
-        lua.to_value_with(&response["result"],mlua::SerializeOptions::new().serialize_none_to_null(false))
-    })?)?;
+    lua.globals().set(
+        "__rustic_query",
+        lua.create_function(|lua, message: Value| {
+            let message: serde_json::Value = lua.from_value(message)?;
+            let mut out = std::io::stdout().lock();
+            serde_json::to_writer(&mut out, &message).map_err(mlua::Error::external)?;
+            out.write_all(b"\n")
+                .and_then(|()| out.flush())
+                .map_err(mlua::Error::external)?;
+            drop(out);
+            let mut line = String::new();
+            std::io::stdin()
+                .read_line(&mut line)
+                .map_err(mlua::Error::external)?;
+            if line.len() > 1024 * 1024 {
+                return Err(mlua::Error::external("query response exceeds 1 MiB"));
+            }
+            let response: serde_json::Value =
+                serde_json::from_str(&line).map_err(mlua::Error::external)?;
+            if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
+                return Err(mlua::Error::external(error.to_owned()));
+            }
+            lua.to_value_with(
+                &response["result"],
+                mlua::SerializeOptions::new().serialize_none_to_null(false),
+            )
+        })?,
+    )?;
     lua.sandbox(true)?;
     let environment = lua.create_table()?;
     let metatable = lua.create_table()?;
@@ -73,14 +90,17 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     .exec()?;
     script.set_environment(environment.clone())?;
     environment.set("__rustic_load", script)?;
-    lua.load(include_str!("../../../crates/engine-scripting/src/sdk/gameplay.lua"))
-        .set_environment(environment.clone())
-        .exec()?;
+    lua.load(include_str!(
+        "../../../crates/engine-scripting/src/sdk/gameplay.lua"
+    ))
+    .set_environment(environment.clone())
+    .exec()?;
     let invoke: Function = environment.get("__rustic_invoke")?;
     let input = std::io::stdin();
     loop {
         let mut line = Vec::new();
-        if input.lock()
+        if input
+            .lock()
             .by_ref()
             .take(1024 * 1024 + 1)
             .read_until(b'\n', &mut line)?

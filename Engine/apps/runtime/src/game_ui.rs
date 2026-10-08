@@ -1,4 +1,5 @@
 use resvg::{tiny_skia, usvg};
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -45,6 +46,10 @@ impl GameUi {
         Ok(Self { tree: Some(tree) })
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen dimensions are bounded by GPU texture limits and converted to float layout coordinates"
+    )]
     pub fn composite_rgba(&self, width: u32, height: u32, target: &mut [u8]) -> Result<(), String> {
         let Some(tree) = &self.tree else {
             return Ok(());
@@ -56,13 +61,17 @@ impl GameUi {
             &mut overlay.as_mut(),
         );
         for (dst, src) in target
-            .chunks_exact_mut(4)
-            .zip(overlay.data().chunks_exact(4))
+            .as_chunks_mut::<4>()
+            .0
+            .iter_mut()
+            .zip(overlay.data().as_chunks::<4>().0.iter())
         {
             let a = u16::from(src[3]);
             for channel in 0..3 {
-                dst[channel] = ((u16::from(src[channel]) * a + u16::from(dst[channel]) * (255 - a))
-                    / 255) as u8;
+                dst[channel] = u8::try_from(
+                    (u16::from(src[channel]) * a + u16::from(dst[channel]) * (255 - a)) / 255,
+                )
+                .unwrap_or(u8::MAX);
             }
         }
         Ok(())
@@ -127,21 +136,32 @@ fn html_to_svg(html: &str, css: &str) -> String {
         let tag = rest[..end].trim().to_ascii_lowercase();
         rest = &rest[end + 1..];
         if !text.trim().is_empty() {
-            svg.push_str(&format!(r#"<text x="20" y="{}" fill="{}" font-family="sans-serif" font-size="18">{}</text>"#,y,escape(color),escape(text.trim())));
+            let _ = write!(
+                svg,
+                r#"<text x="20" y="{}" fill="{}" font-family="sans-serif" font-size="18">{}</text>"#,
+                y,
+                escape(color),
+                escape(text.trim())
+            );
             y += 28;
         }
         if tag.starts_with("button") || tag.starts_with("input") {
-            svg.push_str(&format!(r##"<rect x="16" y="{}" width="180" height="32" rx="5" fill="#334155" stroke="#94a3b8"/>"##,y-23));
+            let _ = write!(
+                svg,
+                r##"<rect x="16" y="{}" width="180" height="32" rx="5" fill="#334155" stroke="#94a3b8"/>"##,
+                y - 23
+            );
         }
     }
     let tail = strip_tags(rest);
     if !tail.trim().is_empty() {
-        svg.push_str(&format!(
+        let _ = write!(
+            svg,
             r#"<text x="20" y="{}" fill="{}" font-family="sans-serif" font-size="18">{}</text>"#,
             y,
             escape(color),
             escape(tail.trim())
-        ));
+        );
     }
     svg.push_str("</svg>");
     svg

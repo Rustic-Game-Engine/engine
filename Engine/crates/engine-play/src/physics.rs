@@ -93,6 +93,10 @@ impl PhysicsWorld {
             .insert(id, glam::DVec3::from_array(velocity).as_vec3());
         Ok(())
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep sweep, contact resolution, and transform updates in their integration order"
+    )]
     pub fn step(&mut self, world: &mut SceneWorld, delta: f64) -> Result<(), WorldError> {
         if !delta.is_finite() || delta <= 0.0 {
             return Ok(());
@@ -127,6 +131,10 @@ impl PhysicsWorld {
             });
         }
         // Bound large caller intervals; normal runtime steps are 1/60 second.
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "finite positive delta is clamped to 0.1 before converting to simulation precision"
+        )]
         let dt = delta.min(0.1) as f32 / 4.0;
         for _ in 0..4 {
             for body in &mut bodies {
@@ -260,7 +268,7 @@ fn sweep(a: &Body, b: &Body) -> Option<(f32, Vec3)> {
         }
         exit = exit.min(t1.max(t2));
     }
-    (enter >= 0.0 && enter <= 1.0 && enter <= exit).then_some((enter, normal))
+    ((0.0..=1.0).contains(&enter) && enter <= exit).then_some((enter, normal))
 }
 
 fn bounds(primitive: &Primitive) -> (Vec3, Vec3) {
@@ -303,6 +311,10 @@ fn bounds(primitive: &Primitive) -> (Vec3, Vec3) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::field_reassign_with_default,
+    reason = "fixtures start from defaults and vary only the authored values under test"
+)]
 mod tests {
     use super::*;
     use engine_world::{EntitySnapshot, LocalTransform};

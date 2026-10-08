@@ -24,12 +24,9 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let root = match find_project_root(&project_root) {
-        Some(root) => root,
-        _ => {
-            eprintln!("The supplied folder is not a readable Rustic project");
-            std::process::exit(2);
-        }
+    let Some(root) = find_project_root(&project_root) else {
+        eprintln!("The supplied folder is not a readable Rustic project");
+        std::process::exit(2);
     };
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -143,13 +140,10 @@ fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
                 engine_scripting::write_agent_information(&path, content)
                     .map_err(|error| error.to_string())?;
                 Ok(json!({"written":relative(&agent_root, &path)}))
+            } else if mapped == "list_files" {
+                call_tool(&agent_root, mapped, &json!({}))
             } else {
-                let result = if mapped == "list_files" {
-                    call_tool(&agent_root, mapped, &json!({}))
-                } else {
-                    call_tool(&agent_root, mapped, args)
-                };
-                result
+                call_tool(&agent_root, mapped, args)
             }
         }
         "list_files" => {
@@ -223,6 +217,10 @@ fn scene_summary(root: &Path, value: &str) -> Result<Value, String> {
 }
 
 fn safe_path(root: &Path, relative_path: &str, allow_missing: bool) -> Result<PathBuf, String> {
+    // Unix would otherwise treat Windows drive paths as local filenames.
+    if relative_path.contains('\\') || relative_path.contains(':') {
+        return Err("path must use relative slash-separated components".into());
+    }
     let relative_path = Path::new(relative_path);
     if relative_path.is_absolute()
         || relative_path.components().any(|part| {
@@ -357,7 +355,7 @@ mod tests {
     fn agent_tools_read_write_list_and_reject_escapes() {
         let temp = tempfile::tempdir().unwrap();
         let project = Project::create(
-            &temp.path().join("game"),
+            temp.path().join("game"),
             "Agent test",
             engine_project::ProjectTemplate::Blank,
         )
@@ -393,14 +391,22 @@ mod tests {
                 .any(|value| value.as_str().unwrap().ends_with("behavior.md"))
         );
         assert!(!root.join("notes/behavior.md").exists());
-        for path in ["../other/AGENTS.md", "C:/outside.md", ".git/config"] {
+        for path in [
+            "../other/AGENTS.md",
+            "C:/outside.md",
+            "C:\\outside.md",
+            "..\\other\\AGENTS.md",
+            "//server/share/outside.md",
+            ".git/config",
+        ] {
             assert!(
                 call_tool(
                     &root,
                     "write_agent_file",
                     &json!({"path":path,"content":"bad"})
                 )
-                .is_err()
+                .is_err(),
+                "accepted {path}"
             );
         }
         assert!(call_tool(&root, "list_agent_files", &json!({"scope":"other"})).is_err());

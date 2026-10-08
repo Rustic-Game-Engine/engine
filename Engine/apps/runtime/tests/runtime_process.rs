@@ -18,6 +18,10 @@ fn native_runtime_windows_render_scene_and_reap() {
     verify_play_modes(true);
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep the complete integration fixture and assertions together"
+)]
 fn verify_play_modes(native_windows: bool) {
     let executable = Path::new(env!("CARGO_BIN_EXE_rustic-runtime"));
     for mode in [PlayMode::Play, PlayMode::NewWindow, PlayMode::Standalone] {
@@ -49,6 +53,8 @@ fn verify_play_modes(native_windows: bool) {
                 primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
                 part_attributes: engine_world::PartAttributes {
                     color: [1.0, 0.02, 0.02, 1.0],
+                    // Keep gravity from creating unrelated changes in this control test.
+                    anchored: true,
                     ..engine_world::PartAttributes::default()
                 },
                 ..engine_world::EntitySnapshot::default()
@@ -86,7 +92,7 @@ fn verify_play_modes(native_windows: bool) {
                 mode,
                 SnapshotInput::new("scenes/main.rscene", source_bytes.clone()),
                 &[
-                    SnapshotInput::new("settings.json", br#"{}"#.to_vec()),
+                    SnapshotInput::new("settings.json", br"{}".to_vec()),
                     SnapshotInput::new("config/scripts.ron", manifest_bytes),
                     SnapshotInput::new(
                         "scripts/main.lua",

@@ -72,7 +72,7 @@ mod tests {
     #[test]
     fn settings_without_autosave_use_the_enabled_default() {
         let temp = tempfile::tempdir().unwrap();
-        std::fs::write(temp.path().join(GAME_SETTINGS_FILE), br#"{}"#).unwrap();
+        std::fs::write(temp.path().join(GAME_SETTINGS_FILE), br"{}").unwrap();
 
         assert!(GameSettings::load(temp.path()).unwrap().autosave);
     }

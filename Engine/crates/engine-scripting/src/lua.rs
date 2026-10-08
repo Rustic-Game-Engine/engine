@@ -330,14 +330,13 @@ impl LuaBehavior {
         self.budget_remaining
             .store(self.instruction_budget, Ordering::Relaxed);
         let result = (|| {
-            if canonical == "Update" {
-                if let Some(dispatch) = self
+            if canonical == "Update"
+                && let Some(dispatch) = self
                     .lua
                     .globals()
                     .get::<Option<Function>>("__rustic_gameplay_dispatch")?
-                {
-                    dispatch.call::<()>(())?;
-                }
+            {
+                dispatch.call::<()>(())?;
             }
             let table: Table = self.lua.registry_value(&self.behavior)?;
             let callback = table
@@ -413,7 +412,7 @@ fn object_proxy(
                         host.edit_object_attribute(
                             &source,
                             &name,
-                            lua_attribute_value(value, current)?,
+                            lua_attribute_value(value, current.as_ref())?,
                         )
                         .map_err(MluaError::RuntimeError)
                     },
@@ -542,7 +541,7 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
     let edit_attribute = lua.create_function(move |_, (name, value): (String, Value)| {
         let mut host = lock_host(&h)?;
         let current = host.attribute(&name).map_err(MluaError::RuntimeError)?;
-        host.edit_attribute(&name, lua_attribute_value(value, current)?)
+        host.edit_attribute(&name, lua_attribute_value(value, current.as_ref())?)
             .map_err(MluaError::RuntimeError)
     })?;
     api.set("edit_attribute", edit_attribute.clone())?;
@@ -559,8 +558,12 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
             let current = host
                 .object_attribute(&source, &name)
                 .map_err(MluaError::RuntimeError)?;
-            host.edit_object_attribute(&source, &name, lua_attribute_value(value, current)?)
-                .map_err(MluaError::RuntimeError)
+            host.edit_object_attribute(
+                &source,
+                &name,
+                lua_attribute_value(value, current.as_ref())?,
+            )
+            .map_err(MluaError::RuntimeError)
         })?,
     )?;
     let scene = lua.create_table()?;
@@ -775,7 +778,7 @@ fn engine_to_lua(lua: &Lua, value: Option<EngineValue>) -> mlua::Result<Value> {
         }
     })
 }
-fn lua_attribute_value(value: Value, current: Option<EngineValue>) -> mlua::Result<EngineValue> {
+fn lua_attribute_value(value: Value, current: Option<&EngineValue>) -> mlua::Result<EngineValue> {
     match current {
         Some(EngineValue::Vec3(_)) => {
             let Value::Table(table) = value else {
@@ -834,6 +837,10 @@ fn runtime_error(error: &impl ToString) -> LuaRuntimeError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;

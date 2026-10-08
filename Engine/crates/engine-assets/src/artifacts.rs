@@ -119,6 +119,8 @@ pub struct ModelArtifact {
 
 impl ModelArtifact {
     /// Validate the hierarchy and skin palette before binding or rendering.
+    /// # Errors
+    /// Returns an error for invalid transforms, hierarchy, skin palettes, or size limits.
     pub fn validate(&self) -> Result<(), crate::AssetError> {
         let invalid = |message: &str| crate::AssetError::Decode(message.into());
         if self.nodes.len() > 65_536 || self.animations.len() > 4096 {
