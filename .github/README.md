@@ -50,7 +50,7 @@ deterministic checks and does not guarantee correctness or security.
 ## Require checks before merging
 
 For both `main` and `work`, configure a branch ruleset or branch protection to
-require `Required checks` and `GPT-6 Luna review`, and require the branch to be
+require `Required checks`, `GPT-6 Luna review`, and `GPT-6 Luna full sweep`, and require the branch to be
 up to date before merging. The AI commit status is needed because
 `pull_request_target` workflow check runs attach to the trusted base commit.
 Do not substitute the similarly named workflow check for the head commit status.
@@ -64,6 +64,48 @@ either one. They must also be installed on any additional target branch for
 the privileged review to run there. Changes to trusted review tooling should be
 reviewed by a maintainer. Merge queues run deterministic CI and AI review on the
 merge group; the AI job uses trusted base-branch tooling for this event too.
+
+## Full repository sweep
+
+`full-review.yml` runs when `Code quality and security` completes, including
+failed runs, for pull requests, branch pushes, manual CI runs, and merge groups.
+The quick diff review is a separate result; a clean diff review does not mean
+the complete repository or CI passed.
+
+The sweep reads all tracked UTF-8 text files at the exact target commit,
+including unchanged code, tests, documentation, configuration, and dependency
+lockfiles. It partitions complete numbered source lines into bounded batches and
+uses `gpt-6-luna` with high reasoning effort. Shared complete files supply the
+installer, manifests, architecture, and repository requirements to every batch.
+It checks normal behavior, failure/recovery paths, cache and version interactions,
+security, missing tests, and repository validation requirements. Existing bugs
+can appear in findings even when the PR did not change their files.
+
+CI job results and failed step names must match the reviewed SHA. A successful
+Windows installer job counts as evidence of a build, while CI failures make the
+overall sweep fail even if the AI found no blocking code issue. Pending or absent
+CI evidence keeps the sweep status pending. Medium/low concerns remain visible;
+high/critical concerns fail the sweep. All code concerns and the CI results appear
+in a separate PR comment, the run summary, the console log, and the
+`gpt-6-luna-full-sweep` artifact.
+
+The coverage artifact lists text files reviewed, omitted binary/non-UTF-8 or
+sensitive files, generated-file exclusions, and completed/total batch counts.
+Generated outputs are excluded as in the diff review. Actual `.env` files and
+private-key/certificate containers are not sent to the model; the secret scanner
+checks credentials. The maximum source budget is 10 MB and 64 batches. Oversized
+source lines, unsupported submodules, API errors, or unfinished batches fail the
+sweep rather than claiming full coverage. Binary assets require separate review.
+The sweep makes multiple API requests and costs more than a diff-only review.
+Even complete text coverage cannot guarantee that Luna finds every bug.
+
+The privileged job checks out only trusted sweep tooling. It reads Git blobs as
+data and uses GitHub job metadata; it never executes PR source or downloads CI
+artifacts as executable inputs. After changing trusted tooling, test an existing
+PR from the Actions tab by running `GPT-6 Luna full sweep` on `main` or `work`
+and setting `pr_number` to the PR number. Leave it blank to review the selected
+branch commit. Review source and requirements are treated as data, not executable
+instructions.
 
 ## Local validation
 
