@@ -75,7 +75,7 @@ class ReviewTests(unittest.TestCase):
         self.assertEqual((diff, names), (compact.decode(), {"file.rs"}))
         expanded, fallback = git.call_args_list[2:4]
         self.assertIn("--unified=30", expanded.args)
-        self.assertIn("--unified=5", fallback.args)
+        self.assertIn("--unified=3", fallback.args)
         self.assertEqual(
             [arg for arg in expanded.args if not arg.startswith("--unified=")],
             [arg for arg in fallback.args if not arg.startswith("--unified=")],
