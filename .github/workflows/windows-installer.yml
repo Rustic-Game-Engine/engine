@@ -22,6 +22,14 @@ jobs:
         working-directory: Engine
     steps:
       - uses: actions/checkout@v4
+        with:
+          filter: blob:none
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /Engine/
+            !/Engine/target*/
+            !/Engine/.tools/
+            !/Engine/dist/
       - name: Build Windows installer
         run: ./tools/build-windows-installer.ps1
       - name: Upload installer
