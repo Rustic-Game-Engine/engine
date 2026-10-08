@@ -153,7 +153,11 @@ def collect_sources(head):
         selected.append((path, oid))
     if selected:
         # Partial-clone blob hydration is batched; credentials stay ephemeral.
-        ai.git("fetch", "--no-tags", "--filter=blob:none", "origin", *sorted({oid for _, oid in selected}), env=env)
+        # Match Git's own promisor fetch: ordinary fetch connectivity checks
+        # assume commit refs and fail when the requested objects are blobs.
+        blob_env = dict(env, GIT_CONFIG_COUNT="2", GIT_CONFIG_KEY_1="fetch.negotiationAlgorithm", GIT_CONFIG_VALUE_1="noop")
+        ids = "\n".join(sorted({oid for _, oid in selected})) + "\n"
+        ai.git("fetch", "origin", "--no-tags", "--no-write-fetch-head", "--recurse-submodules=no", "--filter=blob:none", "--stdin", env=blob_env, input_bytes=ids.encode())
     sources, source_bytes = {}, 0
     for path, oid in selected:
         data = ai.git("cat-file", "blob", oid, env=env)

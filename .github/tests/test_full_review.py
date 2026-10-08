@@ -73,6 +73,8 @@ class FullReviewTests(unittest.TestCase):
         self.assertEqual([call.args[0] for call in git.call_args_list], ["ls-tree", "fetch", "cat-file"])
         self.assertNotIn("-l", git.call_args_list[0].args)
         self.assertNotIn("b" * 40, git.call_args_list[1].args)
+        self.assertNotIn("b" * 40, git.call_args_list[1].kwargs["input_bytes"].decode())
+        self.assertIn("a" * 40, git.call_args_list[1].kwargs["input_bytes"].decode())
 
     @patch.object(full.ai, "review")
     def test_sweep_uses_high_effort_full_sources_and_allows_existing_findings(self, review):
