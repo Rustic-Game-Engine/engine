@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -71,6 +72,47 @@ class ReviewTests(unittest.TestCase):
         self.assertIn("--no-ext-diff", args)
         self.assertIn("--no-textconv", args)
         self.assertIn("c" * 40, args)
+        # Partial clones may lazily fetch blobs while computing a diff.
+        for call in git.call_args_list:
+            self.assertIn("GIT_CONFIG_VALUE_0", call.kwargs["env"])
+
+    def test_manual_run_reads_real_parent_in_shallow_partial_checkout(self):
+        previous_directory = os.getcwd()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source"
+            checkout = root / "checkout"
+
+            def run(*args, cwd=source):
+                return subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True).stdout.strip()
+
+            source.mkdir()
+            run("init")
+            run("config", "user.name", "Review test")
+            run("config", "user.email", "test@example.invalid")
+            run("config", "uploadpack.allowFilter", "true")
+            (source / ".github").mkdir()
+            (source / ".github" / "tool.txt").write_text("trusted tooling\n")
+            (source / "example.rs").write_text("old code\n")
+            run("add", ".")
+            run("commit", "-m", "base")
+            base = run("rev-parse", "HEAD")
+            (source / "example.rs").write_text("new code\n")
+            run("commit", "-am", "head")
+            head = run("rev-parse", "HEAD")
+            run("clone", "--depth=1", "--filter=blob:none", "--sparse", source.as_uri(), str(checkout), cwd=root)
+            run("sparse-checkout", "set", ".github", cwd=checkout)
+            try:
+                os.chdir(checkout)
+                with patch.dict(os.environ, {"GITHUB_SHA": head, "GH_TOKEN": "test-token"}):
+                    actual_base, actual_head = review.commits({}, "workflow_dispatch")
+                    self.assertEqual((actual_base, actual_head), (base, head))
+                    diff, files = review.collect_diff(actual_base, actual_head, False)
+                self.assertEqual(files, {"example.rs"})
+                self.assertIn("+new code", diff)
+                self.assertIn("-old code", diff)
+            finally:
+                os.chdir(previous_directory)
 
     @patch.object(review.urllib.request, "urlopen")
     def test_api_errors_never_reveal_response_body_or_key(self, urlopen):
