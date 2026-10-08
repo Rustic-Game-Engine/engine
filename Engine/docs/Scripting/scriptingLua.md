@@ -197,9 +197,9 @@ failing callback is disabled until the script is fixed and reloaded or Play rest
 
 ## Isolation and failures
 
-Lua cannot directly call a JavaScript or external-process behavior. API 1.0 does not
-yet expose the scheduler's Engine Event `emit`/`subscribe` surface to scripts, so use
-shared engine state for cross-language coordination.
+Lua cannot directly call another behavior's VM object. API 1.1 adds shared
+`Events.on`, `once`, `emit`, and object signals across every supported script type. See
+[Shared gameplay actions](gameplayActions.md) for payloads and lifetime rules.
 
 Lua cannot access `io`, `os`, `package`, `debug`, `dofile`, `loadfile`, `require`,
 or `collectgarbage`. It has no filesystem, network, process, registry, or editor
@@ -216,3 +216,10 @@ Lua owner and path-based `EditAttribute` calls accept three-number tables for
 Position, Size, and RGB Color; Parent accepts a stable entity ID string or `nil`.
 Vectors require exactly three finite components. These conversions apply to built-in
 attributes; script public-property setters retain their existing value rules.
+
+## Shared gameplay actions
+
+API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedural
+animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
+See [Shared gameplay actions](gameplayActions.md) for attachment, native call
+conventions, duration/speed options, callbacks, scene-clock controls and backend limits.

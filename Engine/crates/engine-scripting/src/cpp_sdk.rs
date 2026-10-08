@@ -8,7 +8,9 @@ pub(crate) const HEADER: &str = r#"#pragma once
 #include <functional>
 #include <iostream>
 #include <map>
+#include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <variant>
@@ -40,7 +42,8 @@ class Parser {
     unsigned hex4(){unsigned value=0;for(int i=0;i<4;++i){char c=take();unsigned digit=c>='0'&&c<='9'?unsigned(c-'0'):c>='a'&&c<='f'?unsigned(c-'a'+10):c>='A'&&c<='F'?unsigned(c-'A'+10):16;if(digit>15)throw std::runtime_error("invalid Unicode escape");value=value*16+digit;}return value;}
     static void utf8(std::string& out,unsigned v){if(v<128)out+=char(v);else if(v<2048){out+=char(0xc0|(v>>6));out+=char(0x80|(v&63));}else if(v<65536){out+=char(0xe0|(v>>12));out+=char(0x80|((v>>6)&63));out+=char(0x80|(v&63));}else{out+=char(0xf0|(v>>18));out+=char(0x80|((v>>12)&63));out+=char(0x80|((v>>6)&63));out+=char(0x80|(v&63));}}
     std::string string(){
-        if(take()!='\"') throw std::runtime_error("expected JSON string"); std::string out;
+        if(take()!='\"') throw std::runtime_error("expected JSON string");
+        std::string out;
         while(true){ char c=take(); if(c=='\"') return out; if(c!='\\'){ out+=c; continue; }
             c=take(); switch(c){case '\"':out+='\"';break;case '\\':out+='\\';break;case '/':out+='/';break;
             case 'b':out+='\b';break;case 'f':out+='\f';break;case 'n':out+='\n';break;case 'r':out+='\r';break;case 't':out+='\t';break;
@@ -59,10 +62,12 @@ public: explicit Parser(const std::string& input):text(input){} Value parse(){au
 };
 inline std::string escape(const std::string& value){std::string out="\"";for(char c:value){switch(c){case '\"':out+="\\\"";break;case '\\':out+="\\\\";break;case '\n':out+="\\n";break;case '\r':out+="\\r";break;case '\t':out+="\\t";break;default:if(static_cast<unsigned char>(c)<32){const char* hex="0123456789abcdef";out+="\\u00";out+=hex[(static_cast<unsigned char>(c)>>4)&15];out+=hex[static_cast<unsigned char>(c)&15];}else out+=c;}}return out+'\"';}
 inline std::string dump(const Value& v){
-    if(v.is_null())return "null"; if(auto p=std::get_if<bool>(&v.data))return *p?"true":"false";
+    if(v.is_null())return "null";
+    if(auto p=std::get_if<bool>(&v.data))return *p?"true":"false";
     if(auto p=std::get_if<std::int64_t>(&v.data))return std::to_string(*p);
     if(auto p=std::get_if<double>(&v.data)){if(!std::isfinite(*p))throw std::runtime_error("non-finite number");char b[64];auto result=std::to_chars(b,b+sizeof b,*p,std::chars_format::general,std::numeric_limits<double>::max_digits10);if(result.ec!=std::errc{})throw std::runtime_error("number conversion failed");return std::string(b,result.ptr);}
-    if(auto p=std::get_if<std::string>(&v.data))return escape(*p); if(auto p=std::get_if<Value::Array>(&v.data)){std::string s="[";for(std::size_t i=0;i<p->size();++i)s+=(i?",":"")+dump((*p)[i]);return s+"]";}
+    if(auto p=std::get_if<std::string>(&v.data))return escape(*p);
+    if(auto p=std::get_if<Value::Array>(&v.data)){std::string s="[";for(std::size_t i=0;i<p->size();++i)s+=(i?",":"")+dump((*p)[i]);return s+"]";}
     std::string s="{";std::size_t i=0;for(auto& [k,x]:std::get<Value::Object>(v.data))s+=(i++?",":"")+escape(k)+":"+dump(x);return s+"}";
 }
 inline Value object(std::initializer_list<std::pair<const std::string,Value>> values){return Value::Object(values);}
@@ -87,6 +92,11 @@ class RusticApi {
     static RusticActionState action(const RusticValue* v){if(!v)return {};auto& o=v->object();return {o.at("pressed").boolean(),o.at("released").boolean(),o.at("held").boolean(),o.at("axis").number()};}
 public:
     ObjectPath game{&commands};
+    RusticValue query(RusticValue request){std::cout<<rustic_detail::dump(rustic_detail::object({{"query",std::move(request)},{"commands",*commands}}))<<std::endl;commands->clear();std::string line;if(!std::getline(std::cin,line))throw std::runtime_error("query host exited");auto response=rustic_detail::Parser(line).parse();auto& object=response.object();if(auto error=object.find("error");error!=object.end())throw std::runtime_error(error->second.string());return response.at("result");}
+    void gameplay(RusticValue request){commands->push_back(rustic_detail::object({{"op","gameplay"},{"request",std::move(request)}}));}
+    RusticValue gameplay_connections()const{return state->at("gameplay_connections");}
+    RusticValue gameplay_states()const{return state->at("gameplay_states");}
+    RusticValue gameplay_callbacks()const{return state->at("gameplay_callbacks");}
     std::string entity_id() const{return state->at("entity_id").string();} double delta_time() const{return state->at("delta_time").number();} double fixed_delta_time() const{return state->at("fixed_delta_time").number();}
     RusticVector3 get_translation() const{auto&a=state->at("translation").array();return{a[0].number(),a[1].number(),a[2].number()};}
     void set_translation(double x,double y,double z){commands->push_back(rustic_detail::object({{"op","set_translation"},{"value",RusticValue::Array{x,y,z}}}));}
@@ -100,6 +110,197 @@ public:
 class InstanceApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;void push(const char*op,const std::string&s,const std::optional<std::string>&p){commands->push_back(rustic_detail::object({{"op",op},{"source",s},{"parent",p?RusticValue(*p):RusticValue()}}));}public:void add(const std::string&s,std::optional<std::string>p={}){push("add_instance",s,p);}void clone(const std::string&s,std::optional<std::string>p={}){push("clone_instance",s,p);}};
 class SceneApi {friend int rustic_run(const struct RusticBehavior&);const RusticValue*state=nullptr;public:std::optional<std::string> Find(const std::string&p)const{auto&o=state->object();auto i=o.find(p);return i==o.end()?std::nullopt:std::optional(i->second.string());}std::vector<std::string> List(const std::string&p="Game.scene")const{std::vector<std::string>r;std::string prefix=p=="Game.scene"?"":p+".";for(auto&[n,v]:state->object())if(prefix.empty()||n.starts_with(prefix))r.push_back(v.string());return r;}};
 class GameApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;public:SceneApi scene;void setCurrentCamera(const std::string&source){commands->push_back(rustic_detail::object({{"op","set_current_camera"},{"source",source}}));}}; inline RusticApi rustic; inline InstanceApi instance; inline GameApi Game;
+namespace Gameplay {
+struct Handle;
+inline std::map<std::string,std::shared_ptr<Handle>> handles;
+inline std::size_t serial=0;
+inline std::map<std::string,std::function<void(const RusticValue::Array&)>> callbacks;
+inline std::map<std::string,bool> once;
+inline std::set<std::string> connections;
+inline std::string callback(std::function<void(const RusticValue::Array&)> fn,bool single=false){auto id="callback-"+std::to_string(++serial);callbacks[id]=std::move(fn);once[id]=single;return id;}
+inline void collect(const RusticValue& action,std::vector<std::string>& tokens){if(!std::holds_alternative<RusticValue::Object>(action.data))return;auto& a=action.object();for(auto key:{"token","marker_token"}){if(auto i=a.find(key);i!=a.end()&&!i->second.is_null())tokens.push_back(i->second.string());}if(auto i=a.find("actions");i!=a.end())for(auto& c:i->second.array())collect(c,tokens);}
+
+struct OperationInfo{std::string status;std::optional<std::string> error;};
+struct Handle {
+    std::optional<OperationInfo> state(){auto result=rustic.query(rustic_detail::object({{"op","operation_state"},{"handle",id}}));if(result.is_null())return std::nullopt;auto& r=result.object();return OperationInfo{r.at("status").string(),r.at("error").is_null()?std::nullopt:std::optional(r.at("error").string())};}
+    std::string id;std::function<void()> finished;std::vector<std::string> tokens;std::map<std::string,std::function<void()>> markers;
+    void release(){for(auto&t:tokens){callbacks.erase(t);once.erase(t);}handles.erase(id);}
+    Handle& onMarker(const std::string& name,std::function<void()> fn){markers[name]=std::move(fn);return *this;}
+    Handle& speed(double value){rustic.gameplay(rustic_detail::object({{"command","speed"},{"handle",id},{"speed",value}}));return *this;}
+    Handle& loop(bool value=true){rustic.gameplay(rustic_detail::object({{"command","loop"},{"handle",id},{"looping",value}}));return *this;}
+    Handle& stop(){return cancel();}
+    Handle& onFinished(std::function<void()> fn){finished=std::move(fn);return *this;}
+    Handle& control(const char* command){rustic.gameplay(rustic_detail::object({{"command",command},{"handle",id}}));if(std::string(command)=="cancel")release();return *this;}
+    Handle& pause(){return control("pause");}Handle& resume(){return control("resume");}Handle& cancel(){return control("cancel");}Handle& reverse(){return control("reverse");}
+};
+inline std::string entity(const std::string& id){if(id.empty())return rustic.entity_id();return Game.scene.Find(id).value_or(id);}
+inline std::shared_ptr<Handle> start(RusticValue action,bool looping=false,int repeats=0,bool pingPong=false){
+    auto h=std::make_shared<Handle>();h->id="gameplay-"+std::to_string(++serial);handles[h->id]=h;collect(action,h->tokens);
+    rustic.gameplay(rustic_detail::object({{"command","start"},{"handle",h->id},{"action",std::move(action)},{"on_finished",h->id},{"playback",rustic_detail::object({{"looping",looping},{"repeats",repeats},{"ping_pong",pingPong}})}}));return h;
+}
+inline void dispatch(){
+    auto active=rustic.gameplay_connections();std::set<std::string> live;for(auto&v:active.array())live.insert(v.string());auto previousConnections=connections;for(auto&token:previousConnections)if(!live.contains(token)){callbacks.erase(token);once.erase(token);connections.erase(token);}
+    auto existing=handles;
+    auto deliveries=rustic.gameplay_callbacks();
+    for(auto&d:deliveries.array()){
+        auto id=d.at("token").string();auto found=handles.find(id);
+        if(found!=handles.end()){auto h=found->second;h->release();if(h->finished)h->finished();}
+        else if(auto cb=callbacks.find(id);cb!=callbacks.end()){auto fn=cb->second;if(once[id]){callbacks.erase(id);once.erase(id);}fn(d.at("arguments").array());}
+    }
+    std::map<std::string,std::string> states;
+    auto snapshots=rustic.gameplay_states();
+    for(auto&s:snapshots.array())states[s.at("handle").string()]=s.at("status").string();
+    for(auto&[id,h]:existing){auto found=states.find(id);if(found==states.end()||found->second=="failed"||found->second=="cancelled")h->release();}
+}
+}
+namespace Timer {inline auto after(double delay,std::function<void()> fn){auto h=Gameplay::start(rustic_detail::object({{"kind","wait"},{"duration",delay}}));h->onFinished(std::move(fn));return h;}}
+namespace Tween {
+inline RusticValue action(const std::string& entity,const std::string& property,RusticValue to,double duration,const std::string& easing="Linear"){
+    return rustic_detail::object({{"kind","tween"},{"target",rustic_detail::object({{"entity",Gameplay::entity(entity)},{"property",property}})},{"to",std::move(to)},{"duration",duration},{"easing",easing}});
+}
+inline std::shared_ptr<Gameplay::Handle> to(const std::string&e,const std::string&p,RusticValue value,double duration,const std::string&easing="Linear"){return Gameplay::start(action(e,p,std::move(value),duration,easing));}
+inline std::shared_ptr<Gameplay::Handle> move(const std::string&e,RusticVector3 p,double d,const std::string& ease="Linear"){return to(e,"Position",RusticValue::Array{p.x,p.y,p.z},d,ease);}
+}
+namespace Movement {inline auto moveTo(const std::string&e,RusticVector3 p,double d,const std::string&ease="Linear"){return Tween::move(e,p,d,ease);}}
+namespace Animation{RusticValue action(const std::string&,const std::string&,double,const std::string&);}
+namespace Sequence {
+struct Builder {RusticValue::Array actions;Builder& move(const std::string&e,RusticVector3 p,double d,const std::string&ease="Linear"){actions.push_back(Tween::action(e,"Position",RusticValue::Array{p.x,p.y,p.z},d,ease));return *this;}Builder& to(const std::string&e,const std::string&p,RusticValue value,double d,const std::string&ease="Linear"){actions.push_back(Tween::action(e,p,std::move(value),d,ease));return *this;}
+    Builder& call(std::function<void()> fn){actions.push_back(rustic_detail::object({{"kind","callback"},{"token",Gameplay::callback([fn=std::move(fn)](auto&){fn();},true)}}));return *this;}
+    Builder& animation(const std::string&e,const std::string&name,double blendIn=0,const std::string&ease="Linear"){actions.push_back(Animation::action(e,name,blendIn,ease));return *this;}
+    Builder& parallel(const std::vector<Builder>& branches){RusticValue::Array children;for(auto&b:branches)children.push_back(rustic_detail::object({{"kind","sequence"},{"actions",b.actions}}));actions.push_back(rustic_detail::object({{"kind","parallel"},{"actions",children}}));return *this;}
+    Builder& wait(double duration){actions.push_back(rustic_detail::object({{"kind","wait"},{"duration",duration}}));return *this;}auto play(){return Gameplay::start(rustic_detail::object({{"kind","sequence"},{"actions",actions}}));}};
+inline Builder create(){return {};}
+}
+namespace Timeline=Sequence;
+namespace Ease {
+inline const std::string Linear="Linear";
+inline const std::string InSine="InSine";
+inline const std::string OutSine="OutSine";
+inline const std::string InOutSine="InOutSine";
+inline const std::string InQuad="InQuad";
+inline const std::string OutQuad="OutQuad";
+inline const std::string InOutQuad="InOutQuad";
+inline const std::string InCubic="InCubic";
+inline const std::string OutCubic="OutCubic";
+inline const std::string InOutCubic="InOutCubic";
+inline const std::string InQuart="InQuart";
+inline const std::string OutQuart="OutQuart";
+inline const std::string InOutQuart="InOutQuart";
+inline const std::string InQuint="InQuint";
+inline const std::string OutQuint="OutQuint";
+inline const std::string InOutQuint="InOutQuint";
+inline const std::string InExpo="InExpo";
+inline const std::string OutExpo="OutExpo";
+inline const std::string InOutExpo="InOutExpo";
+inline const std::string InCirc="InCirc";
+inline const std::string OutCirc="OutCirc";
+inline const std::string InOutCirc="InOutCirc";
+inline const std::string InBack="InBack";
+inline const std::string OutBack="OutBack";
+inline const std::string InOutBack="InOutBack";
+inline const std::string InElastic="InElastic";
+inline const std::string OutElastic="OutElastic";
+inline const std::string InOutElastic="InOutElastic";
+inline const std::string InBounce="InBounce";
+inline const std::string OutBounce="OutBounce";
+inline const std::string InOutBounce="InOutBounce";
+}
+
+struct MotionOptions{std::optional<double> duration,speed;std::string easing="Linear";};
+namespace Tween{
+inline auto to(const std::string&e,const std::string&p,RusticValue value,const MotionOptions&opts){if(opts.duration.has_value()==opts.speed.has_value())throw std::invalid_argument("choose duration or speed");auto a=rustic_detail::object({{"kind","tween"},{"target",rustic_detail::object({{"entity",Gameplay::entity(e)},{"property",p}})},{"to",std::move(value)},{"easing",opts.easing},{"duration",opts.duration?RusticValue(*opts.duration):RusticValue()},{"speed",opts.speed?RusticValue(*opts.speed):RusticValue()}});return Gameplay::start(a);}
+inline auto rotate(const std::string&e,std::array<double,4> r,double d,const std::string&ease="Linear"){return to(e,"Rotation",RusticValue::Array{r[0],r[1],r[2],r[3]},d,ease);}
+inline auto scale(const std::string&e,RusticVector3 p,double d,const std::string&ease="Linear"){return to(e,"Scale",RusticValue::Array{p.x,p.y,p.z},d,ease);}
+inline auto value(RusticValue from,RusticValue to,double duration,std::function<void(RusticValue)> sample,const std::string&easing="Linear"){auto token=Gameplay::callback([fn=std::move(sample)](auto&args){fn(args[0]);});return Gameplay::start(rustic_detail::object({{"kind","value"},{"from",std::move(from)},{"to",std::move(to)},{"duration",duration},{"easing",easing},{"token",token}}));}
+}
+namespace Movement{inline auto moveTo(const std::string&e,RusticVector3 p,const MotionOptions&opts){return Tween::to(e,"Position",RusticValue::Array{p.x,p.y,p.z},opts);}}
+namespace Smooth {
+inline RusticValue lerp(RusticValue a,RusticValue b,double t,const std::string& easing="Linear"){return rustic.query(rustic_detail::object({{"op","lerp"},{"from",std::move(a)},{"to",std::move(b)},{"progress",t},{"easing",easing}}));}
+inline RusticValue slerp(RusticValue a,RusticValue b,double t,const std::string& easing="Linear"){return rustic.query(rustic_detail::object({{"op","slerp"},{"from",std::move(a)},{"to",std::move(b)},{"progress",t},{"easing",easing}}));}
+inline double inverseLerp(double a,double b,double v){return rustic.query(rustic_detail::object({{"op","inverse_lerp"},{"from",a},{"to",b},{"value",v}})).number();}
+inline double remap(double v,double a,double b,double c,double d){return rustic.query(rustic_detail::object({{"op","remap"},{"value",v},{"in_min",a},{"in_max",b},{"out_min",c},{"out_max",d}})).number();}
+inline std::pair<double,double> smoothDamp(double c,double t,double v,double time,double delta){auto result=rustic.query(rustic_detail::object({{"op","smooth_damp"},{"current",c},{"target",t},{"velocity",v},{"smooth_time",time},{"delta",delta}}));return {result.at("value").number(),result.at("velocity").number()};}
+}
+namespace Interpolation=Smooth;
+namespace Physics{
+struct Hit{std::string entity;RusticVector3 point,normal;double distance;};
+inline RusticValue vec(RusticVector3 p){return RusticValue::Array{p.x,p.y,p.z};}
+inline RusticVector3 vector(const RusticValue& v){auto&a=v.array();return {a[0].number(),a[1].number(),a[2].number()};}
+inline std::optional<Hit> sphereCast(RusticVector3 origin,RusticVector3 direction,double distance,double radius=0){auto r=rustic.query(rustic_detail::object({{"op","physics_sphere_cast"},{"origin",vec(origin)},{"direction",vec(direction)},{"distance",distance},{"radius",radius}}));if(r.is_null())return {};return Hit{r.at("entity").string(),vector(r.at("point")),vector(r.at("normal")),r.at("distance").number()};}
+inline auto raycast(RusticVector3 o,RusticVector3 d,double distance){return sphereCast(o,d,distance);}
+inline std::vector<std::string> overlap(RusticVector3 center,double radius){auto r=rustic.query(rustic_detail::object({{"op","physics_overlap"},{"center",vec(center)},{"radius",radius}}));std::vector<std::string> out;for(auto&v:r.array())out.push_back(v.string());return out;}
+inline void impulse(const std::string&e,RusticVector3 vector){rustic.query(rustic_detail::object({{"op","physics_impulse"},{"entity",Gameplay::entity(e)},{"vector",vec(vector)}}));}
+inline void launch(const std::string&e,RusticVector3 vector){rustic.query(rustic_detail::object({{"op","physics_launch"},{"entity",Gameplay::entity(e)},{"vector",vec(vector)}}));}
+inline void force(const std::string&e,RusticVector3 vector,double delta){rustic.query(rustic_detail::object({{"op","physics_force"},{"entity",Gameplay::entity(e)},{"vector",vec(vector)},{"delta",delta}}));}
+inline void knockback(const std::string&e,RusticVector3 v){impulse(e,v);}
+inline RusticValue explosion(RusticVector3 center,double radius,double strength){return rustic.query(rustic_detail::object({{"op","physics_explosion"},{"center",vec(center)},{"radius",radius},{"strength",strength}}));}
+}
+namespace Movement{
+inline auto move(const std::string&e,RusticVector3 offset,double duration,const std::string& easing="Linear"){return Gameplay::start(rustic_detail::object({{"kind","move"},{"entity",Gameplay::entity(e)},{"offset",Physics::vec(offset)},{"duration",duration},{"easing",easing}}));}
+inline auto rotateTo(const std::string&e,std::array<double,4> r,double d,const std::string& ease="Linear"){return Tween::to(e,"Rotation",RusticValue::Array{r[0],r[1],r[2],r[3]},d,ease);}
+inline auto lookAt(const std::string&e,RusticVector3 position,double duration,const std::string& easing="Linear"){return Gameplay::start(rustic_detail::object({{"kind","look_at"},{"entity",Gameplay::entity(e)},{"position",Physics::vec(position)},{"duration",duration},{"easing",easing}}));}
+inline auto follow(const std::string&e,const std::string&target,double duration,const std::string& easing="Linear",RusticVector3 offset={0,0,0}){return Gameplay::start(rustic_detail::object({{"kind","follow"},{"entity",Gameplay::entity(e)},{"target",Gameplay::entity(target)},{"offset",Physics::vec(offset)},{"duration",duration},{"easing",easing}}));}
+inline auto orbit(const std::string&e,RusticVector3 center,double radius,double turns,double duration,const std::string& easing="Linear"){return Gameplay::start(rustic_detail::object({{"kind","orbit"},{"entity",Gameplay::entity(e)},{"center",Physics::vec(center)},{"radius",radius},{"turns",turns},{"duration",duration},{"easing",easing}}));}
+}
+namespace Effects{
+inline auto fade(const std::string&e,double opacity,double d,const std::string& ease="Linear"){return Tween::to(e,"Opacity",opacity,d,ease);}
+inline auto flash(const std::string&e,RusticVector3 color,double d,const std::string& ease="Linear"){return Gameplay::start(Tween::action(e,"Color",Physics::vec(color),d,ease),false,1,true);}
+inline auto pulse(const std::string&e,RusticVector3 scale,double d,const std::string& ease="Linear"){return Gameplay::start(Tween::action(e,"Scale",Physics::vec(scale),d,ease),false,1,true);}
+inline auto shake(const std::string&e,double strength,double duration,const std::string& easing="Linear"){return Gameplay::start(rustic_detail::object({{"kind","shake"},{"entity",Gameplay::entity(e)},{"strength",strength},{"duration",duration},{"easing",easing}}));}
+}
+namespace Clock{inline void timeScale(double v){rustic.query(rustic_detail::object({{"op","clock"},{"scale",v}}));}inline void pause(){rustic.query(rustic_detail::object({{"op","clock"},{"paused",true}}));}inline void resume(){rustic.query(rustic_detail::object({{"op","clock"},{"paused",false}}));}}
+namespace Camera{inline std::string current(){return rustic.query(rustic_detail::object({{"op","camera_current"}})).string();}
+using Movement::moveTo;using Movement::follow;using Movement::lookAt;using Movement::orbit;using Effects::shake;
+inline auto zoom(const std::string&e,double f,double d,const std::string& ease="Linear"){return Tween::to(e,"Fov",f,d,ease);}
+inline auto fov(const std::string&e,double f,double d,const std::string& ease="Linear"){return zoom(e,f,d,ease);}
+inline auto transition(const std::string&e,RusticVector3 p,std::array<double,4> r,double f,double d,const std::string& ease="Linear"){return Gameplay::start(rustic_detail::object({{"kind","parallel"},{"actions",RusticValue::Array{Tween::action(e,"Position",Physics::vec(p),d,ease),Tween::action(e,"Rotation",RusticValue::Array{r[0],r[1],r[2],r[3]},d,ease),Tween::action(e,"Fov",f,d,ease)}}}));}
+}
+namespace Path{
+struct Point{RusticVector3 point;std::string easing="Linear";};
+struct Curve{RusticValue value;};
+inline Curve create(const std::vector<Point>& points,const std::string& kind="Linear"){RusticValue::Array values;for(auto&p:points)values.push_back(rustic_detail::object({{"point",Physics::vec(p.point)},{"easing",p.easing}}));return {rustic_detail::object({{"kind",kind},{"points",values}})};}
+inline auto follow(const std::string&e,const Curve&path,double duration,const std::string&easing="Linear",bool loop=false,bool pingPong=false,bool orientToPath=false){return Gameplay::start(rustic_detail::object({{"kind","path"},{"entity",Gameplay::entity(e)},{"path",path.value},{"duration",duration},{"easing",easing},{"orient_to_path",orientToPath}}),loop,0,pingPong);}
+inline auto followSpeed(const std::string&e,const Curve&path,double speed,const std::string&easing="Linear",bool loop=false,bool pingPong=false,bool orientToPath=false){return Gameplay::start(rustic_detail::object({{"kind","path"},{"entity",Gameplay::entity(e)},{"path",path.value},{"speed",speed},{"easing",easing},{"orient_to_path",orientToPath}}),loop,0,pingPong);}
+}
+namespace Timer{inline auto every(double interval,std::function<void()> fn,std::optional<int> count={}){if(interval<=0||(count&&*count<1))throw std::invalid_argument("positive interval/count required");auto token=Gameplay::callback([fn=std::move(fn)](auto&){fn();});return Gameplay::start(rustic_detail::object({{"kind","sequence"},{"actions",RusticValue::Array{rustic_detail::object({{"kind","wait"},{"duration",interval}}),rustic_detail::object({{"kind","callback"},{"token",token}})}}}),!count,count?*count-1:0);}}
+namespace Audio{
+struct Voice{std::string id;void stop(){rustic.query(rustic_detail::object({{"op","audio_stop"},{"entity",id}}));}void pause(){rustic.query(rustic_detail::object({{"op","audio_pause"},{"entity",id}}));}void resume(){rustic.query(rustic_detail::object({{"op","audio_resume"},{"entity",id}}));}};
+inline Voice play(const std::string&source,double volume=1,double pitch=1,bool loop=false){return {rustic.query(rustic_detail::object({{"op","audio_play"},{"source",source},{"volume",volume},{"pitch",pitch},{"loop",loop}})).string()};}
+inline Voice playAt(const std::string&source,RusticVector3 position,double volume=1,double pitch=1,bool loop=false){return {rustic.query(rustic_detail::object({{"op","audio_play"},{"source",source},{"position",Physics::vec(position)},{"volume",volume},{"pitch",pitch},{"loop",loop}})).string()};}
+inline void volume(const Voice&v,double value){rustic.query(rustic_detail::object({{"op","audio_volume"},{"entity",v.id},{"value",value}}));}inline void pitch(const Voice&v,double value){rustic.query(rustic_detail::object({{"op","audio_pitch"},{"entity",v.id},{"value",value}}));}
+inline auto fadeIn(const Voice&v,double d,const std::string&ease="Linear"){auto a=Tween::action(v.id,"Volume",1,d,ease);std::get<RusticValue::Object>(a.data)["from"]=0;return Gameplay::start(a);}
+inline auto fadeOut(const Voice&v,double d,const std::string&ease="Linear"){return Tween::to(v.id,"Volume",0,d,ease);}
+inline auto crossfade(const Voice&a,const Voice&b,double d,const std::string&ease="Linear"){auto fade=Tween::action(b.id,"Volume",1,d,ease);std::get<RusticValue::Object>(fade.data)["from"]=0;return Gameplay::start(rustic_detail::object({{"kind","parallel"},{"actions",RusticValue::Array{Tween::action(a.id,"Volume",0,d,ease),fade}}}));}
+}
+namespace Events{
+struct Connection{std::string token;void disconnect(){Gameplay::connections.erase(token);Gameplay::callbacks.erase(token);Gameplay::once.erase(token);rustic.gameplay(rustic_detail::object({{"command","disconnect"},{"token",token}}));}};
+inline Connection connect(const std::string&source,const std::string&name,std::function<void(const RusticValue::Array&)> fn,bool once=false){auto token=Gameplay::callback(std::move(fn),once);Gameplay::connections.insert(token);rustic.gameplay(rustic_detail::object({{"command","connect"},{"token",token},{"signal",rustic_detail::object({{"name",name},{"source",source.empty()?RusticValue():RusticValue(Gameplay::entity(source))}})},{"once",once}}));return {token};}
+inline auto on(const std::string&name,std::function<void(const RusticValue::Array&)> fn){return connect("",name,std::move(fn));}
+inline auto once(const std::string&name,std::function<void(const RusticValue::Array&)> fn){return connect("",name,std::move(fn),true);}
+inline void emit(const std::string&name,RusticValue::Array arguments={},const std::string&source=""){rustic.gameplay(rustic_detail::object({{"command","emit"},{"signal",rustic_detail::object({{"name",name},{"source",source.empty()?RusticValue():RusticValue(Gameplay::entity(source))}})},{"arguments",std::move(arguments)}}));}
+inline void disconnect(Connection& c){c.disconnect();}
+}
+namespace Animation{
+struct Options{double speed=1,blendIn=0,blendOut=0,weight=1;std::string easing="Linear";std::optional<std::string> blendInEase,blendOutEase,progressionEase;bool loop=false,additive=false;std::vector<std::string> mask;};
+struct Key{double time;RusticValue value;std::string easing="Linear";};struct Track{std::string target;std::vector<Key> keys;};struct Marker{double time;std::string name;};struct Clip{std::string name;double duration;std::vector<Track> tracks;std::vector<Marker> markers;};
+inline RusticValue clipValue(const Clip& clip){RusticValue::Array tracks,markers;for(auto&t:clip.tracks){RusticValue::Array keys;for(auto&k:t.keys)keys.push_back(rustic_detail::object({{"time",k.time},{"value",k.value},{"easing",k.easing}}));tracks.push_back(rustic_detail::object({{"target",t.target},{"keys",keys}}));}for(auto&m:clip.markers)markers.push_back(rustic_detail::object({{"time",m.time},{"name",m.name}}));return rustic_detail::object({{"name",clip.name},{"duration",clip.duration},{"tracks",tracks},{"markers",markers}});}
+inline auto value(const std::vector<Key>&keys,std::function<void(const RusticValue&)> sample){RusticValue::Array wire;for(auto&k:keys)wire.push_back(rustic_detail::object({{"time",k.time},{"value",k.value},{"easing",k.easing}}));auto token=Gameplay::callback([sample](auto&args){sample(args[0]);});return Gameplay::start(rustic.query(rustic_detail::object({{"op","keyframes"},{"keys",wire},{"token",token}})));}
+inline void addMarker(const std::string&e,const std::string&clip,double time,const std::string&name){rustic.query(rustic_detail::object({{"op","animation_marker"},{"entity",Gameplay::entity(e)},{"clip",clip},{"time",time},{"name",name}}));}
+inline void registerClip(const std::string&e,const Clip&clip){rustic.query(rustic_detail::object({{"op","animation_register"},{"entity",Gameplay::entity(e)},{"clip",clipValue(clip)}}));}
+inline RusticValue load(const std::string&e,const std::string&source){return rustic.query(rustic_detail::object({{"op","animation_load"},{"entity",Gameplay::entity(e)},{"source",source}}));}
+inline RusticValue clips(const std::string&e){return rustic.query(rustic_detail::object({{"op","animation_list"},{"entity",Gameplay::entity(e)}}));}
+inline RusticValue action(const std::string&e,const std::string&name,const Options&opts={}){RusticValue::Array mask;for(auto&m:opts.mask)mask.push_back(m);auto clip=rustic.query(rustic_detail::object({{"op","animation_ref"},{"entity",Gameplay::entity(e)},{"name",name}}));return rustic_detail::object({{"kind","animation_ref"},{"entity",Gameplay::entity(e)},{"clip",clip},{"mask",mask},{"options",rustic_detail::object({{"speed",opts.speed},{"blend_in",opts.blendIn},{"blend_out",opts.blendOut},{"blend_in_ease",opts.blendInEase.value_or(opts.easing)},{"blend_out_ease",opts.blendOutEase.value_or(opts.easing)},{"progression_ease",opts.progressionEase?RusticValue(*opts.progressionEase):RusticValue()},{"weight",opts.weight},{"additive",opts.additive},{"layered",!opts.mask.empty()}})}});}
+inline RusticValue action(const std::string&e,const std::string&name,double blendIn,const std::string&ease){Options opts;opts.blendIn=blendIn;opts.easing=ease;return action(e,name,opts);}
+inline auto play(const std::string&e,const std::string&name,const Options&opts={}){auto weak=std::make_shared<std::weak_ptr<Gameplay::Handle>>();auto token=Gameplay::callback([weak](auto&args){if(auto h=weak->lock()){auto found=h->markers.find(args[0].string());if(found!=h->markers.end())found->second();}});auto a=action(e,name,opts);std::get<RusticValue::Object>(a.data)["marker_token"]=token;auto h=Gameplay::start(a,opts.loop);*weak=h;return h;}
+inline auto blend(const std::string&e,const std::string&from,const std::string&to,double duration,const std::string&easing="Linear"){Options opts;opts.blendIn=duration;opts.easing=easing;auto a=action(e,to,opts);std::get<RusticValue::Object>(a.data)["blend_source"]=rustic.query(rustic_detail::object({{"op","animation_ref"},{"entity",Gameplay::entity(e)},{"name",from}}));return Gameplay::start(a);}
+inline auto transition(const std::string&e,const std::string&from,const std::string&to,double duration,const std::string&easing="Linear"){return blend(e,from,to,duration,easing);}
+inline void stop(const std::shared_ptr<Gameplay::Handle>&h){h->cancel();}inline void pause(const std::shared_ptr<Gameplay::Handle>&h){h->pause();}inline void speed(const std::shared_ptr<Gameplay::Handle>&h,double v){h->speed(v);}inline void loop(const std::shared_ptr<Gameplay::Handle>&h,bool v=true){h->loop(v);}
+inline auto ik(const std::string&root,const std::string&middle,const std::string&tip,RusticVector3 target,double duration=0,const std::string&easing="Linear",double weight=1,RusticVector3 pole={0,0,1}){return Gameplay::start(rustic.query(rustic_detail::object({{"op","animation_ik"},{"root",Gameplay::entity(root)},{"middle",Gameplay::entity(middle)},{"tip",Gameplay::entity(tip)},{"target",Physics::vec(target)},{"duration",duration},{"easing",easing},{"weight",weight},{"pole",Physics::vec(pole)}})));}
+inline auto footPlacement(const std::string&r,const std::string&m,const std::string&t,RusticVector3 target,double d=0,const std::string&e="Linear"){return ik(r,m,t,target,d,e);}
+inline auto lookAt(const std::string&e,RusticVector3 target,double duration=0,const std::string&ease="Linear"){return Movement::lookAt(e,target,duration,ease);}
+inline auto headTracking(const std::string&e,RusticVector3 target,double d=0,const std::string&ease="Linear"){return Movement::lookAt(e,target,d,ease);}
+inline auto recoil(const std::string&e,std::array<double,4> r,double d,const std::string&ease="Linear"){return Gameplay::start(Tween::action(e,"Rotation",RusticValue::Array{r[0],r[1],r[2],r[3]},d,ease),false,1,true);}
+}
 struct RusticBehavior {std::function<void()> on_create={},on_start={},on_enable={},on_disable={},on_destroy={},on_stop={};std::function<void(double)> fixed_update={},update={};};
-inline int rustic_run(const RusticBehavior& b){std::string line;while(std::getline(std::cin,line)){try{auto state=rustic_detail::Parser(line).parse();std::vector<RusticValue> commands;rustic.state=&state;rustic.commands=&commands;instance.commands=&commands;Game.commands=&commands;Game.scene.state=&state.at("scene_paths");auto cb=state.at("callback").string();double d=state.at("delta").is_null()?0:state.at("delta").number();if(cb=="on_create"&&b.on_create)b.on_create();else if(cb=="on_start"&&b.on_start)b.on_start();else if(cb=="on_enable"&&b.on_enable)b.on_enable();else if(cb=="on_disable"&&b.on_disable)b.on_disable();else if(cb=="fixed_update"&&b.fixed_update)b.fixed_update(d);else if(cb=="update"&&b.update)b.update(d);else if(cb=="on_destroy"&&b.on_destroy)b.on_destroy();else if(cb=="on_stop"&&b.on_stop)b.on_stop();std::cout<<rustic_detail::dump(rustic_detail::object({{"format_version",1},{"commands",commands}}))<<std::endl;}catch(const std::exception&e){std::cerr<<"Rustic C++ SDK: "<<e.what()<<std::endl;return 1;}}return 0;}
+inline int rustic_run(const RusticBehavior& b){std::string line;while(std::getline(std::cin,line)){try{auto state=rustic_detail::Parser(line).parse();std::vector<RusticValue> commands;rustic.state=&state;rustic.commands=&commands;instance.commands=&commands;Game.commands=&commands;Game.scene.state=&state.at("scene_paths");auto cb=state.at("callback").string();double d=state.at("delta").is_null()?0:state.at("delta").number();if(cb=="update")Gameplay::dispatch();if(cb=="on_create"&&b.on_create)b.on_create();else if(cb=="on_start"&&b.on_start)b.on_start();else if(cb=="on_enable"&&b.on_enable)b.on_enable();else if(cb=="on_disable"&&b.on_disable)b.on_disable();else if(cb=="fixed_update"&&b.fixed_update)b.fixed_update(d);else if(cb=="update"&&b.update)b.update(d);else if(cb=="on_destroy"&&b.on_destroy)b.on_destroy();else if(cb=="on_stop"&&b.on_stop)b.on_stop();std::cout<<rustic_detail::dump(rustic_detail::object({{"format_version",1},{"commands",commands}}))<<std::endl;}catch(const std::exception&e){std::cerr<<"Rustic C++ SDK: "<<e.what()<<std::endl;return 1;}}return 0;}
 "#;

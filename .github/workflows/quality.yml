@@ -1,0 +1,218 @@
+name: Code quality and security
+
+on:
+  pull_request:
+  push:
+    branches: [main, work]
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine:
+    name: Engine (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: Engine
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev
+      - name: Install repository-pinned Rust toolchain
+        run: rustup show active-toolchain
+      - name: Check formatting
+        run: |
+          cargo fmt --all --check
+          cargo fmt --manifest-path apps/luau-host/Cargo.toml --check
+      - name: Clippy (warnings are errors)
+        if: ${{ !cancelled() }}
+        run: |
+          cargo clippy --locked --workspace --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path apps/luau-host/Cargo.toml --all-targets -- -D warnings
+      - name: Build bundled Luau host
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
+      - name: Unit, integration, and documentation tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo test --locked --workspace
+          cargo test --locked --manifest-path apps/luau-host/Cargo.toml
+      - name: Check all targets
+        if: ${{ !cancelled() }}
+        run: cargo check --locked --workspace --all-targets
+      - name: Headless application smoke tests
+        if: ${{ !cancelled() }}
+        run: |
+          cargo run --locked -p rustic-project-manager -- --headless-smoke
+          cargo run --locked -p rustic-editor -- --headless-smoke
+          if cargo run --locked -p rustic-project-manager -- --headless-smoke-fail; then
+            echo 'The deliberate failure smoke test unexpectedly succeeded.' >&2
+            exit 1
+          fi
+
+  rust-security:
+    name: Rust dependency security and licenses
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Engine
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - run: rustup show active-toolchain
+      - run: cargo install cargo-deny --locked --version 0.20.2
+      - run: cargo deny --locked check --hide-inclusion-graph
+      - name: Audit standalone Luau host dependencies
+        working-directory: Engine/apps/luau-host
+        run: cargo deny --locked check --config ../../deny.toml --hide-inclusion-graph
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Scan Git history for credentials
+        run: |
+          go install github.com/zricethezav/gitleaks/v8@v8.24.3
+          "$(go env GOPATH)/bin/gitleaks" git --redact --no-banner
+
+  website:
+    name: Website lint, types, build, and dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: Website
+    env:
+      NEXT_TELEMETRY_DISABLED: '1'
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci
+      - run: npm run lint -- --max-warnings=0
+      - run: npm run build
+        if: ${{ !cancelled() }}
+      - run: npx tsc --noEmit
+        if: ${{ !cancelled() }}
+      - run: npm audit --audit-level=moderate
+        if: ${{ !cancelled() }}
+
+  language-adapters:
+    name: Language adapter conformance
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: Engine
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Native, JVM, and PHP toolchains
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang g++ openjdk-21-jdk php-cli libwayland-dev libxkbcommon-dev libx11-dev
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.14'
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '10.0.x'
+      - run: rustup show active-toolchain
+      - run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
+      - run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-scripting external_runtime -- --nocapture
+
+  installer:
+    name: Windows installer
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: Engine
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Build a fresh Windows installer
+        run: |
+          Remove-Item 'dist/RusticGameEngine-Setup-*.exe' -ErrorAction SilentlyContinue
+          powershell -ExecutionPolicy Bypass -File ./tools/build-windows-installer.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if (-not (Get-ChildItem 'dist/RusticGameEngine-Setup-*.exe' -ErrorAction SilentlyContinue)) {
+            throw 'No fresh Windows installer was produced.'
+          }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: windows-installer
+          path: Engine/dist/RusticGameEngine-Setup-*.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  review-tests:
+    name: Review automation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+          sparse-checkout: .github
+      - run: python3 -m unittest discover -s .github/tests -v
+      - name: Validate GitHub workflow syntax
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$(go env GOPATH)/bin/actionlint" .github/workflows/*.yml
+
+  required:
+    name: Required checks
+    if: ${{ always() }}
+    needs: [engine, rust-security, secrets, website, language-adapters, installer, review-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report and enforce all results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          results = json.loads(os.environ['RESULTS'])
+          lines = ['## Code quality and security', '', '| Check | Result |', '| --- | --- |']
+          lines.extend(f"| {name} | {job['result']} |" for name, job in results.items())
+          lines += ['', 'Open the failed job and step logs for the exact issues. GPT-6 Luna findings are reported separately on the pull request.']
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('\n'.join(lines) + '\n')
+          sys.exit(0 if all(job['result'] == 'success' for job in results.values()) else 1)
+          PY

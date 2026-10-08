@@ -1585,7 +1585,7 @@ fn viewport_pipeline(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -1898,7 +1898,7 @@ fn render_with_context(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8Unorm,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -2198,7 +2198,7 @@ fn encode_surface_mesh(
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format: color_format,
-                blend: Some(wgpu::BlendState::REPLACE),
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
@@ -2322,6 +2322,58 @@ pub fn update_surface_lifecycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_skin_uses_live_joint_pose_and_preserves_bind_transform() {
+        let bytes =
+            include_bytes!("../../engine-assets/tests/fixtures/skinned_animation.gltf").to_vec();
+        let engine_assets::DerivedArtifact::Model(model) = engine_assets::ImporterRegistry::import(
+            &engine_assets::ImportRequest::new("rig.gltf", bytes),
+        )
+        .unwrap() else {
+            panic!("expected model");
+        };
+        let asset = engine_world::AssetId::new();
+        let root = engine_world::EntitySnapshot {
+            mesh: Some(engine_world::Mesh { asset }),
+            ..Default::default()
+        };
+        let mut joint = engine_world::EntitySnapshot {
+            name: Some("node_1".into()),
+            parent: Some(root.id),
+            ..Default::default()
+        };
+        joint.local_transform.translation.x = 1.;
+        let mut world = engine_world::SceneWorld::new();
+        world
+            .apply_commands(&[
+                engine_world::WorldCommand::Spawn(Box::new(root.clone())),
+                engine_world::WorldCommand::Spawn(Box::new(joint.clone())),
+            ])
+            .unwrap();
+        world.propagate_transforms();
+        let models = std::collections::BTreeMap::from([(asset, model)]);
+        let bind = game_scene_with_models(&world, 1., &models);
+        assert_eq!(bind.meshes[0].vertices[0].position, [0., 0., 0.]);
+        joint.local_transform.translation.x = 2.;
+        world
+            .apply_commands(&[engine_world::WorldCommand::SetLocalTransform {
+                entity: joint.id,
+                value: joint.local_transform,
+            }])
+            .unwrap();
+        world.propagate_transforms();
+        let posed = game_scene_with_models(&world, 1., &models);
+        assert_eq!(posed.meshes[0].vertices[0].position, [1., 0., 0.]);
+        assert_eq!(posed.meshes[0].mesh_key, bind.meshes[0].mesh_key);
+        assert!(
+            posed.meshes[0]
+                .vertices
+                .iter()
+                .flat_map(|v| v.normal)
+                .all(f32::is_finite)
+        );
+    }
 
     #[test]
     fn shader_reflection_is_deterministic_and_engine_owned() {
@@ -2597,6 +2649,147 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
                 .color,
             selected: false,
         });
+    }
+    scene
+}
+
+/// Render imported rigid and skinned models using source node poses from the runtime scene.
+pub fn game_scene_with_models(
+    world: &engine_world::SceneWorld,
+    aspect: f32,
+    models: &std::collections::BTreeMap<engine_world::AssetId, engine_assets::ModelArtifact>,
+) -> ViewportScene {
+    use glam::{Mat4, Vec3};
+    use std::hash::{Hash, Hasher};
+    let mut scene = game_scene(world, aspect);
+    for entity in world.entity_ids() {
+        let Ok(Some(mesh)) = world.mesh(entity) else {
+            continue;
+        };
+        let Some(model) = models.get(&mesh.asset) else {
+            continue;
+        };
+        let Ok(owner) = world.world_transform(entity) else {
+            continue;
+        };
+        let mut matrices = Vec::new();
+        for (index, node) in model.nodes.iter().enumerate() {
+            let name = format!("node_{index}");
+            let posed = world.entity_ids().find(|id| {
+                if world.snapshot(*id).ok().and_then(|s| s.name).as_deref() != Some(&name) {
+                    return false;
+                }
+                let mut parent = world.parent(*id).ok().flatten();
+                while let Some(p) = parent {
+                    if p == entity {
+                        return true;
+                    }
+                    parent = world.parent(p).ok().flatten()
+                }
+                false
+            });
+            if let Some(id) = posed {
+                matrices.push(
+                    world
+                        .world_transform(id)
+                        .map_or(Mat4::IDENTITY, |t| owner.0.inverse() * t.0),
+                );
+            } else {
+                let local = |node: &engine_assets::ModelNode| {
+                    Mat4::from_scale_rotation_translation(
+                        glam::DVec3::from_array(node.scale).as_vec3(),
+                        glam::DQuat::from_array(node.rotation).as_quat(),
+                        glam::DVec3::from_array(node.translation).as_vec3(),
+                    )
+                };
+                let mut matrix = local(node);
+                let mut parent = node.parent;
+                let mut depth = 0;
+                while let Some(index) = parent {
+                    if depth >= model.nodes.len() {
+                        break;
+                    }
+                    let Some(node) = model.nodes.get(index) else {
+                        break;
+                    };
+                    matrix = local(node) * matrix;
+                    parent = node.parent;
+                    depth += 1;
+                }
+                matrices.push(matrix);
+            }
+        }
+        for (index, source) in model.meshes.iter().enumerate() {
+            let vertices = source
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(vertex, p)| {
+                    let mut position = Vec3::from_array(*p);
+                    let mut normal = Vec3::from_array(
+                        source.normals.get(vertex).copied().unwrap_or([0., 1., 0.]),
+                    );
+                    if let (Some(skin), Some(joints), Some(weights)) = (
+                        &source.skin,
+                        source.joints.get(vertex),
+                        source.weights.get(vertex),
+                    ) {
+                        let mut skinned = Vec3::ZERO;
+                        let mut n = Vec3::ZERO;
+                        let mut total = 0.;
+                        for k in 0..4 {
+                            let palette = usize::from(joints[k]);
+                            if weights[k] <= 0.0 {
+                                continue;
+                            }
+                            if let (Some(joint), Some(bind)) =
+                                (skin.joints.get(palette), skin.inverse_bind.get(palette))
+                            {
+                                if let Some(matrix) = matrices.get(*joint) {
+                                    let matrix = *matrix * Mat4::from_cols_array(bind);
+                                    skinned += matrix.transform_point3(position) * weights[k];
+                                    n += matrix.inverse().transpose().transform_vector3(normal)
+                                        * weights[k];
+                                    total += weights[k];
+                                }
+                            }
+                        }
+                        if total > 0.0 {
+                            position = skinned / total;
+                            normal = n.normalize_or_zero();
+                        }
+                    } else if let Some(matrix) = source.source_node.and_then(|i| matrices.get(i)) {
+                        position = matrix.transform_point3(position);
+                        normal = matrix
+                            .inverse()
+                            .transpose()
+                            .transform_vector3(normal)
+                            .normalize_or_zero();
+                    }
+                    ViewportVertex {
+                        position: position.to_array(),
+                        normal: normal.to_array(),
+                    }
+                })
+                .collect();
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            (entity, index).hash(&mut hasher);
+            let key = hasher.finish();
+            let mut color = model
+                .materials
+                .get(source.material_index.unwrap_or(0))
+                .map_or([0.6, 0.6, 0.6, 1.], |m| m.base_color);
+            color[3] *= world.part_attributes(entity).unwrap_or_default().color[3];
+            scene.meshes.push(ViewportMesh {
+                instance_key: key,
+                mesh_key: key,
+                vertices,
+                indices: source.indices.clone(),
+                model: owner.0.to_cols_array(),
+                color,
+                selected: false,
+            });
+        }
     }
     scene
 }

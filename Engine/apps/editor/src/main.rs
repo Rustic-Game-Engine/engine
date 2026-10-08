@@ -3304,7 +3304,7 @@ fn is_model_asset(path: &Path) -> bool {
         .is_some_and(|extension| {
             matches!(
                 extension.to_ascii_lowercase().as_str(),
-                "obj" | "gltf" | "glb"
+                "obj" | "gltf" | "glb" | "fbx"
             )
         })
 }

@@ -4,6 +4,7 @@ pub mod application;
 pub mod cancellation;
 pub mod clock;
 pub mod error;
+pub mod gameplay;
 pub mod ids;
 pub mod jobs;
 pub mod logging;

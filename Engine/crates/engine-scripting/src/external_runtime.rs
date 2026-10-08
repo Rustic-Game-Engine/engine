@@ -101,7 +101,8 @@ pub fn probe_language_toolchain(language: ScriptLanguage) -> LanguageAvailabilit
     });
     LanguageAvailability {
         language,
-        available: executable.is_some(),
+        available: executable.is_some()
+            && (language != ScriptLanguage::Java || find_executable(&["javac"]).is_some()),
         executable,
         version,
         detail: specification.map_or_else(
@@ -256,7 +257,7 @@ impl ExternalBehavior {
             return Ok(());
         }
         let request = {
-            let host = self.host.lock().map_err(|_| {
+            let mut host = self.host.lock().map_err(|_| {
                 ExternalRuntimeError::Runtime(
                     self.language.display_name(),
                     "gameplay host lock poisoned".into(),
@@ -300,6 +301,13 @@ impl ExternalBehavior {
                 .map(|(path, id)| (path, Value::String(id.to_string())))
                 .collect();
             Invocation {
+                gameplay_connections: host.gameplay_connections(),
+                gameplay_states: host.gameplay_states(),
+                gameplay_callbacks: if callback == "update" {
+                    host.gameplay_callbacks()
+                } else {
+                    Vec::new()
+                },
                 format_version: 1,
                 callback: callback.into(),
                 delta,
@@ -322,7 +330,7 @@ impl ExternalBehavior {
         };
         let result = self
             .session
-            .invoke(self.language, &request)
+            .invoke(self.language, &request, Some(&self.host))
             .and_then(|response| {
                 if response.format_version != 1 {
                     return Err(ExternalRuntimeError::Runtime(
@@ -638,6 +646,7 @@ impl ProcessSession {
         &mut self,
         language: ScriptLanguage,
         request: &Invocation,
+        host: Option<&Arc<Mutex<Box<dyn GameplayHost>>>>,
     ) -> Result<InvocationResponse, ExternalRuntimeError> {
         let bytes = serde_json::to_vec(request).map_err(|error| {
             ExternalRuntimeError::Runtime(language.display_name(), error.to_string())
@@ -647,39 +656,77 @@ impl ProcessSession {
             .and_then(|()| self.stdin.write_all(b"\n"))
             .and_then(|()| self.stdin.flush())
             .map_err(|error| runtime_io(language, error))?;
-        let stdout_bytes = match self.responses.recv_timeout(CALLBACK_TIMEOUT) {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(message)) => {
-                return Err(ExternalRuntimeError::Runtime(
-                    language.display_name(),
-                    message,
-                ));
+        let deadline = std::time::Instant::now() + CALLBACK_TIMEOUT;
+        for _ in 0..4096 {
+            let stdout_bytes = match self
+                .responses
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(message)) => {
+                    return Err(ExternalRuntimeError::Runtime(
+                        language.display_name(),
+                        message,
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(ExternalRuntimeError::Timeout(
+                        language.display_name(),
+                        CALLBACK_TIMEOUT,
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let detail = self
+                        .stderr
+                        .lock()
+                        .map_or_else(|_| "host exited".into(), |bytes| diagnostic_text(&bytes));
+                    return Err(ExternalRuntimeError::Runtime(
+                        language.display_name(),
+                        detail,
+                    ));
+                }
+            };
+            let mut message: Value = serde_json::from_slice(&stdout_bytes).map_err(|e| {
+                ExternalRuntimeError::Runtime(language.display_name(), e.to_string())
+            })?;
+            crate::lua::normalize_query(&mut message);
+            if let Some(query) = message.get("query") {
+                let result = (|| -> Result<Value, String> {
+                    let host = host.ok_or("query host unavailable")?;
+                    let mut host = host.lock().map_err(|_| "gameplay lock poisoned")?;
+                    if let Some(commands) = message.get("commands") {
+                        let commands: Vec<ExternalCommand> =
+                            serde_json::from_value(commands.clone()).map_err(|e| e.to_string())?;
+                        for command in commands {
+                            apply_command(language, host.as_mut(), command)
+                                .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    host.gameplay_query(query.clone())
+                })();
+                let response = match result {
+                    Ok(value) => json!({"result":value}),
+                    Err(error) => json!({"error":error}),
+                };
+                let bytes = serde_json::to_vec(&response)
+                    .map_err(|e| runtime_io(language, std::io::Error::other(e)))?;
+                self.stdin
+                    .write_all(&bytes)
+                    .and_then(|()| self.stdin.write_all(b"\n"))
+                    .and_then(|()| self.stdin.flush())
+                    .map_err(|e| runtime_io(language, e))?;
+                continue;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                return Err(ExternalRuntimeError::Timeout(
-                    language.display_name(),
-                    CALLBACK_TIMEOUT,
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let detail = self
-                    .stderr
-                    .lock()
-                    .map_or_else(|_| "host exited".into(), |bytes| diagnostic_text(&bytes));
-                return Err(ExternalRuntimeError::Runtime(
-                    language.display_name(),
-                    detail,
-                ));
-            }
-        };
-        serde_json::from_slice(&stdout_bytes).map_err(|error| {
-            ExternalRuntimeError::Runtime(
-                language.display_name(),
-                format!("invalid response JSON: {error}"),
-            )
-        })
+            return serde_json::from_value(message).map_err(|e| {
+                ExternalRuntimeError::Runtime(language.display_name(), e.to_string())
+            });
+        }
+        Err(ExternalRuntimeError::Runtime(
+            language.display_name(),
+            "query budget exceeded".into(),
+        ))
     }
 }
 
@@ -738,6 +785,9 @@ fn read_response_lines(
 
 #[derive(Serialize)]
 struct Invocation {
+    gameplay_connections: Vec<String>,
+    gameplay_states: Vec<engine_core::gameplay::OperationState>,
+    gameplay_callbacks: Vec<engine_core::gameplay::Delivery>,
     format_version: u32,
     callback: String,
     delta: Option<f64>,
@@ -766,6 +816,9 @@ struct InvocationResponse {
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum ExternalCommand {
+    Gameplay {
+        request: engine_core::gameplay::Request,
+    },
     SetCurrentCamera {
         source: String,
     },
@@ -805,6 +858,7 @@ fn apply_command(
     command: ExternalCommand,
 ) -> Result<(), ExternalRuntimeError> {
     let result = match command {
+        ExternalCommand::Gameplay { request } => host.gameplay_request(request),
         ExternalCommand::SetTranslation { value } => host.set_translation(value),
         ExternalCommand::SetProperty { name, value } => host.property(&name).map_or_else(
             || Err(format!("property `{name}` is not declared")),
@@ -1293,12 +1347,12 @@ int main(){return rustic_run(RusticBehavior{.on_start=start});}"#.as_slice()),
             let mut session=ProcessSession::start(&program).unwrap();
             let count=9_007_199_254_740_993_i64;
             let name = "Unicode \u{96ea} \u{1} quote \" slash \\ newline\n";
-            let request=Invocation {format_version:1,callback:"on_start".into(),delta:None,
+            let request=Invocation {gameplay_connections:vec![],gameplay_states:vec![],gameplay_callbacks:vec![],format_version:1,callback:"on_start".into(),delta:None,
                 entity_id:EntityId::new().to_string(),delta_time:0.5,fixed_delta_time:0.5,
                 translation:[0.0;3],properties:Map::from_iter([("count".into(), json!(count))]),
                 attributes:Map::from_iter([("Name".into(), json!(name))]),
                 actions:Map::new(),scene_paths:Map::new(),keys:Map::new(),key_events:vec![],any_key_pressed:false};
-            let response=session.invoke(language,&request).unwrap();
+            let response=session.invoke(language,&request,None).unwrap();
             assert_eq!(response.commands.len(),2);
             assert!(matches!(&response.commands[0],ExternalCommand::SetProperty{value,..} if value.as_i64()==Some(count)));
             assert!(matches!(&response.commands[1],ExternalCommand::Log{message,..} if message==name));

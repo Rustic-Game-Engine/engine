@@ -54,10 +54,10 @@ The common data boundary consists of booleans, integers, finite numbers, strings
 2D/3D vectors, and optional stable entity IDs. Languages must communicate through
 engine state, Engine Events, or Script API operations—not VM objects or language
 globals. A language-global variable is private to that behavior instance. The core
-scheduler owns the language-neutral `ScriptEvent` envelope, but API 1.0 does not yet
-publish script-level `emit`/`subscribe` functions in any adapter. Do not call another
-language's behavior object or invent `rustic.emit`; coordinate through shared engine
-state until that public event surface is added.
+scheduler retains its language-neutral `ScriptEvent` envelope. API 1.1 also exposes
+shared gameplay signals through `Events.on`, `once`, `emit`, `connect`, and
+`disconnect` in every supported script type; see
+[Shared gameplay actions](gameplayActions.md) for signatures and examples.
 
 All source must be UTF-8 and at most 1 MiB. Play uses an immutable project snapshot.
 Reload validates before swapping at a simulation boundary; a failed reload leaves the
