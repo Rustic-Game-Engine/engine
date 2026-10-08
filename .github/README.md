@@ -103,6 +103,9 @@ Source batches have a larger response budget than quick diff reviews. A batch
 that reaches the output limit is retried once with twice that budget. Completed
 findings are saved continuously in `review-findings.json`, so an incomplete sweep
 still reports the concerns it found while keeping the overall status failed.
+During a sweep, its PR comment and pending commit status update as batches
+complete. The same comment is updated with the final result, so concerns appear
+before the entire scan finishes without generating one comment per batch.
 
 The privileged job checks out only trusted sweep tooling. It reads Git blobs as
 data and uses GitHub job metadata; it never executes PR source or downloads CI

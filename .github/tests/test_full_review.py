@@ -120,6 +120,15 @@ class FullReviewTests(unittest.TestCase):
         self.assertEqual(review.call_args_list[0].kwargs["max_output_tokens"], 32000)
         self.assertEqual(review.call_args_list[1].kwargs["max_output_tokens"], 64000)
 
+    def test_interim_report_remains_pending_and_does_not_claim_clean_source(self):
+        coverage = {"reviewed_files": ["first.rs", "second.rs"], "batches_completed": 1, "batches_total": 2,
+                    "generated_files_excluded": 0, "omitted_files": []}
+        result = full.combine_results([{"findings": []}], coverage)
+        text = full.report(result, evidence("success"), coverage, "a" * 40, in_progress=True)
+        self.assertIn("PENDING", text)
+        self.assertIn("in progress", text)
+        self.assertNotIn("No actionable concerns were found", text)
+
     def test_sensitive_files_are_not_sent_to_model(self):
         for path in (".env", "Website/.env.local", "key.pem"):
             self.assertTrue(full.sensitive(path))

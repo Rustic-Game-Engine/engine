@@ -52,13 +52,13 @@ SCHEMA = {
 }
 
 
-def request_json(url, token, payload=None, *, timeout_seconds=180):
+def request_json(url, token, payload=None, *, timeout_seconds=180, method=None):
     """Bound transient retries; never expose a response body or credential."""
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if url.startswith("https://api.github.com/"):
         headers.update({"Accept": "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28"})
     data = None if payload is None else json.dumps(payload).encode()
-    request = urllib.request.Request(url, data=data, headers=headers)
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
     for attempt in range(3):
         try:
             with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
@@ -223,14 +223,15 @@ def publish_status(head, state, description):
     })
 
 
-def publish_comment(event, report):
+def publish_comment(event, report, comment_id=None):
     if "pull_request" not in event:
         return
     repo = os.environ["GITHUB_REPOSITORY"]
     number = int(event["pull_request"]["number"])
     # Create one bounded report per reviewed SHA; do not overwrite a newer review.
     body = report if len(report) <= 60000 else report[:59000] + "\n\nFull findings are in the workflow report artifact.\n"
-    request_json(f"https://api.github.com/repos/{repo}/issues/{number}/comments", os.environ["GH_TOKEN"], {"body": body})
+    url = f"https://api.github.com/repos/{repo}/issues/comments/{int(comment_id)}" if comment_id else f"https://api.github.com/repos/{repo}/issues/{number}/comments"
+    return request_json(url, os.environ["GH_TOKEN"], {"body": body}, method="PATCH" if comment_id else "POST")
 
 
 def main():
