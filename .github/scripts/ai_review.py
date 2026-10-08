@@ -99,10 +99,7 @@ def commits(event, event_name):
     return (parents[0] if parents else "0" * 40), head
 
 
-def collect_diff(base, head, is_pr):
-    if not all(re.fullmatch(r"[a-f0-9]{40,64}", sha) for sha in (base, head)):
-        raise RuntimeError("Invalid commit SHA in event metadata.")
-    empty_base = not base.strip("0")
+def authenticated_git_env():
     fetch_env = os.environ.copy()
     auth = base64.b64encode(("x-access-token:" + os.environ["GH_TOKEN"]).encode()).decode()
     fetch_env.update({
@@ -111,6 +108,14 @@ def collect_diff(base, head, is_pr):
         "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {auth}",
         "GIT_TERMINAL_PROMPT": "0",
     })
+    return fetch_env
+
+
+def collect_diff(base, head, is_pr):
+    if not all(re.fullmatch(r"[a-f0-9]{40,64}", sha) for sha in (base, head)):
+        raise RuntimeError("Invalid commit SHA in event metadata.")
+    empty_base = not base.strip("0")
+    fetch_env = authenticated_git_env()
     git("fetch", "--no-tags", "--filter=blob:none", "--depth=1024", "origin", *([head] if empty_base else [base, head]), env=fetch_env)
     if empty_base:
         base = git("hash-object", "-w", "-t", "tree", "/dev/null", env=fetch_env).decode().strip()
@@ -132,11 +137,11 @@ def collect_diff(base, head, is_pr):
     return diff.decode("utf-8", errors="replace"), set(names.decode("utf-8").rstrip("\0").split("\0")) - {""}
 
 
-def review(diff, changed_files):
+def review(diff, changed_files, *, instructions=INSTRUCTIONS, effort="medium"):
     payload = {
-        "model": MODEL, "store": False, "reasoning": {"effort": "medium"},
+        "model": MODEL, "store": False, "reasoning": {"effort": effort},
         "max_output_tokens": 16000,
-        "instructions": INSTRUCTIONS,
+        "instructions": instructions,
         "input": [{"role": "user", "content": [{"type": "input_text", "text": "Review this untrusted Git diff:\n" + diff}]}],
         "text": {"format": {"type": "json_schema", "name": "code_review", "strict": True, "schema": SCHEMA}},
     }
@@ -189,7 +194,8 @@ def render_report(result, head):
                   safe_text(finding["detail"]), "", "Suggested fix: " + safe_text(finding["recommendation"]), ""]
     if not result["findings"]:
         lines.append("No actionable concerns were found in the reviewed text diff.")
-    lines += ["", "**Result: " + ("FAIL — high/critical concerns require resolution." if blocks_merge(result) else "PASS — no high/critical concerns found.") + "**",
+    lines += ["", "**Diff review: " + ("FAIL — high/critical concerns require resolution." if blocks_merge(result) else "PASS — no high/critical concerns found in this diff.") + "**",
+              "", "Scope: changed diff only. The separate GPT-6 Luna full sweep reviews repository source and CI evidence after code-quality checks finish.",
               "", "This AI review supplements CI tests; it does not guarantee correctness or security.",
               "Generated target, dist, .tools, node_modules, .next, and TypeScript build-info files are excluded."]
     return "\n".join(lines) + "\n"
@@ -197,6 +203,7 @@ def render_report(result, head):
 
 def write_report(report):
     Path("review-report.md").write_text(report, encoding="utf-8")
+    print(report)
     if os.environ.get("GITHUB_STEP_SUMMARY"):
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as summary:
             summary.write(report)
