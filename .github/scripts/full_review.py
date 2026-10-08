@@ -130,14 +130,16 @@ def sensitive(path):
 def collect_sources(head):
     """Load blobs, never check out, import, or execute code from the target SHA."""
     env = ai.authenticated_git_env()
-    tree = ai.git("ls-tree", "-r", "-z", "-l", head, env=env)
+    # Do not request blob sizes with ls-tree -l: in a partial clone that hydrates
+    # even excluded compiled artifacts before we can filter their paths.
+    tree = ai.git("ls-tree", "-r", "-z", head, env=env)
     selected, omitted = [], []
     generated_count = 0
     for entry in tree.split(b"\0"):
         if not entry:
             continue
         metadata, raw_path = entry.split(b"\t", 1)
-        mode, kind, oid, size = metadata.decode().split()
+        mode, kind, oid = metadata.decode().split()
         path = raw_path.decode("utf-8")
         if generated(path):
             generated_count += 1
@@ -148,15 +150,16 @@ def collect_sources(head):
         if reason:
             omitted.append({"file": path, "reason": reason})
             continue
-        selected.append((path, oid, int(size)))
-    if sum(size for _, _, size in selected) > MAX_SOURCE_BYTES:
-        raise RuntimeError("Tracked source exceeds the 10 MB sweep limit. No partial sweep was accepted.")
+        selected.append((path, oid))
     if selected:
         # Partial-clone blob hydration is batched; credentials stay ephemeral.
-        ai.git("fetch", "--no-tags", "--filter=blob:none", "origin", *sorted({oid for _, oid, _ in selected}), env=env)
-    sources = {}
-    for path, oid, _ in selected:
+        ai.git("fetch", "--no-tags", "--filter=blob:none", "origin", *sorted({oid for _, oid in selected}), env=env)
+    sources, source_bytes = {}, 0
+    for path, oid in selected:
         data = ai.git("cat-file", "blob", oid, env=env)
+        source_bytes += len(data)
+        if source_bytes > MAX_SOURCE_BYTES:
+            raise RuntimeError("Tracked source exceeds the 10 MB sweep limit. No partial sweep was accepted.")
         try:
             if b"\0" in data:
                 raise UnicodeError()
