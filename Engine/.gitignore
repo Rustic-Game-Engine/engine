@@ -1,4 +1,6 @@
 /target/
+# Alternate Cargo target directories used for local checks.
+/target-*/
 /dist/
 /examples/api-smoke-test/
 /.tools/
