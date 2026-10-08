@@ -81,7 +81,7 @@ class FullReviewTests(unittest.TestCase):
         review.return_value = {"summary": "Concern", "findings": [{"file": "unchanged.rs", "line": 1, "severity": "medium", "title": "Existing bug", "detail": "Impact", "recommendation": "Fix"}]}
         shared = {"shared_complete_files": [], "exact_commit_ci": evidence()}
         with tempfile.TemporaryDirectory() as directory, patch.object(full, "Path") as path:
-            coverage = {}
+            coverage = {"reviewed_files": ["unchanged.rs"]}
             result = full.sweep({"unchanged.rs": "let x = 1;"}, shared, coverage)
         self.assertEqual(result["findings"][0]["file"], "unchanged.rs")
         self.assertEqual(review.call_args.kwargs["effort"], "high")
@@ -94,7 +94,7 @@ class FullReviewTests(unittest.TestCase):
     def test_incomplete_batch_cannot_be_recorded_as_complete(self, review):
         review.side_effect = RuntimeError("Incomplete API response")
         with patch.object(full, "Path"), self.assertRaisesRegex(RuntimeError, "Incomplete"):
-            coverage = {}
+            coverage = {"reviewed_files": ["source.rs"]}
             full.sweep({"source.rs": "content"}, {"shared_complete_files": []}, coverage)
         self.assertEqual(coverage["batches_completed"], 0)
 
@@ -102,7 +102,23 @@ class FullReviewTests(unittest.TestCase):
     def test_finding_line_must_exist_in_supplied_file(self, review):
         review.return_value = {"findings": [{"file": "source.rs", "line": 99}]}
         with patch.object(full, "Path"), self.assertRaisesRegex(RuntimeError, "outside"):
-            full.sweep({"source.rs": "content"}, {"shared_complete_files": []}, {})
+            full.sweep({"source.rs": "content"}, {"shared_complete_files": []}, {"reviewed_files": ["source.rs"]})
+
+    def test_partial_findings_remain_visible_without_claiming_full_coverage(self):
+        coverage = {"reviewed_files": ["first.rs", "second.rs"], "batches_completed": 1, "batches_total": 2}
+        candidate = {"file": "first.rs", "line": 1, "severity": "medium", "title": "Concern", "detail": "Impact", "recommendation": "Fix"}
+        result = full.combine_results([{"findings": [candidate]}], coverage)
+        self.assertIn("INCOMPLETE", result["summary"])
+        self.assertEqual(result["findings"], [candidate])
+
+    @patch.object(full.ai, "review")
+    def test_output_limited_batch_gets_one_larger_budget_retry(self, review):
+        review.side_effect = [full.ai.IncompleteReviewError("max_output_tokens"), {"findings": []}]
+        with patch.object(full, "Path"):
+            result = full.sweep({"source.rs": "content"}, {"shared_complete_files": []}, {"reviewed_files": ["source.rs"]})
+        self.assertEqual(result["findings"], [])
+        self.assertEqual(review.call_args_list[0].kwargs["max_output_tokens"], 32000)
+        self.assertEqual(review.call_args_list[1].kwargs["max_output_tokens"], 64000)
 
     def test_sensitive_files_are_not_sent_to_model(self):
         for path in (".env", "Website/.env.local", "key.pem"):

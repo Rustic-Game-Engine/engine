@@ -49,5 +49,6 @@ jobs:
           path: |
             review-report.md
             review-coverage.json
+            review-findings.json
           if-no-files-found: warn
           retention-days: 14

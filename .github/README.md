@@ -99,6 +99,10 @@ source lines, unsupported submodules, API errors, or unfinished batches fail the
 sweep rather than claiming full coverage. Binary assets require separate review.
 The sweep makes multiple API requests and costs more than a diff-only review.
 Even complete text coverage cannot guarantee that Luna finds every bug.
+Source batches have a larger response budget than quick diff reviews. A batch
+that reaches the output limit is retried once with twice that budget. Completed
+findings are saved continuously in `review-findings.json`, so an incomplete sweep
+still reports the concerns it found while keeping the overall status failed.
 
 The privileged job checks out only trusted sweep tooling. It reads Git blobs as
 data and uses GitHub job metadata; it never executes PR source or downloads CI

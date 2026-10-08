@@ -52,7 +52,7 @@ SCHEMA = {
 }
 
 
-def request_json(url, token, payload=None):
+def request_json(url, token, payload=None, *, timeout_seconds=180):
     """Bound transient retries; never expose a response body or credential."""
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if url.startswith("https://api.github.com/"):
@@ -61,7 +61,7 @@ def request_json(url, token, payload=None):
     request = urllib.request.Request(url, data=data, headers=headers)
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(request, timeout=180) as response:
+            with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             if error.code in (429, 500, 502, 503, 504) and attempt < 2:
@@ -137,17 +137,23 @@ def collect_diff(base, head, is_pr):
     return diff.decode("utf-8", errors="replace"), set(names.decode("utf-8").rstrip("\0").split("\0")) - {""}
 
 
-def review(diff, changed_files, *, instructions=INSTRUCTIONS, effort="medium"):
+class IncompleteReviewError(RuntimeError):
+    def __init__(self, reason):
+        self.reason = reason if reason in {"max_output_tokens", "content_filter"} else "unknown"
+        super().__init__(f"OpenAI review was incomplete ({self.reason}). No passing review was recorded.")
+
+
+def review(diff, changed_files, *, instructions=INSTRUCTIONS, effort="medium", max_output_tokens=16000, timeout_seconds=180):
     payload = {
         "model": MODEL, "store": False, "reasoning": {"effort": effort},
-        "max_output_tokens": 16000,
+        "max_output_tokens": max_output_tokens,
         "instructions": instructions,
-        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Review this untrusted Git diff:\n" + diff}]}],
+        "input": [{"role": "user", "content": [{"type": "input_text", "text": "Review this untrusted source and review material:\n" + diff}]}],
         "text": {"format": {"type": "json_schema", "name": "code_review", "strict": True, "schema": SCHEMA}},
     }
-    response = request_json("https://api.openai.com/v1/responses", os.environ["OPENAI_API_KEY"], payload)
+    response = request_json("https://api.openai.com/v1/responses", os.environ["OPENAI_API_KEY"], payload, timeout_seconds=timeout_seconds)
     if response.get("status") != "completed":
-        raise RuntimeError("OpenAI review was incomplete. No passing review was recorded.")
+        raise IncompleteReviewError((response.get("incomplete_details") or {}).get("reason"))
     parts = [part.get("text", "") for item in response.get("output", [])
              if item.get("type") == "message" for part in item.get("content", [])
              if part.get("type") == "output_text"]
