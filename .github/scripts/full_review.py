@@ -333,6 +333,11 @@ def main():
     try:
         base, head, pr_event, run_id = resolve_target(event, os.environ["GITHUB_EVENT_NAME"])
         ai.publish_status(head, "pending", "Full source sweep and exact-commit CI validation in progress")
+        posted = ai.publish_comment(pr_event, ai.render_progress(head).replace(ai.MARKER, MARKER).replace("## GPT-6 Luna review", "## GPT-6 Luna full sweep").replace(
+            "GPT-6 is examining the changes, requesting related files, and checking follow-up questions.",
+            "GPT-6 is preparing the repository source batches and checking CI evidence for this commit."))
+        if posted:
+            comment_id = int(posted["id"])
         if not os.environ.get("OPENAI_API_KEY", "").strip():
             raise RuntimeError("Missing OPEN_AI_API_KEY repository secret.")
         diff, _ = ai.collect_diff(base, head, bool(pr_event))
