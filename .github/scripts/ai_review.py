@@ -76,8 +76,8 @@ def request_json(url, token, payload=None):
             raise RuntimeError("API connection failed after three attempts.") from None
 
 
-def git(*args, env=None):
-    result = subprocess.run(["git", *args], env=env, capture_output=True, check=False)
+def git(*args, env=None, input_bytes=None):
+    result = subprocess.run(["git", *args], env=env, input=input_bytes, capture_output=True, check=False)
     if result.returncode:
         # Git stderr can contain credentials, repository-controlled text, or URLs.
         operation = args[0] if args and args[0] in {"fetch", "cat-file", "hash-object", "merge-base", "diff"} else "operation"
