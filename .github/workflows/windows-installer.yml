@@ -1,0 +1,34 @@
+name: Windows installer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/windows-installer-download]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: Engine
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Windows installer
+        run: ./tools/build-windows-installer.ps1
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: RusticGameEngine-Windows-Installer
+          path: Engine/dist/RusticGameEngine-Setup-*.exe
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
