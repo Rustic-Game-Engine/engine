@@ -69,6 +69,7 @@ merge group; the AI job uses trusted base-branch tooling for this event too.
 
 `full-review.yml` runs when `Code quality and security` completes, including
 failed runs, for pull requests, branch pushes, manual CI runs, and merge groups.
+Cancelled CI runs are skipped; their required CI checks remain unsatisfied.
 The quick diff review is a separate result; a clean diff review does not mean
 the complete repository or CI passed.
 
