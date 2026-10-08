@@ -24,6 +24,7 @@ concurrency:
 jobs:
   sweep:
     name: GPT-6 Luna full sweep
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion != 'cancelled' }}
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
