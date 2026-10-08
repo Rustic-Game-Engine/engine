@@ -59,7 +59,8 @@ powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
 ```
 
 The command installs the pinned Rust toolchain and Inno Setup locally under `.tools`
-when either is missing, then writes the installer to `dist`. The installed application
+when either is missing, verifies rustup against its official SHA-256 checksum and
+Inno Setup's Authenticode signature, then writes the installer to `dist`. The installed application
 ships the project manager, editor, runtime, and asset worker and does not require Rust,
 Cargo, or Inno Setup. Setup lets users select Python, C#, C/C++, Java, and PHP; selected
 toolchains are installed through Windows Package Manager. Lua 5.4, JavaScript/QuickJS,
