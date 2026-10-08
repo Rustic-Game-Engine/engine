@@ -30,6 +30,7 @@ jobs:
           ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
+          sparse-checkout: .github
       - name: Review security, correctness, quality, and missing tests
         env:
           OPENAI_API_KEY: ${{ secrets.OPEN_AI_API_KEY }}
