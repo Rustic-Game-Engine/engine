@@ -6,6 +6,7 @@ use engine_rhi::{
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 use thiserror::Error;
@@ -1378,7 +1379,7 @@ impl SceneViewportRenderer {
     }
 
     fn ensure_guide(&mut self, guide: &ViewportGuide) -> Result<(), RendererError> {
-        if guide.vertices.len() % 2 != 0 {
+        if !guide.vertices.len().is_multiple_of(2) {
             return Err(RendererError::InvalidMesh(
                 "viewport guide must contain pairs of line vertices".to_owned(),
             ));
@@ -1464,7 +1465,7 @@ impl SceneViewportRenderer {
                 .to_cols_array(),
         );
         values.extend([
-            lights.len().min(32) as f32,
+            f32::from(u8::try_from(lights.len().min(32)).unwrap_or(32)),
             if unlit { 1.0 } else { 0.0 },
             0.0,
             0.0,
@@ -1728,6 +1729,10 @@ fn selection_outline_model(
         .to_cols_array()
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "viewport extents are bounded by GPU texture limits and mapped to float screen coordinates"
+)]
 fn projected_viewport_point(
     transform: glam::Mat4,
     point: glam::Vec3,
@@ -2320,6 +2325,10 @@ pub fn update_surface_lifecycle(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
 
@@ -2503,7 +2512,9 @@ mod tests {
         assert!(
             first
                 .rgba8
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| { pixel[0] > 0 && pixel[0] < first.rgba8[center] })
         );
         assert_eq!(first.rgba8, second.rgba8);
@@ -2535,7 +2546,9 @@ mod tests {
         assert!(
             frame
                 .rgba8
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .any(|pixel| { pixel[2] > 100 && pixel[1] > pixel[0].saturating_mul(2) })
         );
     }
@@ -2584,7 +2597,9 @@ mod tests {
             let pixels =
                 &frame.rgba8[row * frame.width as usize * 4..(row + 1) * frame.width as usize * 4];
             pixels
-                .chunks_exact(4)
+                .as_chunks::<4>()
+                .0
+                .iter()
                 .skip_while(|pixel| pixel[0] < 64)
                 .take_while(|pixel| pixel[0] > pixel[1] && pixel[1] > pixel[2])
                 .count()
@@ -2626,7 +2641,6 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
             continue;
         };
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        use std::hash::{Hash, Hasher};
         primitive.entity.hash(&mut hasher);
         let key = hasher.finish();
         scene.meshes.push(ViewportMesh {
@@ -2654,13 +2668,16 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
 }
 
 /// Render imported rigid and skinned models using source node poses from the runtime scene.
+#[allow(
+    clippy::too_many_lines,
+    reason = "build model materials and skinned geometry against the same extracted frame"
+)]
 pub fn game_scene_with_models(
     world: &engine_world::SceneWorld,
     aspect: f32,
     models: &std::collections::BTreeMap<engine_world::AssetId, engine_assets::ModelArtifact>,
 ) -> ViewportScene {
     use glam::{Mat4, Vec3};
-    use std::hash::{Hash, Hasher};
     let mut scene = game_scene(world, aspect);
     for entity in world.entity_ids() {
         let Ok(Some(mesh)) = world.mesh(entity) else {
@@ -2684,7 +2701,7 @@ pub fn game_scene_with_models(
                     if p == entity {
                         return true;
                     }
-                    parent = world.parent(p).ok().flatten()
+                    parent = world.parent(p).ok().flatten();
                 }
                 false
             });
@@ -2744,14 +2761,13 @@ pub fn game_scene_with_models(
                             }
                             if let (Some(joint), Some(bind)) =
                                 (skin.joints.get(palette), skin.inverse_bind.get(palette))
+                                && let Some(matrix) = matrices.get(*joint)
                             {
-                                if let Some(matrix) = matrices.get(*joint) {
-                                    let matrix = *matrix * Mat4::from_cols_array(bind);
-                                    skinned += matrix.transform_point3(position) * weights[k];
-                                    n += matrix.inverse().transpose().transform_vector3(normal)
-                                        * weights[k];
-                                    total += weights[k];
-                                }
+                                let matrix = *matrix * Mat4::from_cols_array(bind);
+                                skinned += matrix.transform_point3(position) * weights[k];
+                                n += matrix.inverse().transpose().transform_vector3(normal)
+                                    * weights[k];
+                                total += weights[k];
                             }
                         }
                         if total > 0.0 {
@@ -2795,6 +2811,10 @@ pub fn game_scene_with_models(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact deterministic render data"
+)]
 mod game_view_tests {
     use super::*;
     use engine_world::*;
@@ -2891,6 +2911,10 @@ mod game_view_tests {
 
     #[test]
     #[ignore = "requires a graphics adapter"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep the complete integration fixture and assertions together"
+    )]
     fn game_camera_and_light_attributes_change_rendered_pixels() {
         let (mut world, camera, light) = fixture();
         let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
@@ -3037,7 +3061,7 @@ mod game_view_tests {
                 ("orthographic", ortho),
             ] {
                 let mut bytes = format!("P6\n{} {}\n255\n", frame.width, frame.height).into_bytes();
-                for pixel in frame.rgba8.chunks_exact(4) {
+                for pixel in frame.rgba8.as_chunks::<4>().0 {
                     bytes.extend_from_slice(&pixel[..3]);
                 }
                 std::fs::write(

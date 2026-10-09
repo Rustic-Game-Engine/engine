@@ -1,6 +1,7 @@
 use engine_platform::{
     AtomicFileService, AtomicWriteError, AtomicWriteOptions, NativePlatformPaths, PlatformPaths,
 };
+use sha2::{Digest as _, Sha256};
 use std::fs;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -19,7 +20,10 @@ pub fn agent_data_directory() -> Result<PathBuf, WorkspaceError> {
     Ok(paths
         .project_registry_file()
         .parent()
-        .expect("registry has parent")
+        .ok_or_else(|| WorkspaceError::Io {
+            path: paths.project_registry_file().to_path_buf(),
+            source: std::io::Error::other("project registry has no parent directory"),
+        })?
         .join("editor/agents"))
 }
 
@@ -57,7 +61,6 @@ fn project_agent_directory_at(project_root: &Path, data: &Path) -> Result<PathBu
     } else {
         path
     };
-    use sha2::{Digest as _, Sha256};
     Ok(data
         .join("projects")
         .join(format!("{:x}", Sha256::digest(path.as_bytes()))))
@@ -204,8 +207,10 @@ fn generate_agent_integrations_at(
             path.with_extension(std::env::consts::EXE_EXTENSION)
                 .is_file()
         })
-        .map(|path| path.with_extension(std::env::consts::EXE_EXTENSION))
-        .unwrap_or_else(|| PathBuf::from("rustic-agent-backend"));
+        .map_or_else(
+            || PathBuf::from("rustic-agent-backend"),
+            |path| path.with_extension(std::env::consts::EXE_EXTENSION),
+        );
     let backend = backend.to_string_lossy();
     let canonical_root = project_root
         .canonicalize()
@@ -223,7 +228,7 @@ fn generate_agent_integrations_at(
     let claude_skill = storage.join(".claude/skills/rustic-workspace");
     for directory in [&codex_skill, &claude_skill] {
         fs::create_dir_all(directory).map_err(|source| WorkspaceError::Io {
-            path: directory.to_path_buf(),
+            path: directory.clone(),
             source,
         })?;
     }
@@ -242,7 +247,7 @@ fn generate_agent_integrations_at(
     })).expect("plugin manifest is serializable");
     write_agent_default(files, &plugin_manifest, &manifest)?;
     let skill = format!(
-        r#"---
+        r"---
 name: rustic-workspace
 description: Work on the {project_name} Rustic Game Engine project; use when asked to inspect or change its workspace, scenes, scripts, assets, or project documentation.
 ---
@@ -250,7 +255,7 @@ description: Work on the {project_name} Rustic Game Engine project; use when ask
 # Rustic workspace
 
 Use `workspace_info` to confirm the project root, then `read_agent_file` with path `AGENTS.md` or `CLAUDE.md` for repository routing. Use `list_agent_files`, `read_agent_file`, and `write_agent_file` to inspect or edit project agent information stored in Rustic editor app data. Use `scene_summary` rather than guessing the contents of a `.scene` file. Keep game code and content within this project unless the user explicitly asks to modify the engine source.
-"#
+"
     );
     let codex_skill_file = codex_skill.join("SKILL.md");
     let claude_skill_file = claude_skill.join("SKILL.md");
@@ -327,10 +332,9 @@ fn install_user_agent_integrations_at(
     install_user_agent_integrations_in(&home, &agent_data_directory()?.join("user"), backend, files)
 }
 
-fn install_user_agent_integrations_in(
+fn migrate_user_agent_integrations(
     home: &Path,
     storage: &Path,
-    backend: &Path,
     files: &AtomicFileService,
 ) -> Result<(), WorkspaceError> {
     for relative in [
@@ -348,7 +352,6 @@ fn install_user_agent_integrations_in(
             migrate_agent_tree(&source, &storage.join(relative), files)?;
             // A profile discovery file will be replaced below. Archive any conflicting edit first.
             if source.is_file() {
-                use sha2::{Digest as _, Sha256};
                 let bytes = fs::read(&source).map_err(|error| WorkspaceError::Io {
                     path: source.clone(),
                     source: error,
@@ -361,7 +364,17 @@ fn install_user_agent_integrations_in(
             }
         }
     }
-    let skill = r#"---
+    Ok(())
+}
+
+fn install_user_agent_integrations_in(
+    home: &Path,
+    storage: &Path,
+    backend: &Path,
+    files: &AtomicFileService,
+) -> Result<(), WorkspaceError> {
+    migrate_user_agent_integrations(home, storage, files)?;
+    let skill = r"---
 name: rustic-workspace
 description: Control and inspect the Rustic Game Engine project in the current workspace; use for Rustic scenes, scripts, assets, docs, or engine/project repository routing.
 ---
@@ -369,7 +382,7 @@ description: Control and inspect the Rustic Game Engine project in the current w
 # Rustic workspace
 
 Use the `rustic-workspace` MCP tools first to identify the active project root, inspect scenes, and locate engine documentation. Read project instructions with `read_agent_file` (`AGENTS.md` or `CLAUDE.md`). Agent information lives in Rustic editor app data; inspect or edit it with `list_agent_files`, `read_agent_file`, and `write_agent_file`. Keep game content in the project reported by `workspace_info`. Only edit the engine source repository when the user explicitly requests engine changes. Use `scene_summary` before changing a scene rather than guessing its serialized structure.
-"#;
+";
     let codex_skill = storage.join(".agents/skills/rustic-workspace");
     let claude_skill = storage.join(".claude/skills/rustic-workspace");
     let claude_command = storage.join(".claude/commands");
@@ -382,7 +395,7 @@ Use the `rustic-workspace` MCP tools first to identify the active project root, 
         &plugin.join(".codex-plugin"),
     ] {
         fs::create_dir_all(directory).map_err(|source| WorkspaceError::Io {
-            path: directory.to_path_buf(),
+            path: directory.clone(),
             source,
         })?;
     }

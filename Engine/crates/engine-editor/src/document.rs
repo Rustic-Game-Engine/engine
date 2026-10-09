@@ -101,6 +101,8 @@ impl AuthoringDocument {
     }
 
     /// Returns the project for metadata edits when the document is writable.
+    /// # Errors
+    /// Returns `AuthoringError::ReadOnly` when the document is read-only.
     pub fn project_mut(&mut self) -> Result<&mut Project, AuthoringError> {
         if self.read_only {
             return Err(AuthoringError::ReadOnly);
@@ -124,6 +126,8 @@ impl AuthoringDocument {
         &self.scene_startup_scripts
     }
 
+    /// # Errors
+    /// Returns `AuthoringError::ReadOnly` when the document is read-only.
     pub fn set_scene_startup_scripts(
         &mut self,
         scripts: Vec<ScriptReference>,
@@ -315,6 +319,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an invalid parent or transform.
     pub fn add_camera_or_light(
         &mut self,
         camera: bool,
@@ -338,6 +344,8 @@ impl AuthoringDocument {
     }
 
     /// Creates an organizational folder in the scene hierarchy.
+    /// # Errors
+    /// Returns an error for read-only state or an invalid parent.
     pub fn add_folder(&mut self, parent: Option<EntityId>) -> Result<EntityId, AuthoringError> {
         self.ensure_writable()?;
         let snapshot = EntitySnapshot {
@@ -354,6 +362,8 @@ impl AuthoringDocument {
     }
 
     /// Moves an entity within the scene hierarchy as one undoable edit.
+    /// # Errors
+    /// Returns an error for read-only state, absent entities, or an invalid hierarchy.
     pub fn reparent(
         &mut self,
         entity: EntityId,
@@ -374,6 +384,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_camera(
         &mut self,
         entity: EntityId,
@@ -392,6 +404,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_light(
         &mut self,
         entity: EntityId,
@@ -410,6 +424,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_part_attributes(
         &mut self,
         entity: EntityId,
@@ -430,6 +446,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_name(&mut self, entity: EntityId, after: String) -> Result<(), AuthoringError> {
         self.ensure_writable()?;
         let before = self.world.snapshot(entity)?.name;
@@ -448,6 +466,8 @@ impl AuthoringDocument {
     }
 
     /// Inserts a `.rscene` from the project's `scenes` folder as an additive instance.
+    /// # Errors
+    /// Returns an error for read-only state, an unsafe path, or invalid scene data.
     pub fn insert_scene(
         &mut self,
         relative_path: impl AsRef<Path>,
@@ -528,7 +548,9 @@ impl AuthoringDocument {
     pub fn save(&mut self) -> Result<(), AuthoringError> {
         self.ensure_writable()?;
         let mut document = SceneDocument::from_world(self.scene_id, &self.scene_name, &self.world)?;
-        document.startup_scripts = self.scene_startup_scripts.clone();
+        document
+            .startup_scripts
+            .clone_from(&self.scene_startup_scripts);
         save_scene_atomic(&self.scene_path, &document)?;
         self.undo.mark_saved();
         Ok(())
@@ -541,7 +563,9 @@ impl AuthoringDocument {
     /// Returns an error when the world cannot be converted to a valid scene document.
     pub fn snapshot_bytes(&self) -> Result<Vec<u8>, AuthoringError> {
         let mut document = SceneDocument::from_world(self.scene_id, &self.scene_name, &self.world)?;
-        document.startup_scripts = self.scene_startup_scripts.clone();
+        document
+            .startup_scripts
+            .clone_from(&self.scene_startup_scripts);
         Ok(document.to_bytes()?)
     }
 

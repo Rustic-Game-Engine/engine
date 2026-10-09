@@ -395,7 +395,10 @@ fn encode_frame(
             frame.width,
             frame.height,
             frame.stride_bytes,
-            frame.pixels.len() as u32,
+            u32::try_from(frame.pixels.len()).map_err(|_| ProtocolError::PayloadTooLarge {
+                found: frame.pixels.len(),
+                maximum: MAX_PAYLOAD_BYTES,
+            })?,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
@@ -627,12 +630,14 @@ mod pixel_wire_tests {
             sequence: 12,
             width: 640,
             height: 360,
-            stride_bytes: 2560,
-            pixels: (0..921600).map(|i| (i % 256) as u8).collect(),
+            stride_bytes: 2_560,
+            pixels: (0..921_600_u32)
+                .map(|i| u8::try_from(i % 256).unwrap())
+                .collect(),
         };
         let message = ProtocolMessage::Frame(frame);
         let bytes = encode_frame(ProcessRole::Runtime, PROTOCOL_VERSION, 7, 0, &message).unwrap();
-        assert_eq!(bytes.len(), HEADER_BYTES + 24 + 921600);
+        assert_eq!(bytes.len(), HEADER_BYTES + 24 + 921_600);
         assert!(bytes.len() < MAX_PAYLOAD_BYTES);
         assert_eq!(
             decode_frame(&mut std::io::Cursor::new(bytes))

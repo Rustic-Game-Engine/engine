@@ -355,7 +355,9 @@ end }
 
 The glTF importer preserves linear, step and cubic-spline interpolation. FBX takes
 are baked at 60 Hz; skeletal vertices use four linear skin influences and retained
-inverse binds. Rendering consumes live node transforms. Morph-target animation,
+inverse binds. Malformed FBX joint indices that exceed the 16-bit palette limit
+are rejected during import rather than truncated. Rendering consumes live node
+transforms. Morph-target animation,
 dual-quaternion skinning and animation graph/editor UI are outside this surface.
 
 ## Procedural animation and interpolation

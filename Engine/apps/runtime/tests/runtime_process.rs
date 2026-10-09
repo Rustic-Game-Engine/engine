@@ -7,6 +7,21 @@ use std::path::Path;
 use std::thread;
 use std::time::Duration;
 
+fn spawn_runtime(launch: &RuntimeLaunch) -> SupervisedRuntime {
+    SupervisedRuntime::spawn(launch).unwrap_or_else(|error| {
+        // Startup errors precede the IPC handshake and otherwise disappear when
+        // the fixture's temporary directory is dropped during panic unwinding.
+        if let Ok(entries) = fs::read_dir(&launch.logs_directory) {
+            for entry in entries.filter_map(Result::ok) {
+                if let Ok(log) = fs::read_to_string(entry.path()) {
+                    eprintln!("Runtime startup log {}:\n{log}", entry.path().display());
+                }
+            }
+        }
+        panic!("runtime failed to start: {error}");
+    })
+}
+
 #[test]
 fn real_runtime_child_authenticates_controls_all_modes_and_reaps() {
     verify_play_modes(false);
@@ -18,6 +33,10 @@ fn native_runtime_windows_render_scene_and_reap() {
     verify_play_modes(true);
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep the complete integration fixture and assertions together"
+)]
 fn verify_play_modes(native_windows: bool) {
     let executable = Path::new(env!("CARGO_BIN_EXE_rustic-runtime"));
     for mode in [PlayMode::Play, PlayMode::NewWindow, PlayMode::Standalone] {
@@ -49,6 +68,8 @@ fn verify_play_modes(native_windows: bool) {
                 primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
                 part_attributes: engine_world::PartAttributes {
                     color: [1.0, 0.02, 0.02, 1.0],
+                    // Keep gravity from creating unrelated changes in this control test.
+                    anchored: true,
                     ..engine_world::PartAttributes::default()
                 },
                 ..engine_world::EntitySnapshot::default()
@@ -86,7 +107,7 @@ fn verify_play_modes(native_windows: bool) {
                 mode,
                 SnapshotInput::new("scenes/main.rscene", source_bytes.clone()),
                 &[
-                    SnapshotInput::new("settings.json", br#"{}"#.to_vec()),
+                    SnapshotInput::new("settings.json", br"{}".to_vec()),
                     SnapshotInput::new("config/scripts.ron", manifest_bytes),
                     SnapshotInput::new(
                         "scripts/main.lua",
@@ -107,7 +128,7 @@ fn verify_play_modes(native_windows: bool) {
         if !native_windows {
             launch.extra_arguments.push("--no-native-window".into());
         }
-        let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
+        let mut runtime = spawn_runtime(&launch);
         let initial_frame = runtime.take_latest_frame().unwrap().unwrap();
         assert_eq!((initial_frame.width, initial_frame.height), (640, 360));
         let center = (180 * 640 + 320) * 4;
@@ -206,7 +227,7 @@ fn injected_runtime_crash_is_observed_and_persisted_without_touching_snapshot() 
     );
     launch.connect_timeout = Duration::from_secs(10);
     launch.extra_arguments.push("--crash-after-ready".into());
-    let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
+    let mut runtime = spawn_runtime(&launch);
 
     let deadline = std::time::Instant::now() + Duration::from_secs(5);
     let exit = loop {
@@ -252,7 +273,7 @@ fn unresponsive_runtime_is_force_killed_and_reaped_after_grace() {
     launch.connect_timeout = Duration::from_secs(10);
     launch.stop_grace_period = Duration::from_millis(100);
     launch.extra_arguments.push("--ignore-stop".into());
-    let mut runtime = SupervisedRuntime::spawn(&launch).unwrap();
+    let mut runtime = spawn_runtime(&launch);
 
     let exit = runtime.stop().unwrap();
     assert!(matches!(exit, SupervisorExit::Forced(_)));

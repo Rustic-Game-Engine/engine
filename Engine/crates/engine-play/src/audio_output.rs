@@ -18,7 +18,7 @@ impl AudioOutput {
                     let sink = rodio::Sink::connect_new(stream.mixer());
                     while let Ok(samples) = receiver.recv() {
                         if !samples.is_empty() && sink.len() < 4 {
-                            sink.append(rodio::buffer::SamplesBuffer::new(2, 48000, samples));
+                            sink.append(rodio::buffer::SamplesBuffer::new(2, 48_000, samples));
                         }
                     }
                 });
@@ -31,12 +31,19 @@ impl AudioOutput {
             Self::default()
         }
     }
+    #[cfg_attr(
+        not(windows),
+        allow(
+            clippy::unused_self,
+            reason = "the Windows audio backend retains instance state; other hosts consume samples without output"
+        )
+    )]
     pub fn submit(&self, samples: Vec<f32>) {
         #[cfg(windows)]
         if let Some(sender) = &self.sender {
             let _ = sender.try_send(samples);
         }
         #[cfg(not(windows))]
-        let _ = samples;
+        drop(samples);
     }
 }

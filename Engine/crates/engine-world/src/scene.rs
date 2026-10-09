@@ -868,6 +868,10 @@ fn io_error(path: impl Into<PathBuf>, source: std::io::Error) -> SceneError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
 

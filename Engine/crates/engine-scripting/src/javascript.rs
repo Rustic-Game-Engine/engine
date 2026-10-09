@@ -381,7 +381,7 @@ impl JavaScriptBehavior {
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Command {
     Gameplay {
-        request: engine_core::gameplay::Request,
+        request: Box<engine_core::gameplay::Request>,
     },
     SetCurrentCamera {
         source: String,
@@ -421,7 +421,7 @@ fn apply_command(
     command: Command,
 ) -> Result<(), JavaScriptRuntimeError> {
     let result = match command {
-        Command::Gameplay { request } => host.gameplay_request(request),
+        Command::Gameplay { request } => host.gameplay_request(*request),
         Command::SetTranslation { value } => host.set_translation(value),
         Command::SetProperty { name, value } => host.property(&name).map_or_else(
             || Err(format!("property `{name}` is not declared")),
@@ -530,6 +530,10 @@ fn sandbox_runtime(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
     use crate::ActionState;

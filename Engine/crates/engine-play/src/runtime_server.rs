@@ -57,6 +57,16 @@ pub fn run_runtime_server(config: RuntimeServerConfig) -> Result<(), RuntimeServ
 }
 
 /// Runs the protocol with an application-owned renderer of the live simulation world.
+///
+/// # Errors
+/// Returns snapshot, authentication, protocol, simulation, or synchronization errors.
+///
+/// # Panics
+/// Panics when the explicit `crash_after_ready` failure-injection flag is set.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep session protocol, simulation worker, and shutdown ordering together"
+)]
 pub fn run_runtime_server_with_renderer(
     config: RuntimeServerConfig,
     mut render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,

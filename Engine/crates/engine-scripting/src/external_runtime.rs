@@ -252,82 +252,88 @@ impl ExternalBehavior {
         self.call("on_stop", None)
     }
 
+    fn invocation(
+        &mut self,
+        callback: &str,
+        delta: Option<f64>,
+    ) -> Result<Invocation, ExternalRuntimeError> {
+        let mut host = self.host.lock().map_err(|_| {
+            ExternalRuntimeError::Runtime(
+                self.language.display_name(),
+                "gameplay host lock poisoned".into(),
+            )
+        })?;
+        let input = host.input_frame();
+        let keys = input
+            .keys
+            .iter()
+            .chain(input.keys_pressed.iter())
+            .chain(input.keys_released.iter())
+            .map(|key| {
+                (
+                    key.clone(),
+                    serde_json::to_value(input.key(key)).unwrap_or(Value::Null),
+                )
+            })
+            .collect();
+        let any_key_pressed = input.any_key_pressed();
+        let attributes = [
+            "Name",
+            "Position",
+            "Size",
+            "Color",
+            "CanTouch",
+            "CanCollide",
+            "Anchored",
+            "Parent",
+        ]
+        .into_iter()
+        .filter_map(|name| {
+            host.attribute(name)
+                .ok()
+                .flatten()
+                .map(|value| (name.to_owned(), engine_to_json(&value)))
+        })
+        .collect();
+        let scene_paths = host
+            .scene_paths()
+            .into_iter()
+            .map(|(path, id)| (path, Value::String(id.to_string())))
+            .collect();
+        Ok(Invocation {
+            gameplay_connections: host.gameplay_connections(),
+            gameplay_states: host.gameplay_states(),
+            gameplay_callbacks: if callback == "update" {
+                host.gameplay_callbacks()
+            } else {
+                Vec::new()
+            },
+            format_version: 1,
+            callback: callback.into(),
+            delta,
+            entity_id: host.entity_id().to_string(),
+            delta_time: host.delta_time(),
+            fixed_delta_time: host.fixed_delta_time(),
+            translation: host.translation(),
+            properties: host
+                .properties()
+                .into_iter()
+                .map(|(key, value)| (key, engine_to_json(&value)))
+                .collect(),
+            actions: Map::new(),
+            attributes,
+            scene_paths,
+            keys,
+            key_events: input.key_events,
+            any_key_pressed,
+        })
+    }
+
     fn call(&mut self, callback: &str, delta: Option<f64>) -> Result<(), ExternalRuntimeError> {
         if !self.enabled {
             return Ok(());
         }
-        let request = {
-            let mut host = self.host.lock().map_err(|_| {
-                ExternalRuntimeError::Runtime(
-                    self.language.display_name(),
-                    "gameplay host lock poisoned".into(),
-                )
-            })?;
-            let input = host.input_frame();
-            let keys = input
-                .keys
-                .iter()
-                .chain(input.keys_pressed.iter())
-                .chain(input.keys_released.iter())
-                .map(|key| {
-                    (
-                        key.clone(),
-                        serde_json::to_value(input.key(key)).unwrap_or(Value::Null),
-                    )
-                })
-                .collect();
-            let any_key_pressed = input.any_key_pressed();
-            let attributes = [
-                "Name",
-                "Position",
-                "Size",
-                "Color",
-                "CanTouch",
-                "CanCollide",
-                "Anchored",
-                "Parent",
-            ]
-            .into_iter()
-            .filter_map(|name| {
-                host.attribute(name)
-                    .ok()
-                    .flatten()
-                    .map(|value| (name.to_owned(), engine_to_json(&value)))
-            })
-            .collect();
-            let scene_paths = host
-                .scene_paths()
-                .into_iter()
-                .map(|(path, id)| (path, Value::String(id.to_string())))
-                .collect();
-            Invocation {
-                gameplay_connections: host.gameplay_connections(),
-                gameplay_states: host.gameplay_states(),
-                gameplay_callbacks: if callback == "update" {
-                    host.gameplay_callbacks()
-                } else {
-                    Vec::new()
-                },
-                format_version: 1,
-                callback: callback.into(),
-                delta,
-                entity_id: host.entity_id().to_string(),
-                delta_time: host.delta_time(),
-                fixed_delta_time: host.fixed_delta_time(),
-                translation: host.translation(),
-                properties: host
-                    .properties()
-                    .into_iter()
-                    .map(|(key, value)| (key, engine_to_json(&value)))
-                    .collect(),
-                actions: Map::new(),
-                attributes,
-                scene_paths,
-                keys,
-                key_events: input.key_events,
-                any_key_pressed,
-            }
-        };
+        let request = self.invocation(callback, delta)?;
         let result = self
             .session
             .invoke(self.language, &request, Some(&self.host))
@@ -558,7 +564,7 @@ impl PreparedProgram {
             ScriptLanguage::C => c::prepare(&mut program, &source_path)?,
             ScriptLanguage::Cpp => cpp::prepare(&mut program, &source_path)?,
             ScriptLanguage::CSharp => {
-                csharp::prepare(&mut program, &source_path, availability.version)?
+                csharp::prepare(&mut program, &source_path, availability.version)?;
             }
             ScriptLanguage::Java => java::prepare(&mut program, &source_path)?,
             ScriptLanguage::Luau => luau::prepare(&mut program, &source_path, source)?,
@@ -817,7 +823,7 @@ struct InvocationResponse {
 #[serde(tag = "op", rename_all = "snake_case")]
 enum ExternalCommand {
     Gameplay {
-        request: engine_core::gameplay::Request,
+        request: Box<engine_core::gameplay::Request>,
     },
     SetCurrentCamera {
         source: String,
@@ -858,7 +864,7 @@ fn apply_command(
     command: ExternalCommand,
 ) -> Result<(), ExternalRuntimeError> {
     let result = match command {
-        ExternalCommand::Gameplay { request } => host.gameplay_request(request),
+        ExternalCommand::Gameplay { request } => host.gameplay_request(*request),
         ExternalCommand::SetTranslation { value } => host.set_translation(value),
         ExternalCommand::SetProperty { name, value } => host.property(&name).map_or_else(
             || Err(format!("property `{name}` is not declared")),
@@ -1104,6 +1110,10 @@ fn json_to_engine(value: Value, current: &EngineValue) -> Result<EngineValue, St
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
     use crate::ActionState;

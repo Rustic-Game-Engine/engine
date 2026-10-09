@@ -1,9 +1,0 @@
-C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\data_url-dd2b52249a76fcf9.d: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs
-
-C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\libdata_url-dd2b52249a76fcf9.rlib: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs
-
-C:\Users\mmmtech\Desktop\RusticGamEngine\target-rotate-check\debug\deps\libdata_url-dd2b52249a76fcf9.rmeta: C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs
-
-C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs:
-C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs:
-C:\Users\mmmtech\Desktop\RusticGamEngine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs:

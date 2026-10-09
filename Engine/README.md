@@ -73,4 +73,12 @@ installer option by default.
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the decision-record and project-file safety
 conventions.
 
+To build an installer in the cloud, use the repository's **Windows installer**
+GitHub Actions workflow (`.github/workflows/windows-installer.yml` at the repository
+root). Once the workflow is on the default branch, select **Run workflow** and
+choose the branch to build. It runs the same installer script on a Windows runner.
+After a successful run, download the **RusticGameEngine-Windows-Installer** artifact
+from the run page and extract the ZIP to obtain the setup `.exe`. Artifacts require
+GitHub access to this repository and are retained for 30 days.
+
 Gameplay authors should start with [`docs/GAMEPLAY_PROGRAMMING.md`](docs/GAMEPLAY_PROGRAMMING.md).

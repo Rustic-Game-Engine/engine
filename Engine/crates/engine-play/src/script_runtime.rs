@@ -102,10 +102,11 @@ impl RuntimeBehavior {
             .map(Self::Web)
             .map_err(|e| e.to_string()),
         };
-        if result.is_err() && !Arc::ptr_eq(&host, &original) {
-            if let Ok(mut host) = host.lock() {
-                host.cleanup_gameplay();
-            }
+        if result.is_err()
+            && !Arc::ptr_eq(&host, &original)
+            && let Ok(mut host) = host.lock()
+        {
+            host.cleanup_gameplay();
         }
         result
     }
@@ -268,16 +269,14 @@ impl RuntimeScripts {
                 RuntimeBehavior::External(value) => value.host(),
                 RuntimeBehavior::Web(value) => value.host(),
             };
-            if let Ok(host) = host.lock() {
-                if host.entity_id() == id {
-                    if let Some(script) = scripts
-                        .iter_mut()
-                        .find(|script| script.script_id == behavior.script_id())
-                    {
-                        script.properties = host.properties();
-                        script.enabled = host.enabled();
-                    }
-                }
+            if let Ok(host) = host.lock()
+                && host.entity_id() == id
+                && let Some(script) = scripts
+                    .iter_mut()
+                    .find(|script| script.script_id == behavior.script_id())
+            {
+                script.properties = host.properties();
+                script.enabled = host.enabled();
             }
         }
         Ok(Some(LiveEntityProperties {
@@ -413,7 +412,7 @@ impl RuntimeScripts {
                     gameplay: Arc::clone(&gameplay),
                     owner_script: ScriptId::new(),
                     entity_bound: true,
-                    scene_name: scene_name.to_owned(),
+                    scene_name: scene_name.clone(),
                     world: Arc::clone(&world),
                     input_keys: Arc::clone(&input_keys),
                     snapshot_root: snapshot_root.to_path_buf(),
@@ -480,8 +479,8 @@ impl RuntimeScripts {
             }
         }
         self.unregister_disabled();
-        if let Ok(mut world) = self.world.lock() {
-            if let Err(error) = self
+        if let Ok(mut world) = self.world.lock()
+            && let Err(error) = self
                 .gameplay
                 .lock()
                 .map_err(|_| "gameplay lock poisoned".to_owned())
@@ -492,14 +491,13 @@ impl RuntimeScripts {
                         .step(&mut world, scaled)
                         .map_err(|e| e.to_string())
                 })
-            {
-                push_log(
-                    &self.logs,
-                    &self.dropped_logs,
-                    "error",
-                    &format!("physics step failed: {error}"),
-                );
-            }
+        {
+            push_log(
+                &self.logs,
+                &self.dropped_logs,
+                "error",
+                &format!("physics step failed: {error}"),
+            );
         }
     }
     pub fn frame_update(&mut self, delta: f64) {
@@ -519,10 +517,9 @@ impl RuntimeScripts {
                 .entity_ids()
                 .filter(|id| world.camera(*id).ok().flatten().is_some_and(|c| c.active))
                 .last()
+                && let Ok(transform) = world.world_transform(camera)
             {
-                if let Ok(transform) = world.world_transform(camera) {
-                    gameplay.audio.listener = transform.0.w_axis.truncate().as_dvec3().to_array();
-                }
+                gameplay.audio.listener = transform.0.w_axis.truncate().as_dvec3().to_array();
             }
             let GameplayContext { runtime, audio, .. } = &mut *gameplay;
             if let Err(error) = runtime.tick(
@@ -689,6 +686,10 @@ fn sort_script_references(references: &mut [ScriptReference]) {
     references.sort_by_key(|reference| reference.execution_order);
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "startup loading shares the existing scene, input, logs, and gameplay state"
+)]
 fn load_startup_references(
     references: &[ScriptReference],
     scene_name: &str,
@@ -766,7 +767,7 @@ fn resolve_linked_web_scripts(
             .find("</script>")
             .map(|offset| tag_end + 1 + offset)
             .ok_or_else(|| "missing </script> tag".to_owned())?;
-        output.push_str(&text[cursor..tag_end + 1]);
+        output.push_str(&text[cursor..=tag_end]);
         let tag = &text[open..=tag_end];
         if let Some(link) = script_src(tag) {
             let relative = document_path
@@ -894,7 +895,34 @@ impl GameplayHost for RuntimeHost {
         host.owner_script = ScriptId::new();
         Some(Box::new(host))
     }
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep exhaustive gameplay query dispatch in one match"
+    )]
     fn gameplay_query(&mut self, query: serde_json::Value) -> Result<serde_json::Value, String> {
+        #[derive(serde::Deserialize)]
+        struct Args {
+            #[serde(default)]
+            entity: Option<EntityId>,
+            #[serde(default)]
+            origin: [f64; 3],
+            #[serde(default)]
+            direction: [f64; 3],
+            #[serde(default)]
+            center: [f64; 3],
+            #[serde(default)]
+            vector: [f64; 3],
+            #[serde(default)]
+            distance: f64,
+            #[serde(default)]
+            radius: f64,
+            #[serde(default)]
+            strength: f64,
+            #[serde(default)]
+            delta: f64,
+            #[serde(default)]
+            ignore: Vec<EntityId>,
+        }
         let op = query
             .get("op")
             .and_then(serde_json::Value::as_str)
@@ -1190,29 +1218,6 @@ impl GameplayHost for RuntimeHost {
                 serde_json::from_value(query).map_err(|e| e.to_string())?;
             return serde_json::to_value(q.evaluate()?).map_err(|e| e.to_string());
         }
-        #[derive(serde::Deserialize)]
-        struct Args {
-            #[serde(default)]
-            entity: Option<EntityId>,
-            #[serde(default)]
-            origin: [f64; 3],
-            #[serde(default)]
-            direction: [f64; 3],
-            #[serde(default)]
-            center: [f64; 3],
-            #[serde(default)]
-            vector: [f64; 3],
-            #[serde(default)]
-            distance: f64,
-            #[serde(default)]
-            radius: f64,
-            #[serde(default)]
-            strength: f64,
-            #[serde(default)]
-            delta: f64,
-            #[serde(default)]
-            ignore: Vec<EntityId>,
-        }
         let args: Args = serde_json::from_value(query.clone()).map_err(|e| e.to_string())?;
         let mut context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
         let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
@@ -1246,7 +1251,7 @@ impl GameplayHost for RuntimeHost {
             "physics_impulse" | "physics_force" | "physics_launch" => {
                 let id = args.entity.unwrap_or(self.entity);
                 if op == "physics_launch" {
-                    context.physics.launch(&world, id, args.vector)?
+                    context.physics.launch(&world, id, args.vector)?;
                 } else {
                     let vector = if op == "physics_force" {
                         if !args.delta.is_finite() || args.delta < 0.0 {
@@ -1495,9 +1500,8 @@ impl GameplayHost for RuntimeHost {
             return self.clone_instance(source, parent);
         }
         if let Some(snapshot) = self.asset_instance(source, parent)? {
-            let model = match self.import_source(source)? {
-                engine_assets::DerivedArtifact::Model(model) => model,
-                _ => return Err("instance asset is not a model".into()),
+            let engine_assets::DerivedArtifact::Model(model) = self.import_source(source)? else {
+                return Err("instance asset is not a model".into());
             };
             let id = snapshot.id;
             self.world
@@ -1638,7 +1642,7 @@ impl GameplayHost for RuntimeHost {
                     value: Some(value),
                 }])
             }
-            ("position", EngineValue::Vec3(value)) | ("size", EngineValue::Vec3(value)) => {
+            ("position" | "size", EngineValue::Vec3(value)) => {
                 if !value.iter().all(|value| value.is_finite()) {
                     return Err("attribute contains a non-finite value".into());
                 }
@@ -1668,7 +1672,8 @@ impl GameplayHost for RuntimeHost {
                     .map_err(|error| error.to_string())?;
                 match (property, value) {
                     ("color", EngineValue::Vec3(value)) if value.iter().all(|v| v.is_finite()) => {
-                        attributes.color[..3].copy_from_slice(&value.map(|v| v as f32))
+                        attributes.color[..3]
+                            .copy_from_slice(&glam::DVec3::from_array(value).as_vec3().to_array());
                     }
                     ("cantouch", EngineValue::Boolean(value)) => attributes.can_touch = value,
                     ("cancollide", EngineValue::Boolean(value)) => attributes.can_collide = value,
@@ -1936,6 +1941,14 @@ fn bind_model(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
+#[allow(
+    clippy::field_reassign_with_default,
+    reason = "fixtures start from defaults and vary only the authored values under test"
+)]
 mod tests {
     use super::*;
     use engine_scripting::{
@@ -1945,6 +1958,10 @@ mod tests {
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep the complete integration fixture and assertions together"
+    )]
     fn model_clips_bind_before_start_and_audio_physics_follow_the_scene_clock() {
         let temp = tempfile::tempdir().unwrap();
         for folder in ["assets", "config", "scripts"] {
@@ -1976,7 +1993,7 @@ mod tests {
         }
         std::fs::write(temp.path().join("assets/tone.wav"), wav).unwrap();
         let script_id = ScriptId::new();
-        std::fs::write(temp.path().join("scripts/actor.lua"), br#"return {Start=function()
+        std::fs::write(temp.path().join("scripts/actor.lua"), br"return {Start=function()
             assert(Animation.clips(nil)[1]=='Slide')
             local hit=Physics.raycast(Vector3(0,2,0),Vector3(0,-1,0),4)
             assert(hit and hit.entity==rustic.entity_id())
@@ -1987,7 +2004,7 @@ mod tests {
             Audio.fadeIn(voice,1,Ease.InQuad)
             Clock.timeScale(0.5)
             Timer.after(0.5,function() rustic.log('info','scaled timer') end)
-        end}"#).unwrap();
+        end}").unwrap();
         save_manifest_atomic(
             &temp.path().join("config/scripts.ron"),
             &ScriptManifest {
@@ -2133,6 +2150,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep the complete integration fixture and assertions together"
+    )]
     fn named_scene_object_calls_mutate_target_in_lua_and_javascript() {
         let root = EntitySnapshot {
             name: Some("Room".into()),
@@ -2210,7 +2231,7 @@ mod tests {
             [0.; 3]
         );
         let mut web = WebBehavior::load(ScriptId::new(),
-            br#"<!doctype html><html><body><script>globalThis.behavior={Start(){rustic.game.Demo.Room.Player.EditAttribute('Size',[2,3,4]);}};</script></body></html>"#,
+            br"<!doctype html><html><body><script>globalThis.behavior={Start(){rustic.game.Demo.Room.Player.EditAttribute('Size',[2,3,4]);}};</script></body></html>",
             "ui/target.html", Box::new(make_host()),100_000).unwrap();
         web.on_start().unwrap();
         assert_eq!(
@@ -2360,6 +2381,10 @@ rustic_run(["on_start"=>"on_start"]);"#),
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep the complete integration fixture and assertions together"
+    )]
     fn sdk_camera_selection_changes_render_camera_and_rejects_invalid_targets() {
         let first = EntitySnapshot {
             name: Some("First".into()),
@@ -2952,26 +2977,30 @@ rustic_run(["on_start"=>"on_start"]);"#),
         reason = "Language fixtures verify exactly representable scene values"
     )]
     fn high_level_gameplay_bindings_advance_in_shared_scene_runtime() {
+        use engine_core::gameplay::{
+            Ease, Value,
+            animation::{Clip, Keyframe, Marker, Track, TrackInterpolation},
+        };
         let fixtures: &[(ScriptLanguage,&str,&[u8])] = &[
-            (ScriptLanguage::Lua54,"actions.lua",br#"return {Start=function()
+            (ScriptLanguage::Lua54,"actions.lua",br"return {Start=function()
                 assert(Smooth.lerp(0,8,0.5,Ease.InQuad)==2)
                 Animation.value({{time=0,value=0,easing=Ease.InQuad},{time=2,value=8}},function(v) rustic.log('info','keyframe') end).onFinished(function() rustic.log('info','keyframesdone') end)
                 Animation.play(nil,'Grow').onMarker('Mid',function() rustic.log('info','marker') end).onFinished(function() rustic.log('info','animation') end)
                 Tween.move(rustic.game.Test.Actor,Vector3(8,0,0),2,Ease.InQuad).onFinished(function() rustic.log('info','done') end)
                 Timer.after(0.5,function() rustic.log('info','timer') end)
-            end}"#),
+            end}"),
             (ScriptLanguage::JavaScript,"actions.js",br#"globalThis.behavior={Start(){
                 if(Smooth.lerp(0,8,0.5,Ease.InQuad)!==2)throw Error("core interpolation differs");Animation.value([{time:0,value:0,easing:Ease.InQuad},{time:2,value:8}],v=>rustic.log("info","keyframe")).onFinished(()=>rustic.log("info","keyframesdone"));Animation.play(null,"Grow").onMarker("Mid",()=>rustic.log("info","marker")).onFinished(()=>rustic.log("info","animation"));Tween.move(rustic.game.Test.Actor,[8,0,0],2,Ease.InQuad).onFinished(()=>rustic.log('info','done'));
                 Timer.after(0.5,()=>rustic.log('info','timer'));
             }};"#),
 
-            (ScriptLanguage::Luau,"actions.luau",br#"return {Start=function()
+            (ScriptLanguage::Luau,"actions.luau",br"return {Start=function()
                 assert(Smooth.lerp(0,8,0.5,Ease.InQuad)==2)
                 Animation.value({{time=0,value=0,easing=Ease.InQuad},{time=2,value=8}},function(v) rustic.log('info','keyframe') end).onFinished(function() rustic.log('info','keyframesdone') end)
                 Animation.play(nil,'Grow').onMarker('Mid',function() rustic.log('info','marker') end).onFinished(function() rustic.log('info','animation') end)
                 Tween.move(rustic.game.Test.Actor,Vector3(8,0,0),2,Ease.InQuad).onFinished(function() rustic.log('info','done') end)
                 Timer.after(0.5,function() rustic.log('info','timer') end)
-            end}"#),
+            end}"),
             (ScriptLanguage::Web,"actions.html",br#"<!doctype html><html><body><script>
                 globalThis.behavior={Start(){if(Smooth.lerp(0,8,0.5,Ease.InQuad)!==2)throw Error("core interpolation differs");Animation.value([{time:0,value:0,easing:Ease.InQuad},{time:2,value:8}],v=>rustic.log("info","keyframe")).onFinished(()=>rustic.log("info","keyframesdone"));Animation.play(null,"Grow").onMarker("Mid",()=>rustic.log("info","marker")).onFinished(()=>rustic.log("info","animation"));Tween.move(rustic.game.Test.Actor,[8,0,0],2,Ease.InQuad).onFinished(()=>rustic.log('info','done'));Timer.after(0.5,()=>rustic.log('info','timer'));}};
             </script></body></html>"#),
@@ -3021,10 +3050,6 @@ rustic_run(['on_start'=>'start']);"#),
             scene.entities.push(entity.clone());
             let world = Arc::new(Mutex::new(scene.create_world().unwrap()));
             let gameplay = Arc::new(Mutex::new(GameplayContext::default()));
-            use engine_core::gameplay::{
-                Value,
-                animation::{Clip, Keyframe, Marker, Track},
-            };
             gameplay.lock().unwrap().clips.insert(
                 (entity.id, "Grow".into()),
                 Clip {
@@ -3032,17 +3057,17 @@ rustic_run(['on_start'=>'start']);"#),
                     duration: 2.0,
                     tracks: vec![Track {
                         target: "Scale".into(),
-                        interpolation: Default::default(),
+                        interpolation: TrackInterpolation::default(),
                         keys: vec![
                             Keyframe {
                                 time: 0.0,
                                 value: Value::Vector([1.; 3]),
-                                easing: Default::default(),
+                                easing: Ease::default(),
                             },
                             Keyframe {
                                 time: 2.0,
                                 value: Value::Vector([3.; 3]),
-                                easing: Default::default(),
+                                easing: Ease::default(),
                             },
                         ],
                     }],
@@ -3176,19 +3201,19 @@ rustic_run(['on_start'=>'start']);"#),
             dropped_logs: Arc::new(Mutex::new(0)),
             enabled: true,
         };
-        let mut lua=RuntimeBehavior::load(ScriptLanguage::Lua54,ScriptId::new(),br#"return {Start=function()
+        let mut lua=RuntimeBehavior::load(ScriptLanguage::Lua54,ScriptId::new(),br"return {Start=function()
             Events.once('Hit',function(id,message) assert(id==rustic.entity_id());rustic.log('info',message) end)
             Path.follow(nil,Path.create({Vector3(0,0,0),Vector3(8,0,0)}),{duration=2,easing=Ease.InQuad})
             Tween.value(0,8,2,function(value) rustic.log('info','value '..value) end,Ease.InQuad)
-        end}"#,"actions.lua",Box::new(make_host())).unwrap();
+        end}","actions.lua",Box::new(make_host())).unwrap();
         lua.on_start().unwrap();
         let mut python = RuntimeBehavior::load(
             ScriptLanguage::Python,
             ScriptId::new(),
-            br#"from rustic import rustic,run,Events
+            br"from rustic import rustic,run,Events
 def start(): Events.emit('Hit',[rustic.entity_id(),'cross-language'])
 run({'on_start':start})
-"#,
+",
             "signal.py",
             Box::new(make_host()),
         )

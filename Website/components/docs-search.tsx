@@ -34,7 +34,7 @@ export function DocsSearch() {
         <div className="breadcrumbs"><Link href="/docs">DOCS</Link><ArrowRight size={13} /><span>SEARCH</span></div>
         <section className="search-hero" aria-labelledby="search-title">
           <div className="search-hero-copy"><p><span /> DOCUMENT INDEX</p><h1 id="search-title">Search documentation</h1><div className="search-lede">Find engine APIs, scene concepts, and practical guides across the Rustic reference.</div></div>
-          <div className="search-field"><Search size={21} /><input ref={inputRef} autoFocus value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by API, concept, or guide…" aria-label="Search Rustic documentation" /></div>
+          <div className="search-field"><Search size={21} /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search by API, concept, or guide…" aria-label="Search Rustic documentation" /></div>
         </section>
         <section className="search-index" aria-label="Documentation index">
           <div className="search-index-head"><div><span>INDEX</span><h2>{query ? "Matching documentation" : "Browse all documentation"}</h2></div><p><strong>{String(results.length).padStart(2, "0")}</strong> / {String(allDocs.length).padStart(2, "0")} ENTRIES</p></div>

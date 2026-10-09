@@ -1,7 +1,0 @@
-C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\target-codex-check\debug\deps\data_url-b00089935d5075f5.d: C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs
-
-C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\target-codex-check\debug\deps\libdata_url-b00089935d5075f5.rmeta: C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs
-
-C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\lib.rs:
-C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\forgiving_base64.rs:
-C:\Users\mmmtech\Desktop\RusticGamEngine\Engine\.tools\cargo\registry\src\index.crates.io-1949cf8c6b5b557f\data-url-0.3.2\src\mime.rs:
