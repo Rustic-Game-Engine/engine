@@ -7,10 +7,13 @@ the older files under `Engine/.github/workflows` do not run automatically.
 
 The `Required checks` job fails if any Rust formatting, Clippy, unit/integration/
 documentation test, compilation, headless smoke test, language adapter check,
-dependency/license audit, secret scan, website lint/type/build/audit check,
+dependency/license audit, secret scan,
 Windows installer build, or review automation test fails or is skipped.
 The job summary links to the run; failed step logs contain diagnostic details.
 The fresh Windows installer is saved as a workflow artifact for seven days.
+
+Documentation site lint, type checking, static builds, dependency audits, and
+Cloudflare Pages deployment live in the [docs repository](https://github.com/Rustic-Game-Engine/docs).
 
 ## OpenAI setup
 
@@ -40,8 +43,8 @@ commit status on the exact PR head SHA. High/critical concerns fail the status;
 medium/low findings remain visible without blocking. A clean report is also
 posted. On pushes, results appear in the run summary and commit status.
 
-Generated `Engine/target*`, `.tools`, `dist`, website `node_modules`, `.next`, and
-TypeScript build-info files are excluded from AI review. Diffs above 300 KB,
+Generated `Engine/target*`, `.tools`, `dist`, and TypeScript build-info files
+are excluded from AI review. Diffs above 300 KB,
 binary changes outside these outputs, and commits without shared history within
 the 1,024-commit fetch window fail review rather than silently accepting partial
 coverage. Split large changes or arrange manual review. This review supplements

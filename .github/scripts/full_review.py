@@ -17,9 +17,9 @@ MAX_BATCH_BYTES = 240_000
 MAX_BATCHES = 64
 BINARY_SUFFIXES = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".exe", ".dll", ".zip", ".mp4", ".webm", ".woff", ".woff2", ".ttf", ".pdb", ".pdf"}
 SHARED_FILES = {
-    "AGENTS.md", "Engine/AGENTS.md", "Website/AGENTS.md",
+    "AGENTS.md", "Engine/AGENTS.md",
     "Engine/Cargo.toml", "Engine/rust-toolchain.toml", "Engine/deny.toml",
-    "Website/package.json", "Engine/docs/ARCHITECTURE.md",
+    "Engine/docs/ARCHITECTURE.md",
     "Engine/tools/build-windows-installer.ps1", ".github/workflows/quality.yml",
 }
 INSTRUCTIONS = """You are conducting a full repository sweep for security,
@@ -216,7 +216,7 @@ def shared_context(sources, diff, evidence, pr_event, base):
     shared = [numbered(path, sources[path]) for path in sorted(SHARED_FILES & sources.keys())]
     trusted_requirements = []
     if base.strip("0"):
-        paths = ["AGENTS.md", "Engine/AGENTS.md", "Website/AGENTS.md"]
+        paths = ["AGENTS.md", "Engine/AGENTS.md"]
         available = ai.git("ls-tree", "-r", "--name-only", base, "--", *paths, env=ai.authenticated_git_env()).decode().splitlines()
         trusted_requirements = [numbered(path, ai.git("show", f"{base}:{path}", env=ai.authenticated_git_env()).decode()) for path in available]
     pr = pr_event.get("pull_request", {})
