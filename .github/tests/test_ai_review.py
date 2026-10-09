@@ -58,6 +58,7 @@ class ReviewTests(unittest.TestCase):
     @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
     @patch.object(review, "git")
     def test_oversized_diff_is_never_silently_truncated(self, git):
+        git.side_effect = [b"", b"a" * 40, b"x" * (review.MAX_DIFF_BYTES + 1)]
         oversized = b"x" * (review.MAX_DIFF_BYTES + 1)
         git.side_effect = [b"", b"a" * 40, oversized, oversized]
         with self.assertRaisesRegex(RuntimeError, "no partial review"):
