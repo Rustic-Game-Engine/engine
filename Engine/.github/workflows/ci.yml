@@ -46,5 +46,7 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "10.0.x"
+      - name: Build bundled Luau host
+        run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
       - name: Run process and Web adapter conformance
-        run: cargo test -p engine-scripting external_runtime -- --nocapture
+        run: PATH="$PWD/target/debug:$PATH" cargo test -p engine-scripting external_runtime -- --nocapture

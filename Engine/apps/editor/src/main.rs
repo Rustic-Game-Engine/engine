@@ -3,12 +3,18 @@ mod ui_theme;
 
 use eframe::egui;
 use egui_tiles::{Behavior, TileId, Tree, UiResponse};
+use engine_assets::{
+    AssetMeta, DerivedArtifact, ImportRequest, ImporterRegistry, ModelArtifact, load_meta,
+    save_meta, sidecar_path,
+};
 use engine_core::logging::{AsyncLogger, Language, LogConfig, LogStream, Severity};
-use engine_core::{ApplicationIdentity, ApplicationRole, run_headless_smoke_from_arguments};
+use engine_core::{
+    ApplicationIdentity, ApplicationRole, AssetId, run_headless_smoke_from_arguments,
+};
 use engine_editor::{
     AuthoringDocument, ConsoleEntry, EditorCamera, EditorTab, EditorWorkspace, GizmoAxis,
     GizmoOperation, GizmoSettings, GizmoSpace, PickMesh, ProjectAccess, ProjectLock,
-    RuntimeConsole, apply_gizmo_delta, grid_lines, pick_meshes,
+    RuntimeConsole, WorldRay, apply_gizmo_delta, grid_lines, pick_meshes,
 };
 use engine_platform::{AtomicFileService, ConfigStore};
 use engine_play::{ControlRequest, PlayMode, RuntimeChangeSet, RuntimeState};
@@ -17,8 +23,8 @@ use engine_scripting::{
     CodeEditor, EditorConfiguration, EngineValue, GameSettings, ProjectOpenBehavior,
     ScriptApiVersion, ScriptId, ScriptLanguage, ScriptManifest, ScriptManifestEntry,
     ScriptReference, ScriptScope, build_editor_launch, discover_code_editor,
-    generate_programming_workspace, load_manifest, open_in_external_editor,
-    probe_language_toolchain, register_script_asset, save_manifest_atomic,
+    generate_programming_workspace, install_user_agent_integrations, load_manifest,
+    open_in_external_editor, probe_language_toolchain, register_script_asset, save_manifest_atomic,
 };
 use engine_world::ScriptComponent;
 use engine_world::{EntityId, LocalTransform, Primitive, RenderWorldBuffer};
@@ -29,7 +35,7 @@ use renderer_wgpu::{
     BackendRequest, RenderedFrame, SceneViewportRenderer, ViewportGuide, ViewportMesh,
     ViewportScene, ViewportVertex,
 };
-use std::collections::hash_map::DefaultHasher;
+use std::collections::{BTreeMap, BTreeSet, hash_map::DefaultHasher};
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -61,6 +67,9 @@ fn main() -> ExitCode {
     };
     if let Err(error) = generate_programming_workspace(&project_root, &project.metadata().name) {
         eprintln!("Could not refresh programming and AI-agent integration: {error}");
+    }
+    if let Err(error) = install_user_agent_integrations() {
+        eprintln!("Could not install user AI-agent skill/plugin: {error}");
     }
     let title = format!("{} — Rustic Editor", project.metadata().name);
     let options = eframe::NativeOptions {
@@ -100,9 +109,13 @@ fn app_icon() -> egui::IconData {
     }
 }
 
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent editor panel and interaction flags are not mutually exclusive states"
+)]
 struct EditorApp {
     document: AuthoringDocument,
-    _project_lock: Option<engine_editor::ProjectLock>,
+    project_lock: Option<engine_editor::ProjectLock>,
     dock: Tree<EditorTab>,
     workspace: EditorWorkspace,
     workspace_path: PathBuf,
@@ -115,6 +128,9 @@ struct EditorApp {
     project_tree: Option<ProjectDirectory>,
     project_scan: Option<Receiver<ProjectDirectory>>,
     last_project_scan: Instant,
+    last_scene_scan: Instant,
+    scene_disk_snapshot: Option<Vec<u8>>,
+    external_scene_change_pending: bool,
     project_panel_mode: ProjectPanelMode,
     project_filter: String,
     preview: Option<egui::TextureHandle>,
@@ -127,6 +143,7 @@ struct EditorApp {
     gizmo: GizmoSettings,
     gizmo_drag: Option<GizmoDrag>,
     render_world: RenderWorldBuffer,
+    model_assets: BTreeMap<AssetId, ModelArtifact>,
     detach_inspector: bool,
     game_settings: GameSettings,
     game_name_text: String,
@@ -138,6 +155,10 @@ struct EditorApp {
 }
 
 impl EditorApp {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "initialize related editor services and state in their dependency order"
+    )]
     fn new(project: Project, context: &egui::Context) -> Result<Self, String> {
         egui_extras::install_image_loaders(context);
         ui_theme::apply(context);
@@ -165,6 +186,7 @@ impl EditorApp {
         context.set_zoom_factor(workspace.ui_scale);
         let document =
             AuthoringDocument::open(project, read_only).map_err(|error| error.to_string())?;
+        let model_assets = load_project_model_assets(document.project().root());
         let dock = default_dock(&workspace.tabs);
         let logger = document
             .project()
@@ -179,6 +201,7 @@ impl EditorApp {
                 .ok()
             });
         let project_scan = Some(spawn_project_scan(document.project().root().to_path_buf()));
+        let scene_disk_snapshot = std::fs::read(document.scene_path()).ok();
         let (viewport_request, preview_result) = spawn_viewport_renderer();
         let game_settings = GameSettings::load(document.project().root()).unwrap_or_default();
         if !read_only
@@ -196,7 +219,7 @@ impl EditorApp {
         let show_dependency_prompt = !missing_dependencies.is_empty();
         let mut app = Self {
             document,
-            _project_lock: project_lock,
+            project_lock,
             dock,
             workspace,
             workspace_path,
@@ -209,6 +232,9 @@ impl EditorApp {
             project_tree: None,
             project_scan,
             last_project_scan: Instant::now(),
+            last_scene_scan: Instant::now(),
+            scene_disk_snapshot,
+            external_scene_change_pending: false,
             project_panel_mode: ProjectPanelMode::Scene,
             project_filter: String::new(),
             preview: None,
@@ -221,6 +247,7 @@ impl EditorApp {
             gizmo: GizmoSettings::default(),
             gizmo_drag: None,
             render_world: RenderWorldBuffer::new(),
+            model_assets,
             detach_inspector: false,
             game_settings,
             game_name_text,
@@ -276,6 +303,7 @@ impl EditorApp {
             self.camera,
             self.viewport_extent,
             &mut self.render_world,
+            &self.model_assets,
         );
         let request = ViewportRenderRequest {
             width: self.viewport_extent[0],
@@ -307,6 +335,10 @@ impl EditorApp {
             self.project_scan = Some(spawn_project_scan(
                 self.document.project().root().to_path_buf(),
             ));
+        }
+        if self.last_scene_scan.elapsed() >= Duration::from_secs(1) {
+            self.last_scene_scan = Instant::now();
+            self.reload_scene_if_changed();
         }
         // Keep polling even when the UI is otherwise idle so changes saved by an
         // external editor become visible without requiring mouse movement.
@@ -368,6 +400,7 @@ impl EditorApp {
                 ));
                 self.preview_status = format!("Runtime frame {}", frame.sequence);
             }
+            let _ = play.refresh_entity(self.document.selected());
             let events: Vec<_> = play.drain_console().collect();
             for event in events {
                 self.console.push(ConsoleEntry::from_runtime(event));
@@ -379,6 +412,52 @@ impl EditorApp {
                     "Runtime exited; authoring document is intact",
                 );
                 self.play = None;
+            }
+        }
+    }
+
+    fn reload_scene_if_changed(&mut self) {
+        let path = self.document.scene_path().to_path_buf();
+        let Ok(saved) = std::fs::read(&path) else {
+            return;
+        };
+        if self.scene_disk_snapshot.as_ref() == Some(&saved) {
+            self.external_scene_change_pending = false;
+            return;
+        }
+        if self.document.is_modified() {
+            if !self.external_scene_change_pending {
+                self.log(
+                    Severity::Warning,
+                    "scene.external",
+                    "The scene changed outside Rustic; save or undo local edits before it can be reloaded",
+                );
+                self.external_scene_change_pending = true;
+            }
+            return;
+        }
+
+        let selected = self.document.selected();
+        let project = self.document.project().clone();
+        let read_only = self.project_lock.is_none();
+        match AuthoringDocument::open(project, read_only) {
+            Ok(mut document) => {
+                document.select(selected);
+                self.document = document;
+                self.scene_disk_snapshot = Some(saved);
+                self.external_scene_change_pending = false;
+                self.refresh_preview();
+                self.log(
+                    Severity::Info,
+                    "scene.external",
+                    "Reloaded scene changes made outside Rustic",
+                );
+            }
+            Err(error) => {
+                if !self.external_scene_change_pending {
+                    self.log(Severity::Error, "scene.external", error.to_string());
+                    self.external_scene_change_pending = true;
+                }
             }
         }
     }
@@ -516,7 +595,10 @@ impl EditorApp {
 
     fn save(&mut self) {
         match self.document.save() {
-            Ok(()) => self.log(Severity::Info, "scene", "Scene saved transactionally"),
+            Ok(()) => {
+                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                self.log(Severity::Info, "scene", "Scene saved transactionally");
+            }
             Err(error) => self.log(Severity::Error, "scene", error.to_string()),
         }
     }
@@ -537,7 +619,10 @@ impl EditorApp {
 
         self.last_autosave = Some(Instant::now());
         match self.document.save() {
-            Ok(()) => self.log(Severity::Info, "scene.autosave", "Scene autosaved"),
+            Ok(()) => {
+                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                self.log(Severity::Info, "scene.autosave", "Scene autosaved");
+            }
             Err(error) => self.log(Severity::Error, "scene.autosave", error.to_string()),
         }
     }
@@ -1123,7 +1208,7 @@ impl EditorApp {
                                 "Opened the dependency installer",
                             ),
                             Err(error) => {
-                                self.log(Severity::Error, "programming.dependencies", error)
+                                self.log(Severity::Error, "programming.dependencies", error);
                             }
                         }
                         self.show_dependency_prompt = false;
@@ -1235,13 +1320,17 @@ impl eframe::App for EditorApp {
             preview_status: &self.preview_status,
             request_preview: false,
             playing: self.play.is_some(),
+            play: self.play.as_mut(),
+            play_keys: BTreeSet::new(),
             camera: &mut self.camera,
             viewport_extent: &mut self.viewport_extent,
             gizmo: &mut self.gizmo,
             gizmo_drag: &mut self.gizmo_drag,
+            model_assets: &mut self.model_assets,
             project_file_action: &mut project_file_action,
         };
         self.dock.ui(&mut viewer, ui);
+        viewer.flush_play_input();
         let request_preview = viewer.request_preview;
         drop(viewer);
         if let Some(ProjectFileAction::Attach(path, scope)) = project_file_action {
@@ -1269,11 +1358,20 @@ struct EditorViewer<'a> {
     preview_status: &'a str,
     request_preview: bool,
     playing: bool,
+    play: Option<&'a mut EditorPlaySession>,
+    play_keys: BTreeSet<String>,
     camera: &'a mut EditorCamera,
     viewport_extent: &'a mut [u32; 2],
     gizmo: &'a mut GizmoSettings,
     gizmo_drag: &'a mut Option<GizmoDrag>,
+    model_assets: &'a mut BTreeMap<AssetId, ModelArtifact>,
     project_file_action: &'a mut Option<ProjectFileAction>,
+}
+
+#[derive(Clone, Debug)]
+enum ViewportDrop {
+    ProjectFile(PathBuf),
+    ProjectDirectory(PathBuf),
 }
 
 impl Behavior<EditorTab> for EditorViewer<'_> {
@@ -1286,12 +1384,10 @@ impl Behavior<EditorTab> for EditorViewer<'_> {
             EditorTab::Viewport3d => self.viewport(ui, false),
             EditorTab::Viewport2d => self.viewport(ui, true),
             EditorTab::Hierarchy => self.hierarchy(ui),
-            EditorTab::Inspector => self.inspector(ui),
+            EditorTab::Inspector | EditorTab::Settings => self.inspector(ui),
             // Kept as a compatibility fallback for an in-memory legacy dock.
             EditorTab::ContentBrowser => self.project_explorer(ui),
             EditorTab::Console => self.console(ui),
-            // Legacy workspace files can still deserialize this removed pane.
-            EditorTab::Settings => self.inspector(ui),
         }
         UiResponse::None
     }
@@ -1342,7 +1438,7 @@ impl EditorViewer<'_> {
             }
         });
         let frame = egui::Frame::NONE.fill(egui::Color32::from_rgb(23, 27, 34));
-        let (body, dropped) = ui.dnd_drop_zone::<PathBuf, _>(frame, |ui| {
+        let (body, dropped) = ui.dnd_drop_zone::<ViewportDrop, _>(frame, |ui| {
             let size = ui.available_size().max(egui::vec2(64.0, 64.0));
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
             if let Some(texture) = self.preview {
@@ -1399,18 +1495,20 @@ impl EditorViewer<'_> {
             *self.viewport_extent = extent;
             self.request_preview = true;
         }
-        if !is_2d && !self.playing {
+        if self.playing {
+            self.play_viewport_input(ui, &response);
+        } else if !is_2d {
             self.viewport_input(ui, &response);
             self.gizmo_overlay(ui, response.rect);
         }
-        if let Some(path) = dropped {
+        if let Some(ViewportDrop::ProjectFile(path)) = dropped.as_deref() {
             if path.extension().is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("scene") || extension.eq_ignore_ascii_case("rscene")
             }) {
                 let relative = path
                     .strip_prefix("scene")
                     .or_else(|_| path.strip_prefix("scenes"))
-                    .unwrap_or(&path);
+                    .unwrap_or(path);
                 match self.document.insert_scene(relative, None) {
                     Ok(ids) => {
                         self.request_preview = true;
@@ -1426,17 +1524,67 @@ impl EditorViewer<'_> {
                         error.to_string(),
                     )),
                 }
-            } else if ScriptLanguage::from_path(&path).is_some() {
+            } else if is_model_asset(path) {
+                if is_2d || self.playing {
+                    self.console.push(simple_console(
+                        Severity::Warning,
+                        "editor",
+                        "Models can only be dropped into the editable 3D viewport",
+                    ));
+                } else {
+                    let drop_position = ui
+                        .input(|input| input.pointer.interact_pos())
+                        .and_then(|pointer| {
+                            viewport_ground_position(*self.camera, response.rect, pointer)
+                        })
+                        .unwrap_or(self.camera.focus);
+                    match import_model_asset(self.project_root, path).and_then(
+                        |(asset_id, model)| {
+                            let name = path
+                                .file_stem()
+                                .and_then(|value| value.to_str())
+                                .unwrap_or("Model");
+                            let transform = LocalTransform {
+                                translation: drop_position,
+                                ..LocalTransform::IDENTITY
+                            };
+                            let parent = selected_scene_folder(self.document);
+                            let entity = self
+                                .document
+                                .add_model(name, asset_id, parent, transform)
+                                .map_err(|error| error.to_string())?;
+                            self.model_assets.insert(asset_id, model);
+                            Ok(entity)
+                        },
+                    ) {
+                        Ok(_) => {
+                            self.request_preview = true;
+                            self.console.push(simple_console(
+                                Severity::Info,
+                                "editor",
+                                format!("Added model {} to the 3D world", path.display()),
+                            ));
+                        }
+                        Err(error) => {
+                            self.console
+                                .push(simple_console(Severity::Error, "assets", error));
+                        }
+                    }
+                }
+            } else if ScriptLanguage::from_path(path).is_some() {
                 if let Some(entity) = self.document.selected() {
-                    match attach_script_to_entity(self.document, entity, &path) {
+                    match attach_script_to_entity(self.document, entity, path) {
                         Ok(()) => self.console.push(simple_console(
                             Severity::Info,
                             "programming",
                             format!("Attached {} to selected object", path.display()),
                         )),
                         Err(error) => {
-                            self.console
-                                .push(simple_console(Severity::Error, "programming", error))
+                            self.console.push(simple_console(
+                                Severity::Error,
+                                "programming",
+                                error,
+                            ));
                         }
                     }
                 } else {
@@ -1454,7 +1602,59 @@ impl EditorViewer<'_> {
                 ));
             }
         }
+        // Directories organize project assets and have no viewport representation.
+        if matches!(dropped.as_deref(), Some(ViewportDrop::ProjectDirectory(_))) {
+            self.console.push(simple_console(
+                Severity::Info,
+                "explorer",
+                "Folders can only be moved inside the Explorer",
+            ));
+        }
         ui.small(self.preview_status);
+    }
+
+    fn play_viewport_input(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        if response.hovered() && ui.input(|input| input.pointer.any_pressed()) {
+            response.request_focus();
+        }
+        let keyboard_active =
+            (response.has_focus() || response.hovered()) && !ui.ctx().egui_wants_keyboard_input();
+        let keys = if keyboard_active {
+            ui.input(|input| {
+                let mut keys = BTreeSet::new();
+                for (key, name) in [
+                    (egui::Key::A, "KeyA"),
+                    (egui::Key::D, "KeyD"),
+                    (egui::Key::W, "KeyW"),
+                    (egui::Key::S, "KeyS"),
+                    (egui::Key::ArrowLeft, "ArrowLeft"),
+                    (egui::Key::ArrowRight, "ArrowRight"),
+                    (egui::Key::ArrowUp, "ArrowUp"),
+                    (egui::Key::ArrowDown, "ArrowDown"),
+                ] {
+                    if input.key_down(key) {
+                        keys.insert(name.to_owned());
+                    }
+                }
+                if input.modifiers.shift {
+                    keys.insert("ShiftLeft".to_owned());
+                    keys.insert("ShiftRight".to_owned());
+                }
+                keys
+            })
+        } else {
+            BTreeSet::new()
+        };
+        self.play_keys.extend(keys);
+    }
+
+    fn flush_play_input(&mut self) {
+        if let Some(play) = self.play.as_mut()
+            && let Err(error) = play.set_input_keys(std::mem::take(&mut self.play_keys))
+        {
+            self.console
+                .push(simple_console(Severity::Error, "runtime.input", error));
+        }
     }
 
     fn viewport_input(&mut self, ui: &egui::Ui, response: &egui::Response) {
@@ -1543,7 +1743,7 @@ impl EditorViewer<'_> {
             let picked = self
                 .camera
                 .world_ray(pixel, extent)
-                .and_then(|ray| pick_meshes(ray, &pick_scene(self.document)));
+                .and_then(|ray| pick_meshes(ray, &pick_scene(self.document, self.model_assets)));
             let preserve = ui.input(|input| input.modifiers.shift || input.modifiers.command);
             if picked.is_some() || !preserve {
                 self.document.select(picked);
@@ -1565,6 +1765,10 @@ impl EditorViewer<'_> {
         self.request_preview = true;
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep translation and scale interaction in one immediate-mode layout"
+    )]
     fn gizmo_overlay(&mut self, ui: &egui::Ui, rect: egui::Rect) {
         let Some(entity) = self.document.selected() else {
             return;
@@ -1593,10 +1797,20 @@ impl EditorViewer<'_> {
             );
             return;
         }
+        let active_axis = self.gizmo_drag.as_ref().map(|drag| drag.axis);
+        let center_rect = egui::Rect::from_center_size(origin, egui::vec2(13.0, 13.0));
+        ui.painter()
+            .rect_filled(center_rect, 1.5, egui::Color32::from_rgb(72, 76, 82));
+        ui.painter().rect_stroke(
+            center_rect,
+            1.5,
+            egui::Stroke::new(1.0, egui::Color32::from_rgb(205, 209, 215)),
+            egui::StrokeKind::Outside,
+        );
         for (axis, color) in [
-            (GizmoAxis::X, egui::Color32::RED),
-            (GizmoAxis::Y, egui::Color32::GREEN),
-            (GizmoAxis::Z, egui::Color32::BLUE),
+            (GizmoAxis::X, egui::Color32::from_rgb(224, 67, 54)),
+            (GizmoAxis::Y, egui::Color32::from_rgb(112, 205, 58)),
+            (GizmoAxis::Z, egui::Color32::from_rgb(57, 126, 231)),
         ] {
             let axis_world = if self.gizmo.space == GizmoSpace::Local {
                 snapshot.local_transform.rotation * axis.vector()
@@ -1609,11 +1823,48 @@ impl EditorViewer<'_> {
             };
             let direction = (projected - origin).normalized();
             let end = origin + direction * 72.0;
+            let display_color = if active_axis == Some(axis) {
+                egui::Color32::from_rgb(255, 214, 71)
+            } else {
+                color
+            };
             ui.painter()
-                .line_segment([origin, end], egui::Stroke::new(4.0, color));
-            ui.painter().circle_filled(end, 6.0, color);
+                .line_segment([origin, end], egui::Stroke::new(3.0, display_color));
+            match self.gizmo.operation {
+                GizmoOperation::Translate => {
+                    let perpendicular = egui::vec2(-direction.y, direction.x);
+                    ui.painter().add(egui::Shape::convex_polygon(
+                        vec![
+                            end + direction * 9.0,
+                            end - direction * 5.0 + perpendicular * 6.0,
+                            end - direction * 5.0 - perpendicular * 6.0,
+                        ],
+                        display_color,
+                        egui::Stroke::NONE,
+                    ));
+                }
+                GizmoOperation::Scale => {
+                    ui.painter().rect_filled(
+                        egui::Rect::from_center_size(end, egui::vec2(12.0, 12.0)),
+                        1.0,
+                        display_color,
+                    );
+                }
+                GizmoOperation::Rotate => {}
+            }
+            ui.painter().text(
+                end + direction * 17.0,
+                egui::Align2::CENTER_CENTER,
+                match axis {
+                    GizmoAxis::X => "X",
+                    GizmoAxis::Y => "Y",
+                    GizmoAxis::Z => "Z",
+                },
+                egui::FontId::proportional(11.0),
+                display_color,
+            );
             let interaction = ui.interact(
-                egui::Rect::from_two_pos(origin, end).expand(8.0),
+                egui::Rect::from_two_pos(origin, end + direction * 10.0).expand(8.0),
                 egui::Id::new(("viewport-gizmo", entity.to_string(), axis as u8)),
                 if self.document.is_read_only() {
                     egui::Sense::hover()
@@ -1621,6 +1872,9 @@ impl EditorViewer<'_> {
                     egui::Sense::drag()
                 },
             );
+            if interaction.hovered() && active_axis.is_none() {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
             if interaction.drag_started() {
                 *self.gizmo_drag = Some(GizmoDrag {
                     entity,
@@ -1667,6 +1921,10 @@ impl EditorViewer<'_> {
     #[allow(
         clippy::too_many_arguments,
         reason = "the rotation overlay needs the viewport projection and selected transform"
+    )]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep rotation ring drawing and pointer interaction together"
     )]
     fn rotation_gizmo_overlay(
         &mut self,
@@ -1835,13 +2093,7 @@ impl EditorViewer<'_> {
     fn scene_tree(&mut self, ui: &mut egui::Ui) {
         let snapshots = self.document.entity_snapshots();
         let entity_count = snapshots.as_ref().map_or(0, Vec::len);
-        let selected_folder = snapshots.as_ref().ok().and_then(|items| {
-            let selected = self.document.selected()?;
-            items
-                .iter()
-                .find(|item| item.id == selected && item.folder)
-                .map(|item| item.id)
-        });
+        let selected_folder = selected_scene_folder(self.document);
         ui.horizontal(|ui| {
             ui.label(
                 egui::RichText::new(format!("{entity_count} entities")).color(ui_theme::MUTED),
@@ -1913,11 +2165,26 @@ impl EditorViewer<'_> {
             .auto_shrink([false, false])
             .show(ui, |ui| match snapshots {
                 Ok(snapshots) => {
-                    if let Some(id) =
-                        render_scene_hierarchy(ui, &snapshots, None, self.document.selected())
-                    {
+                    let (root, dropped) = ui
+                        .dnd_drop_zone::<SceneTreeDrag, _>(egui::Frame::NONE, |ui| {
+                            render_scene_hierarchy(ui, &snapshots, None, self.document.selected())
+                        });
+                    if let Some(id) = root.inner.clicked {
                         self.document.select(Some(id));
                         self.request_preview = true;
+                    }
+                    let reparent = root
+                        .inner
+                        .reparent
+                        .or_else(|| dropped.as_deref().map(|payload| (payload.entity, None)));
+                    if let Some((entity, parent)) = reparent
+                        && let Err(error) = self.document.reparent(entity, parent)
+                    {
+                        self.console.push(simple_console(
+                            Severity::Error,
+                            "editor",
+                            error.to_string(),
+                        ));
                     }
                 }
                 Err(error) => {
@@ -1962,13 +2229,26 @@ impl EditorViewer<'_> {
                 .id_salt("game-project-files")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    action = render_project_root(
-                        ui,
-                        tree,
-                        &filter,
-                        !self.document.is_read_only(),
-                        self.document.selected().is_some(),
-                    );
+                    let (root, dropped) =
+                        ui.dnd_drop_zone::<ViewportDrop, _>(egui::Frame::NONE, |ui| {
+                            render_project_root(
+                                ui,
+                                tree,
+                                &filter,
+                                !self.document.is_read_only(),
+                                self.document.selected().is_some(),
+                            )
+                        });
+                    action = root.inner;
+                    if action.is_none() {
+                        action = dropped.as_deref().map(|payload| match payload {
+                            ViewportDrop::ProjectFile(path)
+                            | ViewportDrop::ProjectDirectory(path) => ProjectFileAction::Move {
+                                source: path.clone(),
+                                destination: PathBuf::new(),
+                            },
+                        });
+                    }
                     if !filter.is_empty() && !project_directory_matches(tree, &filter) {
                         ui.vertical_centered(|ui| {
                             ui.add_space(24.0);
@@ -1987,6 +2267,21 @@ impl EditorViewer<'_> {
             Some(ProjectFileAction::Open(path)) => self.open_project_script(&path),
             Some(action @ ProjectFileAction::Attach(_, _)) => {
                 *self.project_file_action = Some(action);
+            }
+            Some(ProjectFileAction::Move {
+                source,
+                destination,
+            }) => {
+                if let Err(error) = move_project_entry(self.project_root, &source, &destination) {
+                    self.console
+                        .push(simple_console(Severity::Error, "explorer", error));
+                } else {
+                    self.console.push(simple_console(
+                        Severity::Info,
+                        "explorer",
+                        "Moved project entry",
+                    ));
+                }
             }
             None => {}
         }
@@ -2038,9 +2333,19 @@ impl EditorViewer<'_> {
     fn inspector(&mut self, ui: &mut egui::Ui) {
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
-            .show(ui, |ui| self.inspector_contents(ui));
+            .show(ui, |ui| {
+                let playing = self.play.is_some();
+                if playing {
+                    ui.label("Live runtime values · read only during Play");
+                }
+                ui.add_enabled_ui(!playing, |ui| self.inspector_contents(ui));
+            });
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep conditional inspector controls and their authoring actions together"
+    )]
     fn inspector_contents(&mut self, ui: &mut egui::Ui) {
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
@@ -2055,19 +2360,30 @@ impl EditorViewer<'_> {
             });
             return;
         };
-        let Ok(snapshot) = self.document.world().snapshot(entity) else {
+        let Ok(mut snapshot) = self.document.world().snapshot(entity) else {
             ui.label("Selection is no longer available.");
             return;
         };
+        if let Some(live) = self.play.as_ref().and_then(|play| play.live_entity())
+            && live.entity_id == entity.to_string()
+        {
+            snapshot.name.clone_from(&live.name);
+            snapshot.local_transform.translation = live.translation.into();
+            snapshot.local_transform.rotation = glam::Quat::from_array(live.rotation);
+            snapshot.local_transform.scale = live.scale.into();
+            snapshot.part_attributes = live.part_attributes;
+            snapshot.scripts.clone_from(&live.scripts);
+        }
         let mut name = snapshot.name.clone().unwrap_or_else(|| "Entity".into());
-        if ui.text_edit_singleline(&mut name).changed() && !self.document.is_read_only() {
-            if let Err(error) = self.document.set_name(entity, name) {
-                self.console.push(simple_console(
-                    Severity::Error,
-                    "inspector",
-                    error.to_string(),
-                ));
-            }
+        if ui.text_edit_singleline(&mut name).changed()
+            && !self.document.is_read_only()
+            && let Err(error) = self.document.set_name(entity, name)
+        {
+            self.console.push(simple_console(
+                Severity::Error,
+                "inspector",
+                error.to_string(),
+            ));
         }
         ui.label(
             egui::RichText::new(entity.to_string())
@@ -2075,18 +2391,17 @@ impl EditorViewer<'_> {
                 .small()
                 .color(ui_theme::MUTED),
         );
-        ui.separator();
         let mut transform = snapshot.local_transform;
         let mut translation = transform.translation.to_array();
-        ui_theme::section(ui, "Transform", "Translation");
-        let changed = ui
-            .horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut translation[0]).prefix("X "))
-                    .changed()
-                    | ui.add(egui::DragValue::new(&mut translation[1]).prefix("Y "))
-                        .changed()
-                    | ui.add(egui::DragValue::new(&mut translation[2]).prefix("Z "))
-                        .changed()
+        let mut rotation = rotation_degrees(transform.rotation);
+        let mut scale = transform.scale.to_array();
+        ui.add_space(4.0);
+        let (changed, rotation_changed, scale_changed) =
+            ui_theme::component_card(ui, "Transform", |ui| {
+                let changed = transform_vector_row(ui, "Position", &mut translation, 0.1);
+                let rotation_changed = transform_vector_row(ui, "Rotation", &mut rotation, 0.5);
+                let scale_changed = transform_vector_row(ui, "Scale", &mut scale, 0.05);
+                (changed, rotation_changed, scale_changed)
             })
             .inner;
         if changed && !self.document.is_read_only() {
@@ -2101,48 +2416,12 @@ impl EditorViewer<'_> {
                 self.request_preview = true;
             }
         }
-        let mut rotation = rotation_degrees(transform.rotation);
-        ui.label("Rotation (degrees)");
-        let rotation_changed = ui
-            .horizontal(|ui| {
-                ui.add(
-                    egui::DragValue::new(&mut rotation[0])
-                        .prefix("X ")
-                        .speed(0.5),
-                )
-                .changed()
-                    | ui.add(
-                        egui::DragValue::new(&mut rotation[1])
-                            .prefix("Y ")
-                            .speed(0.5),
-                    )
-                    .changed()
-                    | ui.add(
-                        egui::DragValue::new(&mut rotation[2])
-                            .prefix("Z ")
-                            .speed(0.5),
-                    )
-                    .changed()
-            })
-            .inner;
         if rotation_changed && !self.document.is_read_only() {
             transform.rotation = rotation_from_degrees(rotation);
             if self.document.set_transform(entity, transform).is_ok() {
                 self.request_preview = true;
             }
         }
-        let mut scale = transform.scale.to_array();
-        ui.label("Size (X, Y, Z)");
-        let scale_changed = ui
-            .horizontal(|ui| {
-                ui.add(egui::DragValue::new(&mut scale[0]).prefix("X "))
-                    .changed()
-                    | ui.add(egui::DragValue::new(&mut scale[1]).prefix("Y "))
-                        .changed()
-                    | ui.add(egui::DragValue::new(&mut scale[2]).prefix("Z "))
-                        .changed()
-            })
-            .inner;
         if scale_changed && !self.document.is_read_only() {
             transform.scale = scale.into();
             if self.document.set_transform(entity, transform).is_ok() {
@@ -2153,14 +2432,14 @@ impl EditorViewer<'_> {
             ui.separator();
             ui_theme::section(ui, "Camera", "Game view during Play");
             ui.label("Looks along local +Z. Highest active priority is used.");
-            if ui.button("Align to editor view").clicked() && !self.document.is_read_only() {
-                if self
+            if ui.button("Align to editor view").clicked()
+                && !self.document.is_read_only()
+                && self
                     .document
                     .set_transform(entity, camera_placement(*self.camera))
                     .is_ok()
-                {
-                    self.request_preview = true;
-                }
+            {
+                self.request_preview = true;
             }
             if edit_camera(ui, &mut camera) && !self.document.is_read_only() {
                 match self.document.set_camera(entity, camera) {
@@ -2196,25 +2475,32 @@ impl EditorViewer<'_> {
             attributes.color = color;
             attributes_changed |= ui
                 .checkbox(&mut attributes.can_touch, "Can touch")
+                .on_hover_text("Reserved for touch events. Does not affect solid collisions.")
                 .changed();
             attributes_changed |= ui
                 .checkbox(&mut attributes.can_collide, "Can collide")
+                .on_hover_text("Built-in primitives collide in Play when both objects enable this.")
                 .changed();
-            attributes_changed |= ui.checkbox(&mut attributes.anchored, "Anchored").changed();
+            attributes_changed |= ui
+                .checkbox(&mut attributes.anchored, "Anchored")
+                .on_hover_text(
+                    "Prevents gravity and collision response from moving this primitive in Play.",
+                )
+                .changed();
             ui.label(format!(
                 "Parent: {}",
                 snapshot
                     .parent
                     .map_or_else(|| "Scene root".into(), |id| id.to_string())
             ));
-            if attributes_changed && !self.document.is_read_only() {
-                if self
+            if attributes_changed
+                && !self.document.is_read_only()
+                && self
                     .document
                     .set_part_attributes(entity, attributes)
                     .is_ok()
-                {
-                    self.request_preview = true;
-                }
+            {
+                self.request_preview = true;
             }
         }
         if let Some(mut primitive) = snapshot.primitive {
@@ -2405,6 +2691,30 @@ impl EditorViewer<'_> {
     }
 }
 
+fn transform_vector_row(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], speed: f64) -> bool {
+    ui.horizontal(|ui| {
+        ui.add_sized(
+            [58.0, ui.spacing().interact_size.y],
+            egui::Label::new(egui::RichText::new(label).color(ui_theme::MUTED)),
+        );
+        let available = ui.available_width();
+        let field_width = ((available - ui.spacing().item_spacing.x * 2.0) / 3.0).max(42.0);
+        let mut changed = false;
+        for (index, axis) in ["X", "Y", "Z"].into_iter().enumerate() {
+            changed |= ui
+                .add_sized(
+                    [field_width, ui.spacing().interact_size.y],
+                    egui::DragValue::new(&mut values[index])
+                        .prefix(format!("{axis} "))
+                        .speed(speed),
+                )
+                .changed();
+        }
+        changed
+    })
+    .inner
+}
+
 #[derive(Clone, Copy)]
 struct GizmoDrag {
     entity: EntityId,
@@ -2424,7 +2734,7 @@ fn projected_rotation_ring(
     rect: egui::Rect,
     radius: f32,
 ) -> Vec<egui::Pos2> {
-    const SEGMENTS: usize = 64;
+    const SEGMENTS: u16 = 64;
     let reference = if axis_world.dot(Vec3::Y).abs() < 0.9 {
         Vec3::Y
     } else {
@@ -2432,9 +2742,9 @@ fn projected_rotation_ring(
     };
     let tangent = axis_world.cross(reference).normalize();
     let bitangent = axis_world.cross(tangent).normalize();
-    let mut points = Vec::with_capacity(SEGMENTS);
+    let mut points = Vec::with_capacity(usize::from(SEGMENTS));
     for index in 0..SEGMENTS {
-        let angle = index as f32 * std::f32::consts::TAU / SEGMENTS as f32;
+        let angle = f32::from(index) * std::f32::consts::TAU / f32::from(SEGMENTS);
         let circle_point = origin_world + tangent * angle.cos() + bitangent * angle.sin();
         let Some(projected) = project_to_rect(view_projection, circle_point, rect) else {
             return Vec::new();
@@ -2602,11 +2912,11 @@ fn default_dock(tabs: &[EditorTab]) -> Tree<EditorTab> {
         .map(|tab| tiles.insert_pane(tab))
         .collect();
     let viewports = tiles.insert_tab_tile(viewport_tabs);
-    let left = tiles.insert_pane(EditorTab::Hierarchy);
+    let left = tiles.insert_pane(EditorTab::Inspector);
     let console = tiles.insert_pane(EditorTab::Console);
     let center = tiles.insert_vertical_tile(vec![viewports, console]);
-    let inspector = tiles.insert_pane(EditorTab::Inspector);
-    let root = tiles.insert_horizontal_tile(vec![left, center, inspector]);
+    let hierarchy = tiles.insert_pane(EditorTab::Hierarchy);
+    let root = tiles.insert_horizontal_tile(vec![left, center, hierarchy]);
     Tree::new("rustic-editor-dock", root, tiles)
 }
 
@@ -2615,6 +2925,7 @@ fn viewport_scene(
     camera: EditorCamera,
     extent: [u32; 2],
     render_world_buffer: &mut RenderWorldBuffer,
+    model_assets: &BTreeMap<AssetId, ModelArtifact>,
 ) -> ViewportScene {
     let aspect = extent[0].to_f32().unwrap_or(1.0) / extent[1].max(1).to_f32().unwrap_or(1.0);
     let mut meshes = Vec::new();
@@ -2653,6 +2964,39 @@ fn viewport_scene(
                 .color,
             selected: document.selected() == Some(entity),
         });
+    }
+    for extracted in render_world.meshes {
+        let Some(model) = model_assets.get(&extracted.mesh) else {
+            continue;
+        };
+        for (mesh_index, imported) in model.meshes.iter().enumerate() {
+            let vertices = imported
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(index, position)| ViewportVertex {
+                    position: *position,
+                    normal: imported
+                        .normals
+                        .get(index)
+                        .copied()
+                        .unwrap_or([0.0, 1.0, 0.0]),
+                })
+                .collect();
+            let color = model
+                .materials
+                .get(mesh_index)
+                .map_or([0.55, 0.62, 0.72, 1.0], |material| material.base_color);
+            meshes.push(ViewportMesh {
+                instance_key: hash_value(&(extracted.entity.to_string(), mesh_index)),
+                mesh_key: hash_value(&(extracted.mesh, mesh_index)),
+                vertices,
+                indices: imported.indices.clone(),
+                model: extracted.transform,
+                color,
+                selected: document.selected() == Some(extracted.entity),
+            });
+        }
     }
     ViewportScene {
         view_projection: camera.view_projection(aspect).to_cols_array(),
@@ -2800,10 +3144,10 @@ fn light_guide_vertices(light: engine_world::Light, transform: Mat4) -> Vec<[f32
         }
         engine_world::LightKind::Spot => {
             let radius = light.range * light.spot_outer_angle_radians.tan();
-            let segments = 32;
+            let segments = 32u16;
             for index in 0..segments {
-                let a = std::f32::consts::TAU * index as f32 / segments as f32;
-                let b = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+                let a = std::f32::consts::TAU * f32::from(index) / f32::from(segments);
+                let b = std::f32::consts::TAU * f32::from(index + 1) / f32::from(segments);
                 let first = Vec3::new(radius * a.cos(), radius * a.sin(), light.range);
                 let second = Vec3::new(radius * b.cos(), radius * b.sin(), light.range);
                 push_local_line(&mut output, transform, first, second);
@@ -2819,11 +3163,11 @@ fn light_guide_vertices(light: engine_world::Light, transform: Mat4) -> Vec<[f32
             );
         }
         engine_world::LightKind::Point => {
-            let segments = 32;
+            let segments = 32u16;
             for axis in 0..3 {
                 for index in 0..segments {
-                    let a = std::f32::consts::TAU * index as f32 / segments as f32;
-                    let b = std::f32::consts::TAU * (index + 1) as f32 / segments as f32;
+                    let a = std::f32::consts::TAU * f32::from(index) / f32::from(segments);
+                    let b = std::f32::consts::TAU * f32::from(index + 1) / f32::from(segments);
                     let circle_point = |angle: f32| match axis {
                         0 => Vec3::new(0.0, angle.cos(), angle.sin()) * light.range,
                         1 => Vec3::new(angle.cos(), 0.0, angle.sin()) * light.range,
@@ -2886,8 +3230,11 @@ mod camera_light_guide_tests {
     }
 }
 
-fn pick_scene(document: &AuthoringDocument) -> Vec<PickMesh> {
-    document
+fn pick_scene(
+    document: &AuthoringDocument,
+    model_assets: &BTreeMap<AssetId, ModelArtifact>,
+) -> Vec<PickMesh> {
+    let mut meshes: Vec<_> = document
         .world()
         .entity_ids()
         .filter_map(|entity| {
@@ -2905,7 +3252,25 @@ fn pick_scene(document: &AuthoringDocument) -> Vec<PickMesh> {
                 indices: generated.indices,
             })
         })
-        .collect()
+        .collect();
+    for entity in document.world().entity_ids() {
+        let Ok(Some(mesh)) = document.world().mesh(entity) else {
+            continue;
+        };
+        let Some(model) = model_assets.get(&mesh.asset) else {
+            continue;
+        };
+        let Ok(transform) = document.world().world_transform(entity) else {
+            continue;
+        };
+        meshes.extend(model.meshes.iter().map(|imported| PickMesh {
+            entity,
+            transform: transform.0,
+            positions: imported.positions.clone(),
+            indices: imported.indices.clone(),
+        }));
+    }
+    meshes
 }
 
 fn project_to_rect(view_projection: Mat4, point: Vec3, rect: egui::Rect) -> Option<egui::Pos2> {
@@ -2918,6 +3283,111 @@ fn project_to_rect(view_projection: Mat4, point: Vec3, rect: egui::Rect) -> Opti
         rect.left() + ndc.x.midpoint(1.0) * rect.width(),
         rect.top() + (-ndc.y).midpoint(1.0) * rect.height(),
     ))
+}
+
+fn viewport_ground_position(
+    camera: EditorCamera,
+    rect: egui::Rect,
+    pointer: egui::Pos2,
+) -> Option<Vec3> {
+    if !rect.contains(pointer) {
+        return None;
+    }
+    let pixel = Vec2::new(pointer.x - rect.left(), pointer.y - rect.top());
+    let extent = Vec2::new(rect.width(), rect.height());
+    ray_ground_intersection(camera.world_ray(pixel, extent)?)
+}
+
+fn ray_ground_intersection(ray: WorldRay) -> Option<Vec3> {
+    if ray.direction.y.abs() <= 1.0e-5 {
+        return None;
+    }
+    let distance = -ray.origin.y / ray.direction.y;
+    (distance >= 0.0)
+        .then(|| ray.origin + ray.direction * distance)
+        .filter(|position| position.is_finite())
+}
+
+fn selected_scene_folder(document: &AuthoringDocument) -> Option<EntityId> {
+    let selected = document.selected()?;
+    document
+        .world()
+        .snapshot(selected)
+        .ok()
+        .filter(|snapshot| snapshot.folder)
+        .map(|snapshot| snapshot.id)
+}
+
+fn is_model_asset(path: &Path) -> bool {
+    path.extension()
+        .and_then(|value| value.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "obj" | "gltf" | "glb" | "fbx"
+            )
+        })
+}
+
+fn import_model_asset(root: &Path, relative: &Path) -> Result<(AssetId, ModelArtifact), String> {
+    engine_assets::validate_asset_relative_path(relative).map_err(|error| error.to_string())?;
+    let source = root.join(relative);
+    if !source.is_file() {
+        return Err(format!("model asset {} does not exist", relative.display()));
+    }
+    let contract = ImporterRegistry::contract(relative).map_err(|error| error.to_string())?;
+    let meta_path = sidecar_path(&source);
+    let meta = if meta_path.is_file() {
+        load_meta(&meta_path).map_err(|error| error.to_string())?
+    } else {
+        let meta = AssetMeta::new(contract.id, contract.version);
+        save_meta(&meta_path, &meta).map_err(|error| error.to_string())?;
+        meta
+    };
+    let bytes = std::fs::read(&source)
+        .map_err(|error| format!("could not read {}: {error}", source.display()))?;
+    let artifact = ImporterRegistry::import(&ImportRequest::new(relative, bytes))
+        .map_err(|error| error.to_string())?;
+    match artifact {
+        DerivedArtifact::Model(model) => Ok((meta.asset_id, model)),
+        _ => Err(format!("{} is not a 3D model", relative.display())),
+    }
+}
+
+fn load_project_model_assets(root: &Path) -> BTreeMap<AssetId, ModelArtifact> {
+    fn visit(root: &Path, directory: &Path, output: &mut BTreeMap<AssetId, ModelArtifact>) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
+            if file_type.is_dir() {
+                if !is_hidden_project_directory(&entry.file_name()) {
+                    visit(root, &path, output);
+                }
+                continue;
+            }
+            let Ok(relative) = path.strip_prefix(root) else {
+                continue;
+            };
+            if is_model_asset(relative)
+                && sidecar_path(&path).is_file()
+                && let Ok((asset_id, model)) = import_model_asset(root, relative)
+            {
+                output.insert(asset_id, model);
+            }
+        }
+    }
+
+    let mut output = BTreeMap::new();
+    visit(root, root, &mut output);
+    output
 }
 
 fn hash_value(value: &impl Hash) -> u64 {
@@ -3143,13 +3613,24 @@ struct ProjectDirectory {
     files: Vec<ProjectFile>,
 }
 
+#[derive(Clone, Debug)]
+struct SceneTreeDrag {
+    entity: engine_core::EntityId,
+}
+
+#[derive(Default)]
+struct SceneTreeResponse {
+    clicked: Option<engine_core::EntityId>,
+    reparent: Option<(engine_core::EntityId, Option<engine_core::EntityId>)>,
+}
+
 fn render_scene_hierarchy(
     ui: &mut egui::Ui,
     snapshots: &[engine_world::EntitySnapshot],
     parent: Option<engine_core::EntityId>,
     selected: Option<engine_core::EntityId>,
-) -> Option<engine_core::EntityId> {
-    let mut clicked = None;
+) -> SceneTreeResponse {
+    let mut result = SceneTreeResponse::default();
     for snapshot in snapshots.iter().filter(|item| item.parent == parent) {
         let label = snapshot
             .name
@@ -3164,33 +3645,66 @@ fn render_scene_hierarchy(
             } else {
                 label
             };
-            let response =
-                egui::CollapsingHeader::new(egui::RichText::new(title).color(ui_theme::TEXT))
-                    .id_salt(("scene-entity", snapshot.id))
-                    .default_open(snapshot.folder)
-                    .show(ui, |ui| {
-                        render_scene_hierarchy(ui, snapshots, Some(snapshot.id), selected)
+            let (drop, dropped) = ui.dnd_drop_zone::<SceneTreeDrag, _>(egui::Frame::NONE, |ui| {
+                let response =
+                    egui::CollapsingHeader::new(egui::RichText::new(title).color(ui_theme::TEXT))
+                        .id_salt(("scene-entity", snapshot.id))
+                        .default_open(snapshot.folder)
+                        .show(ui, |ui| {
+                            render_scene_hierarchy(ui, snapshots, Some(snapshot.id), selected)
+                        });
+                response
+                    .header_response
+                    .interact(egui::Sense::click_and_drag())
+                    .dnd_set_drag_payload(SceneTreeDrag {
+                        entity: snapshot.id,
                     });
+                response
+            });
+            let response = drop.inner;
             if response.header_response.clicked() {
-                clicked = Some(snapshot.id);
+                result.clicked = Some(snapshot.id);
             }
-            if let Some(child) = response.body_returned.flatten() {
-                clicked = Some(child);
+            if let Some(child) = response.body_returned {
+                if child.clicked.is_some() {
+                    result.clicked = child.clicked;
+                }
+                if child.reparent.is_some() {
+                    result.reparent = child.reparent;
+                }
             }
             if selected == Some(snapshot.id) {
                 response.header_response.highlight();
             }
-        } else if ui
-            .selectable_label(
-                selected == Some(snapshot.id),
-                egui::RichText::new(label).color(ui_theme::TEXT),
-            )
-            .clicked()
-        {
-            clicked = Some(snapshot.id);
+            if let Some(payload) = dropped.as_deref()
+                && payload.entity != snapshot.id
+            {
+                result.reparent = Some((payload.entity, Some(snapshot.id)));
+            }
+        } else {
+            let (drop, dropped) = ui.dnd_drop_zone::<SceneTreeDrag, _>(egui::Frame::NONE, |ui| {
+                let response = ui.selectable_label(
+                    selected == Some(snapshot.id),
+                    egui::RichText::new(label).color(ui_theme::TEXT),
+                );
+                response
+                    .interact(egui::Sense::click_and_drag())
+                    .dnd_set_drag_payload(SceneTreeDrag {
+                        entity: snapshot.id,
+                    });
+                response
+            });
+            if drop.inner.clicked() {
+                result.clicked = Some(snapshot.id);
+            }
+            if let Some(payload) = dropped.as_deref()
+                && payload.entity != snapshot.id
+            {
+                result.reparent = Some((payload.entity, Some(snapshot.id)));
+            }
         }
     }
-    clicked
+    result
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -3200,7 +3714,7 @@ enum ProjectPanelMode {
     Explorer,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct ProjectFile {
     name: String,
     relative_path: PathBuf,
@@ -3210,6 +3724,10 @@ struct ProjectFile {
 enum ProjectFileAction {
     Open(PathBuf),
     Attach(PathBuf, ScriptScope),
+    Move {
+        source: PathBuf,
+        destination: PathBuf,
+    },
 }
 
 impl ProjectDirectory {
@@ -3258,50 +3776,72 @@ fn render_project_directory(
     let text_color = if is_empty { EMPTY_TEXT } else { FOLDER_TEXT };
     let mut action = None;
     let id = ui.make_persistent_id(("project-directory", &directory.relative_path));
-    let header = egui::collapsing_header::CollapsingState::load_with_default_open(
-        ui.ctx(),
-        id,
-        default_open && !is_empty,
-    )
-    .show_header(ui, |ui| {
-        ui.add(
-            egui::Image::new(egui::include_image!(
-                "../../../assets/icons/material-design/folder.svg"
-            ))
-            .fit_to_exact_size(egui::vec2(18.0, 18.0))
-            .tint(text_color),
-        );
-        ui.label(egui::RichText::new(&directory.name).color(text_color));
-        if is_empty {
-            ui.label(egui::RichText::new("empty").small().color(EMPTY_TEXT));
-        }
+    let (drop, dropped) = ui.dnd_drop_zone::<ViewportDrop, _>(egui::Frame::NONE, |ui| {
+        ui.dnd_drag_source(
+            egui::Id::new(("project-directory-drag", &directory.relative_path)),
+            ViewportDrop::ProjectDirectory(directory.relative_path.clone()),
+            |ui| {
+                let header = egui::collapsing_header::CollapsingState::load_with_default_open(
+                    ui.ctx(),
+                    id,
+                    default_open && !is_empty,
+                )
+                .show_header(ui, |ui| {
+                    ui.add(
+                        egui::Image::new(egui::include_image!(
+                            "../../../assets/icons/material-design/folder.svg"
+                        ))
+                        .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                        .tint(text_color),
+                    );
+                    ui.label(egui::RichText::new(&directory.name).color(text_color));
+                    if is_empty {
+                        ui.label(egui::RichText::new("empty").small().color(EMPTY_TEXT));
+                    }
+                });
+                header.body(|ui| {
+                    if !is_empty {
+                        for child in &directory.directories {
+                            if project_directory_matches(child, filter)
+                                && let Some(file_action) = render_project_directory(
+                                    ui,
+                                    child,
+                                    filter,
+                                    !filter.is_empty(),
+                                    can_edit,
+                                    has_selected_object,
+                                )
+                            {
+                                action = Some(file_action);
+                            }
+                        }
+                        for file in &directory.files {
+                            if project_file_matches(file, filter)
+                                && let Some(file_action) =
+                                    render_project_file(ui, file, can_edit, has_selected_object)
+                            {
+                                action = Some(file_action);
+                            }
+                        }
+                    }
+                })
+            },
+        )
     });
-    let (_, header_response, _) = header.body(|ui| {
-        if !is_empty {
-            for child in &directory.directories {
-                if project_directory_matches(child, filter)
-                    && let Some(file_action) = render_project_directory(
-                        ui,
-                        child,
-                        filter,
-                        !filter.is_empty(),
-                        can_edit,
-                        has_selected_object,
-                    )
-                {
-                    action = Some(file_action);
-                }
-            }
-            for file in &directory.files {
-                if project_file_matches(file, filter)
-                    && let Some(file_action) =
-                        render_project_file(ui, file, can_edit, has_selected_object)
-                {
-                    action = Some(file_action);
-                }
-            }
+    let (_, header_response, _) = drop.inner.inner;
+    if let Some(payload) = dropped.as_deref() {
+        let source = match payload {
+            ViewportDrop::ProjectFile(path) | ViewportDrop::ProjectDirectory(path) => Some(path),
+        };
+        if let Some(source) = source
+            && source != &directory.relative_path
+        {
+            action = Some(ProjectFileAction::Move {
+                source: source.clone(),
+                destination: directory.relative_path.clone(),
+            });
         }
-    });
+    }
     if is_empty {
         header_response
             .response
@@ -3320,7 +3860,7 @@ fn render_project_file(
     let icon = project_file_icon(&file.relative_path);
     let response = ui.dnd_drag_source(
         egui::Id::new(("project-file", &file.relative_path)),
-        file.relative_path.clone(),
+        ViewportDrop::ProjectFile(file.relative_path.clone()),
         |ui| {
             ui.horizontal(|ui| {
                 ui.add(
@@ -3395,6 +3935,51 @@ fn project_directory_matches(directory: &ProjectDirectory, filter: &str) -> bool
             .directories
             .iter()
             .any(|child| project_directory_matches(child, filter))
+}
+
+fn move_project_entry(
+    project_root: &Path,
+    source: &Path,
+    destination_directory: &Path,
+) -> Result<(), String> {
+    let is_safe_relative = |path: &Path| {
+        !path.is_absolute()
+            && path.components().all(|part| {
+                matches!(
+                    part,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+    };
+    if source.as_os_str().is_empty()
+        || !is_safe_relative(source)
+        || !is_safe_relative(destination_directory)
+    {
+        return Err("The dragged project path is not safe to move".to_owned());
+    }
+    let source_path = project_root.join(source);
+    let destination_directory_path = project_root.join(destination_directory);
+    if !source_path.exists() || !destination_directory_path.is_dir() {
+        return Err("The source or destination no longer exists".to_owned());
+    }
+    if source_path.is_dir() && destination_directory_path.starts_with(&source_path) {
+        return Err("A folder cannot be moved inside itself".to_owned());
+    }
+    let name = source
+        .file_name()
+        .ok_or_else(|| "The dragged item has no file name".to_owned())?;
+    let destination = destination_directory_path.join(name);
+    if destination == source_path {
+        return Ok(());
+    }
+    if destination.exists() {
+        return Err(format!(
+            "{} already exists in the destination folder",
+            name.to_string_lossy()
+        ));
+    }
+    std::fs::rename(&source_path, &destination)
+        .map_err(|error| format!("Could not move {}: {error}", source.to_string_lossy()))
 }
 
 fn project_file_icon(path: &Path) -> egui::ImageSource<'static> {
@@ -3607,165 +4192,9 @@ fn gameplay_script_template(language: ScriptLanguage) -> (&'static str, &'static
             "js",
             b"// Edit in your configured external editor.\nglobalThis.behavior = {\n  Start() { rustic.log(\"info\", \"Behavior started\"); },\n  FixedUpdate(dt) {},\n  Update(dt) {},\n  OnDestroy() { rustic.log(\"info\", \"Behavior destroyed\"); },\n};\n",
         ),
-        ScriptLanguage::Python => (
-            "py",
-            br#"import json, sys
-
-class InstanceApi:
-    def __init__(self): self.commands = []
-    def add(self, source, parent=None):
-        self.commands.append({"op": "add_instance", "source": source, "parent": parent})
-    def clone(self, source, parent=None):
-        self.commands.append({"op": "clone_instance", "source": source, "parent": parent})
-
-instance = InstanceApi()
-
-class RusticApi:
-    def __init__(self): self.state = {}; self.commands = instance.commands
-    def entity_id(self): return self.state["entity_id"]
-    def delta_time(self): return self.state["delta_time"]
-    def fixed_delta_time(self): return self.state["fixed_delta_time"]
-    def get_translation(self): return self.state["translation"][:]
-    def set_translation(self, x, y, z): self.commands.append({"op":"set_translation","value":[x,y,z]})
-    def get_property(self, name): return self.state["properties"].get(name)
-    def set_property(self, name, value): self.commands.append({"op":"set_property","name":name,"value":value})
-    def get_attribute(self, name): return self.state["attributes"].get(name)
-    GetAttribute = get_attribute
-    def edit_attribute(self, name, value): self.commands.append({"op":"edit_attribute","name":name,"value":value})
-    EditAttribute = edit_attribute
-    def input(self, name): return self.state.get("actions", {}).get(name, {"pressed":False,"released":False,"held":False,"axis":0})
-    def key(self, name): return self.state["keys"].get(name, {"pressed":False,"released":False,"held":False,"axis":0})
-    def key_events(self): return self.state["key_events"][:]
-    def any_key_pressed(self): return self.state["any_key_pressed"]
-    def log(self, level, message): self.commands.append({"op":"log","level":str(level),"message":str(message)})
-    def set_enabled(self, enabled): self.commands.append({"op":"set_enabled","enabled":bool(enabled)})
-
-class SceneApi:
-    def __init__(self): self.state = {}
-    def Find(self, path): return self.state.get(path)
-    def List(self, path="Game.scene"):
-        prefix = "" if path in ("", "Game.scene") else path.rstrip("./") + "."
-        return [entity for name, entity in self.state.items() if not prefix or name.startswith(prefix)]
-
-class GameApi:
-    def setCurrentCamera(self, source):
-        instance.commands.append({"op":"set_current_camera","source":source})
-    set_current_camera = setCurrentCamera
-rustic = RusticApi()
-Game = GameApi()
-Game.scene = SceneApi()
-
-for line in sys.stdin:
-    request = json.loads(line)
-    instance.commands = []
-    rustic.commands = instance.commands
-    rustic.state = request
-    Game.scene.state = request.get("scene_paths", {})
-    if request["callback"] == "on_start":
-        instance.commands.append({"op": "log", "level": "info", "message": "Behavior started"})
-    print(json.dumps({"format_version": 1, "commands": instance.commands}), flush=True)
-"#,
-        ),
-        ScriptLanguage::CSharp => (
-            "cs",
-            br#"using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text.Json;
-
-var instance = new InstanceApi();
-var rustic = new RusticApi(instance.Commands);
-var Game = new GameApi(instance.Commands);
-string? line;
-while ((line = Console.ReadLine()) is not null) {
-    instance.Commands.Clear();
-    rustic.State = JsonDocument.Parse(line).RootElement.Clone();
-    Game.scene.State = rustic.State.GetProperty("scene_paths");
-    Console.WriteLine(JsonSerializer.Serialize(new { format_version = 1, commands = instance.Commands }));
-}
-
-sealed class InstanceApi {
-    public List<object> Commands { get; } = new();
-    public void Add(string source, string? parent = null) => Commands.Add(new { op = "add_instance", source, parent });
-    public void Clone(string source, string? parent = null) => Commands.Add(new { op = "clone_instance", source, parent });
-    public void add(string source, string? parent = null) => Add(source, parent);
-    public void clone(string source, string? parent = null) => Clone(source, parent);
-}
-
-sealed class RusticApi {
-    public JsonElement State { get; set; }
-    public List<object> Commands { get; }
-    public RusticApi(List<object> commands) => Commands = commands;
-    public string entity_id() => State.GetProperty("entity_id").GetString()!;
-    public double delta_time() => State.GetProperty("delta_time").GetDouble();
-    public double fixed_delta_time() => State.GetProperty("fixed_delta_time").GetDouble();
-    public double[] get_translation() => State.GetProperty("translation").EnumerateArray().Select(x => x.GetDouble()).ToArray();
-    public void set_translation(double x,double y,double z) => Commands.Add(new { op="set_translation", value=new[]{x,y,z} });
-    public JsonElement get_property(string name) => State.GetProperty("properties").GetProperty(name);
-    public void set_property(string name, object value) => Commands.Add(new { op="set_property", name, value });
-    public JsonElement GetAttribute(string name) => State.GetProperty("attributes").GetProperty(name);
-    public void EditAttribute(string name, object value) => Commands.Add(new { op="edit_attribute", name, value });
-    public JsonElement get_attribute(string name) => GetAttribute(name);
-    public void edit_attribute(string name, object value) => EditAttribute(name, value);
-    public JsonElement input(string name) => State.GetProperty("actions").TryGetProperty(name, out var value) ? value : default;
-    public JsonElement key(string name) => State.GetProperty("keys").TryGetProperty(name, out var value) ? value : default;
-    public IEnumerable<JsonElement> key_events() => State.GetProperty("key_events").EnumerateArray();
-    public bool any_key_pressed() => State.GetProperty("any_key_pressed").GetBoolean();
-    public void log(string level,string message) => Commands.Add(new { op="log", level, message });
-    public void set_enabled(bool enabled) => Commands.Add(new { op="set_enabled", enabled });
-}
-
-sealed class SceneApi {
-    public JsonElement State { get; set; }
-    public string? Find(string path) => State.TryGetProperty(path, out var value) ? value.GetString() : null;
-    public IEnumerable<string> List(string path="Game.scene") => State.EnumerateObject().Where(x => path=="Game.scene" || x.Name.StartsWith(path+".")).Select(x => x.Value.GetString()!);
-}
-sealed class GameApi {
-    public SceneApi scene { get; } = new();
-    private readonly List<object> commands;
-    public GameApi(List<object> commands) => this.commands = commands;
-    public void SetCurrentCamera(string source) => commands.Add(new { op="set_current_camera", source });
-    public void setCurrentCamera(string source) => SetCurrentCamera(source);
-}
-"#,
-        ),
-        ScriptLanguage::C => (
-            "c",
-            br#"#include <stdio.h>
-#include <string.h>
-
-static char instance_commands[1048576];
-static void instance_command(const char *op, const char *source, const char *parent) {
-    snprintf(instance_commands, sizeof instance_commands,
-        "{\"op\":\"%s\",\"source\":\"%s\",\"parent\":%s}",
-        op, source, parent ? parent : "null");
-}
-static void instance_add(const char *source, const char *parent) { instance_command("add_instance", source, parent); }
-static void instance_clone(const char *source, const char *parent) { instance_command("clone_instance", source, parent); }
-static void Game_setCurrentCamera(const char *source) {
-    char escaped[1048500];
-    size_t n = 0;
-    for (const unsigned char *p = (const unsigned char *)source; *p; ++p) {
-        if (n + 6 >= sizeof escaped) { fputs("camera path too long\n", stderr); return; }
-        if (*p < 32 || *p == '"' || *p == '\\') {
-            n += (size_t)snprintf(escaped + n, sizeof escaped - n, "\\u%04x", *p);
-        } else escaped[n++] = (char)*p;
-    }
-    escaped[n] = '\0';
-    instance_command("set_current_camera", escaped, NULL);
-}
-
-int main(void) {
-    char request[1048577];
-    while (fgets(request, sizeof request, stdin)) {
-        instance_commands[0] = '\0';
-        printf("{\"format_version\":1,\"commands\":[%s]}\n", instance_commands);
-        fflush(stdout);
-    }
-    return 0;
-}
-"#,
-        ),
+        ScriptLanguage::Python => ("py", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.py")),
+        ScriptLanguage::CSharp => ("cs", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.cs")),
+        ScriptLanguage::C => ("c", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.c")),
         ScriptLanguage::Cpp => (
             "cpp",
             br#"#include "rustic.hpp"
@@ -3795,100 +4224,8 @@ int main() {
 }
 "#,
         ),
-        ScriptLanguage::Java => (
-            "java",
-            br#"class RusticBehavior {
-    static final class InstanceApi {
-        final java.util.List<String> commands = new java.util.ArrayList<>();
-        void add(String source) { add(source, null); }
-        void add(String source, String parent) { push("add_instance", source, parent); }
-        void clone(String source) { clone(source, null); }
-        void clone(String source, String parent) { push("clone_instance", source, parent); }
-        void push(String op, String source, String parent) {
-            commands.add("{\"op\":\""+op+"\",\"source\":\""+source+"\",\"parent\":"+(parent==null?"null":"\""+parent+"\"")+"}");
-        }
-    }
-    static final class GameApi {
-        final InstanceApi instance;
-        GameApi(InstanceApi instance) { this.instance = instance; }
-        void setCurrentCamera(String source) {
-            var escaped = new StringBuilder();
-            for (char c : source.toCharArray()) {
-                if (c < 32 || c == '"' || c == '\\') escaped.append(String.format("\\u%04x", (int)c));
-                else escaped.append(c);
-            }
-            instance.push("set_current_camera", escaped.toString(), null);
-        }
-    }
-    public static void main(String[] args) throws Exception {
-        var instance = new InstanceApi();
-        var Game = new GameApi(instance);
-        var input = new java.io.BufferedReader(new java.io.InputStreamReader(System.in));
-        while (input.readLine() != null) {
-            instance.commands.clear();
-            System.out.println("{\"format_version\":1,\"commands\":["+String.join(",",instance.commands)+"]}");
-            System.out.flush();
-        }
-    }
-}
-"#,
-        ),
-        ScriptLanguage::Php => (
-            "php",
-            br#"<?php
-final class InstanceApi {
-    public array $commands = [];
-    public function add(string $source, ?string $parent = null): void {
-        $this->commands[] = ["op" => "add_instance", "source" => $source, "parent" => $parent];
-    }
-    public function clone(string $source, ?string $parent = null): void {
-        $this->commands[] = ["op" => "clone_instance", "source" => $source, "parent" => $parent];
-    }
-}
-final class RusticApi {
-    public array $state = [];
-    public function __construct(public InstanceApi $instance) {}
-    public function entity_id(): string { return $this->state["entity_id"]; }
-    public function delta_time(): float { return $this->state["delta_time"]; }
-    public function fixed_delta_time(): float { return $this->state["fixed_delta_time"]; }
-    public function get_translation(): array { return $this->state["translation"]; }
-    public function set_translation(float $x,float $y,float $z): void { $this->instance->commands[]=["op"=>"set_translation","value"=>[$x,$y,$z]]; }
-    public function get_property(string $name): mixed { return $this->state["properties"][$name] ?? null; }
-    public function set_property(string $name,mixed $value): void { $this->instance->commands[]=["op"=>"set_property","name"=>$name,"value"=>$value]; }
-    public function GetAttribute(string $name): mixed { return $this->state["attributes"][$name] ?? null; }
-    public function get_attribute(string $name): mixed { return $this->GetAttribute($name); }
-    public function EditAttribute(string $name,mixed $value): void { $this->instance->commands[]=["op"=>"edit_attribute","name"=>$name,"value"=>$value]; }
-    public function edit_attribute(string $name,mixed $value): void { $this->EditAttribute($name,$value); }
-    public function key(string $name): array { return $this->state["keys"][$name] ?? ["pressed"=>false,"released"=>false,"held"=>false,"axis"=>0]; }
-    public function key_events(): array { return $this->state["key_events"]; }
-    public function any_key_pressed(): bool { return $this->state["any_key_pressed"]; }
-    public function log(string $level,string $message): void { $this->instance->commands[]=["op"=>"log","level"=>$level,"message"=>$message]; }
-    public function set_enabled(bool $enabled): void { $this->instance->commands[]=["op"=>"set_enabled","enabled"=>$enabled]; }
-}
-final class SceneApi {
-    public array $state=[];
-    public function Find(string $path): ?string { return $this->state[$path] ?? null; }
-    public function List(string $path="Game.scene"): array { return array_values(array_filter($this->state, fn($id,$name)=>$path==="Game.scene" || str_starts_with($name,$path."."), ARRAY_FILTER_USE_BOTH)); }
-}
-final class GameApi {
-    public SceneApi $scene;
-    public function __construct(private InstanceApi $instance){ $this->scene=new SceneApi(); }
-    public function setCurrentCamera(string $source): void { $this->instance->commands[]=["op"=>"set_current_camera","source"=>$source]; }
-}
-$instance = new InstanceApi();
-$rustic = new RusticApi($instance);
-$Game = new GameApi($instance);
-while (($line = fgets(STDIN)) !== false) {
-    $request = json_decode($line, true, flags: JSON_THROW_ON_ERROR);
-    $instance->commands = [];
-    $rustic->state = $request;
-    $Game->scene->state = $request["scene_paths"] ?? [];
-    // Example: $instance->clone("assets/models/chair.obj");
-    echo json_encode(["format_version" => 1, "commands" => $instance->commands], JSON_THROW_ON_ERROR), PHP_EOL;
-    flush();
-}
-"#,
-        ),
+        ScriptLanguage::Java => ("java", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.java")),
+        ScriptLanguage::Php => ("php", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.php")),
         ScriptLanguage::Web => (
             "html",
             br#"<!doctype html>
@@ -3905,23 +4242,7 @@ globalThis.behavior = {
 </html>
 "#,
         ),
-        ScriptLanguage::Luau => (
-            "luau",
-            br#"-- Luau uses the isolated CLI host protocol.
-local commands = {}
-local Game = {}
-function Game.setCurrentCamera(source)
-    if type(source) == "table" then source = source[1] end
-    assert(type(source) == "string", "expected a camera path or {cameraPath}")
-    local escaped = string.gsub(source, '[%c\\"]', function(c)
-        return string.format("\\u%04x", string.byte(c))
-    end)
-    table.insert(commands, '{"op":"set_current_camera","source":"' .. escaped .. '"}')
-end
--- Example: Game.setCurrentCamera({"Game.scene.Camera"})
-print('{"format_version":1,"commands":[' .. table.concat(commands, ",") .. ']}')
-"#,
-        ),
+        ScriptLanguage::Luau => ("luau", include_bytes!("../../../crates/engine-scripting/src/sdk/starter.luau")),
     }
 }
 
@@ -4064,7 +4385,7 @@ fn edit_camera(ui: &mut egui::Ui, camera: &mut engine_world::Camera) -> bool {
         } => {
             ui.add(
                 egui::DragValue::new(vertical_size)
-                    .range(0.01..=100000.0)
+                    .range(0.01..=100_000.0)
                     .speed(0.1)
                     .prefix("Vertical size "),
             );
@@ -4079,7 +4400,7 @@ fn edit_camera(ui: &mut egui::Ui, camera: &mut engine_world::Camera) -> bool {
     );
     ui.add(
         egui::DragValue::new(far)
-            .range((*near + 0.001)..=1000000.0)
+            .range((*near + 0.001)..=1_000_000.0)
             .speed(1.0)
             .prefix("Far clip "),
     );
@@ -4114,7 +4435,7 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
     if light.kind != engine_world::LightKind::Directional {
         ui.add(
             egui::DragValue::new(&mut light.range)
-                .range(0.01..=100000.0)
+                .range(0.01..=100_000.0)
                 .speed(0.1)
                 .prefix("Range "),
         );

@@ -154,7 +154,7 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
     let event_loop = EventLoop::new()
         .map_err(|error| format!("could not create native runtime event loop: {error}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut window_app = RuntimeWindowApp::new(mode, Arc::clone(&finished), title, size);
+    let mut window_app = RuntimeWindowApp::new(Arc::clone(&finished), title, size);
     window_app.latest_frame = latest_frame;
     event_loop
         .run_app(&mut window_app)
@@ -179,7 +179,6 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
 }
 
 struct RuntimeWindowApp {
-    mode: PlayMode,
     finished: Arc<AtomicBool>,
     title: &'static str,
     initial_size: [f64; 2],
@@ -191,14 +190,8 @@ struct RuntimeWindowApp {
 }
 
 impl RuntimeWindowApp {
-    fn new(
-        mode: PlayMode,
-        finished: Arc<AtomicBool>,
-        title: &'static str,
-        initial_size: [f64; 2],
-    ) -> Self {
+    fn new(finished: Arc<AtomicBool>, title: &'static str, initial_size: [f64; 2]) -> Self {
         Self {
-            mode,
             finished,
             title,
             initial_size,
@@ -215,6 +208,10 @@ impl RuntimeWindowApp {
         event_loop.exit();
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen dimensions are bounded by GPU texture limits and converted to float layout coordinates"
+    )]
     fn resize_surface(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
         let Some(window) = &self.window else {
             return;
@@ -234,6 +231,10 @@ impl RuntimeWindowApp {
 }
 
 impl ApplicationHandler for RuntimeWindowApp {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen dimensions are bounded by GPU texture limits and converted to float layout coordinates"
+    )]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -272,12 +273,6 @@ impl ApplicationHandler for RuntimeWindowApp {
                 return;
             }
         };
-        eprintln!(
-            "native runtime surface: mode={} adapter={} backend={:?}",
-            self.mode.as_str(),
-            renderer.diagnostics().adapter_name,
-            renderer.diagnostics().backend
-        );
         window.request_redraw();
         self.renderer = Some(renderer);
         self.window = Some(window);
@@ -317,14 +312,14 @@ impl ApplicationHandler for RuntimeWindowApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Ok(mut latest) = self.latest_frame.lock() {
-                    if let Some(frame) = latest.take() {
-                        self.mesh.texture_width = frame.width;
-                        self.mesh.texture_height = frame.height;
-                        self.mesh.texture_rgba8 = frame.pixels;
-                        for pixel in self.mesh.texture_rgba8.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
+                if let Ok(mut latest) = self.latest_frame.lock()
+                    && let Some(frame) = latest.take()
+                {
+                    self.mesh.texture_width = frame.width;
+                    self.mesh.texture_height = frame.height;
+                    self.mesh.texture_rgba8 = frame.pixels;
+                    for pixel in self.mesh.texture_rgba8.as_chunks_mut::<4>().0 {
+                        pixel.swap(0, 2);
                     }
                 }
 
@@ -403,18 +398,23 @@ fn render_runtime(
     config: RuntimeServerConfig,
     latest: Option<Arc<Mutex<Option<engine_play::BgraFrame>>>>,
 ) -> Result<(), String> {
+    let models = engine_assets::load_model_library(&config.snapshot_root)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(id, (_, model))| (id, model))
+        .collect();
     let game_ui = game_ui::GameUi::load(&config.snapshot_root)?;
     let mut renderer = renderer_wgpu::SceneViewportRenderer::new(BackendRequest::Auto)
         .map_err(|e| e.to_string())?;
     run_runtime_server_with_renderer(config, move |world, tick| {
-        let scene = renderer_wgpu::game_scene(world, 16.0 / 9.0);
+        let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &models);
         let frame = renderer
             .render(640, 360, &scene)
             .map_err(|e| e.to_string())?
             .ok_or("empty game frame")?;
         let mut pixels = frame.rgba8;
         game_ui.composite_rgba(640, 360, &mut pixels)?;
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let frame = engine_play::BgraFrame {
@@ -468,6 +468,10 @@ fn usage() -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
 

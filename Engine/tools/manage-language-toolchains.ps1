@@ -37,7 +37,7 @@ function Find-WinGet {
 function Read-LanguageSelection {
     Write-Host ''
     Write-Host 'Rustic Game Engine - Gameplay Language Toolchains'
-    Write-Host 'Lua 5.4, JavaScript/QuickJS, and HTML/CSS support are already bundled.'
+    Write-Host 'Lua 5.4, Luau, JavaScript/QuickJS, and HTML/CSS support are already bundled.'
     Write-Host 'Select any additional toolchains to install:'
     $keys = @($catalog.Keys)
     for ($index = 0; $index -lt $keys.Count; $index++) {

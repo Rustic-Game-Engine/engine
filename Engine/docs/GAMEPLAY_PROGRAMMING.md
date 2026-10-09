@@ -7,6 +7,10 @@ deliberately has no internal code editor.
 
 ## Project layout and ownership
 
+Rustic's agent instructions and Codex/Claude integration files live in editor app
+data. Use the `rustic-workspace` MCP tools to inspect or edit them; see
+[AI agents and editor app data](AGENT_INTEGRATION.md) for setup and examples.
+
 - `scripts/*.{lua,js,py,cs,c,cpp,java}` is user-owned gameplay source.
 - `scene/{scene-name}.scene` contains authored scenes. Existing
   `scenes/*.rscene` projects remain supported and are saved in place.
@@ -39,6 +43,12 @@ invoked. The canonical callbacks are `Start`, `Update`, `FixedUpdate`,
 `OnCollisionEnter`, `OnCollisionStay`, `OnCollisionExit`, `OnEnable`, `OnDisable`, and
 `OnDestroy`. Original snake-case callback names continue to work.
 
+The basic Play simulator runs gravity and primitive box collision response after
+`FixedUpdate`, including in scenes with no scripts. `Anchored` prevents physics
+movement; `CanCollide` must be enabled on both objects for solid response. Collision
+callback names are reserved: the simulator does not dispatch collision or touch
+events. See `PHYSICS.md` for floor setup, falling objects, and current limitations.
+
 Execution is deterministic: scope (global, scene, component), explicit execution
 order, entity Asset ID, script Asset ID, then attachment order. Scripts communicate
 through typed Engine Events and the common Script API, never by sharing language VM
@@ -65,6 +75,8 @@ The global `rustic` table exposes `entity_id`, `get_translation`, `set_translati
 `input`, `log`, `delta_time`, `fixed_delta_time`, `get_property`, `set_property`, and
 `set_enabled`. The built-in attributes are `Name`, `Position`, `Size`, `Color`,
 `CanTouch`, `CanCollide`, `Anchored`, and `Parent`.
+Lua also provides `print(...)` for an info Console entry and `warn(...)` for a
+warning Console entry. Use `rustic.log(level, message)` to choose a different level.
 
 Scene objects can be resolved by a dotted or slash-separated path. Lua provides
 `Game.scene.Find("Room.Table")` and `Game.scene.List("Room")`; JavaScript additionally
@@ -85,13 +97,18 @@ Model files from the Game Project Explorer can be instantiated directly, for exa
 the immutable play snapshot with their adjacent `.rmeta` files; the runtime never
 reads from or mutates the live project directory.
 
-Scripts can use named actions or raw physical keys. `rustic.key("KeyW")` returns
-`pressed`, `released`, `held`, and `axis`; `rustic.any_key_pressed()` detects any new
-press; and `rustic.key_events()` returns every ordered press/release event, including
-the key name and auto-repeat flag. Physical names follow W3C/winit conventions such
-as `KeyW`, `Digit1`, `ArrowLeft`, `Escape`, and `F12`. Unknown platform keys remain
-available by name. Focus loss releases all held keys and transient events are cleared
-once per frame.
+**Current Play input:** The editor's embedded Play viewport forwards the held
+state of WASD, arrow keys, and Shift to scripts while that viewport is hovered or
+focused. The supported names are `KeyW`, `KeyA`, `KeyS`, `KeyD`, `ArrowUp`,
+`ArrowDown`, `ArrowLeft`, `ArrowRight`, `ShiftLeft`, and `ShiftRight`.
+`rustic.key(name).held` is available for movement; `axis` is `1` when held and
+`0` otherwise. The API also exposes `pressed`, `released`, `key_events()`,
+`any_key_pressed()`, and named `input()` actions, but the editor does not yet
+forward their events or action state. Press/release fields remain false, event
+lists remain empty, and named actions remain inactive. Other key names and
+keyboard input in New Window or Standalone mode are not forwarded yet. The
+[Lua guide](Scripting/scriptingLua.md#input) gives exact setup steps and a
+copyable controller.
 
 ## JavaScript lifecycle and API 1.0
 
@@ -143,47 +160,40 @@ non-camera entities produce a script error without changing camera activation.
 | C | `Game_setCurrentCamera("Game.scene.Room.Camera");` |
 | PHP | `$Game->setCurrentCamera("Game.scene.Room.Camera");` |
 
-External-language helpers are included in newly generated script starters (C++ uses
-`rustic.hpp`). Existing external protocol programs can send the same command directly:
+Every supported gameplay language calls the engine-owned API. SDKs are supplied
+by Rustic during validation/build and at runtime; generated editor copies live in
+`.rustic/generated/programming`. Gameplay scripts do not implement a JSON request
+loop, build response commands, or serialize output. Existing custom protocol
+programs remain compatible, but new scripts should use the native API.
 
-```json
-{"format_version":1,"commands":[{"op":"set_current_camera","source":"Game.scene.Room.Camera"}]}
-```
+Lua and JavaScript use embedded bindings. Python, C#, C, C++, Java, PHP, and Luau
+use persistent isolated sessions. The engine supplies each callback's owner state,
+input, properties, attributes and scene references. External mutations apply after
+the callback in issue order. Luau returns a behavior table and keeps its typed
+locals alive across callbacks; its engine-owned Luau host handles invocation.
+CSS alone is styling; HTML inline JavaScript has the JavaScript API.
 
-External and JavaScript commands apply in response order after the callback. Lua
-applies the change immediately. Luau retains its existing isolated CLI protocol
-execution model. HTML/CSS camera selection runs in inline JavaScript; CSS itself
-does not execute gameplay commands.
+### Native callback setup
 
-Python, C#, C, C++, Java, and PHP use host protocol version 1. Rustic keeps one process
-alive per behavior instance so language-global state survives between callbacks. Each
-invocation reads one newline-delimited JSON request from standard input and writes one
-newline-delimited response:
+| Language | Setup |
+| --- | --- |
+| Python | `from rustic import rustic, instance, Game, run`; define callback functions; `run(globals())` |
+| C# | `using static Rustic;`; `Run((callback, dt) => { ... });` |
+| C | `#include "rustic.h"`; `rustic_run((RusticBehavior){.on_start=start})` |
+| C++ | `#include "rustic.hpp"`; `rustic_run(RusticBehavior{.on_start=start})` |
+| Java | `class RusticBehavior extends Rustic`; call `run((callback, dt) -> { ... })` in main |
+| PHP | `require __DIR__."/rustic.php"`; `rustic_run(["on_start"=>"on_start"])` |
+| Luau | `return {on_start=function() ... end, fixed_update=function(dt) ... end}` |
 
-```json
-{"format_version":1,"commands":[{"op":"set_translation","value":[1,2,3]}]}
-```
+Each SDK handles omitted callbacks automatically. Supported names are `on_create`,
+`on_start`, `on_enable`, `fixed_update`, `update`, `on_disable`, `on_destroy`, and
+`on_stop`. Only frame callbacks take dt. Luau also accepts the capitalized Lua
+aliases. External collision callbacks remain unavailable. API 1.1 adds shared
+`Events` to every supported script type, backed by the same scene services.
+See [Shared gameplay actions](Scripting/gameplayActions.md) for coverage and setup. Use `rustic.log` for game diagnostics and run scripts through Play.
 
-The request contains `callback`, `delta`, `entity_id`, `delta_time`,
-`fixed_delta_time`, `translation`, `properties`, `keys`, `key_events`, and
-`any_key_pressed`. Supported commands are `set_translation`, `set_property`, `log`,
-`set_enabled`, `add_instance`, and `clone_instance`. Instance commands use a `source`
-string and optional stable `parent` entity ID, so every external language can add the
-same Explorer asset:
-
-```json
-{"op":"add_instance","source":"assets/models/chair.obj","parent":null}
-```
-
-The generated starter for each language is already a valid protocol program. The generated JSON schema documents
-the request. External callbacks have a three-second deadline and 1 MiB response limit.
-
-Generated external-language starters hide these protocol commands behind native APIs:
-Python uses `instance.clone(path)`, PHP uses `$instance->clone(path)`, C uses
-`instance_clone(path, parent)`, C++ uses `instance.clone(path)`, C# uses
-`Instance.Clone(path)`, and Java uses `instance.clone(path)`. The corresponding `add`
-operation follows the same naming convention. PHP uses `->` because `instance.clone`
-is not valid PHP syntax.
+See the [language guides](Scripting/README.md) for complete copyable examples,
+attachment steps, native return types, current limits, and troubleshooting.
 
 ### C++ API
 
@@ -270,3 +280,13 @@ undoable transaction; source edits are never applied automatically.
   duplicate IDs are quarantined instead of guessed.
 - **Reload rejected:** check API major, property types, source size, and syntax; use
   Restart Play after an intentionally incompatible change.
+
+## Targeting scene objects by name
+
+Scripts can edit built-in attributes on another object in the currently loaded
+scene using `rustic.game.<scene-name>.<hierarchy>`. Lua uses
+`rustic.game.Demo.Room.Player:EditAttribute("Position", {1,2,3})`; other languages
+use native member calls, subscripts, or path-selection methods. See
+[Edit scene objects](Scripting/sceneObjects.md) for exact attachment steps, all
+language examples, supported values, and current limitations. This does not
+invoke another script's custom functions or load another scene.

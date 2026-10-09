@@ -40,7 +40,7 @@ RestartApplications=no
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Messages]
-SelectComponentsLabel2=Select the gameplay languages to install. Lua 5.4, JavaScript/QuickJS, and HTML/CSS are bundled. Optional toolchains require an internet connection and can be added later by rerunning Setup or using Language Toolchain Manager from the Start menu.
+SelectComponentsLabel2=Select the gameplay languages to install. Lua 5.4, Luau, JavaScript/QuickJS, and HTML/CSS are bundled. Optional toolchains require an internet connection and can be added later by rerunning Setup or using Language Toolchain Manager from the Start menu.
 
 [Types]
 Name: "recommended"; Description: "Recommended installation"
@@ -49,7 +49,7 @@ Name: "custom"; Description: "Custom installation"; Flags: iscustom
 [Components]
 Name: "engine"; Description: "Rustic Game Engine"; Types: recommended custom; Flags: fixed
 Name: "languages"; Description: "Gameplay languages (rerun Setup or use Language Toolchain Manager later to change these)"; Types: recommended custom; Flags: fixed
-Name: "languages\bundled"; Description: "Lua 5.4, JavaScript/QuickJS, and HTML/CSS (bundled)"; Types: recommended custom; Flags: fixed
+Name: "languages\bundled"; Description: "Lua 5.4, Luau, JavaScript/QuickJS, and HTML/CSS (bundled)"; Types: recommended custom; Flags: fixed
 Name: "languages\python"; Description: "Python - install Python 3.14"; Types: custom
 Name: "languages\csharp"; Description: "C# - install .NET SDK 10"; Types: custom
 Name: "languages\ccpp"; Description: "C and C++ - install LLVM/Clang"; Types: custom
@@ -65,6 +65,8 @@ Name: "addtopath"; Description: "Add the installation folder to PATH"; GroupDesc
 #endif
 
 [Files]
+Source: "..\licenses\Luau-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\target\distribution\rustic-luau-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-agent-backend.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-project-manager.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-editor.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -82,6 +84,7 @@ Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environmen
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: (not IsAdminInstallMode) and NeedsAddPath('{app}'); Tasks: addtopath; Flags: preservestringtype
 
 [Run]
+Filename: "{app}\rustic-agent-backend.exe"; Parameters: "--install-user-integrations"; Flags: runhidden waituntilterminated; StatusMsg: "Installing Rustic AI agent skills..."
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]

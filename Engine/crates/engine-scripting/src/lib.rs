@@ -9,6 +9,7 @@
 mod cpp_sdk;
 mod external_editor;
 mod external_runtime;
+mod external_sdk;
 mod input;
 mod javascript;
 mod lua;
@@ -48,7 +49,10 @@ pub use runtime::{
     ScriptInstanceDescriptor, ScriptInstanceHandle, ScriptRuntimeAdapter, ScriptScheduler,
 };
 pub use settings::{GAME_SETTINGS_FILE, GameSettings};
-pub use workspace::{WorkspaceGeneration, generate_programming_workspace};
+pub use workspace::{
+    WorkspaceGeneration, agent_data_directory, generate_programming_workspace,
+    install_user_agent_integrations, project_agent_directory, write_agent_information,
+};
 
 /// Compiles source without running gameplay code using the registered adapter.
 ///

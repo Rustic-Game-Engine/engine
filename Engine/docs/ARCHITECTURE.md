@@ -101,7 +101,7 @@ that an unintegrated version has been tested.
 | `gltf`, `image`, `exr` | glTF/GLB, common raster image, and EXR import | Apache-2.0 OR MIT; EXR implementation BSD-3-Clause | Rust-native baseline importers with controllable decoding | Assimp, OpenImageIO, stb libraries |
 | `ufbx` through a thin audited FFI crate | FBX import | MIT | Small, permissive, focused FBX reader without requiring Autodesk SDK redistribution | Assimp (BSD-3-Clause), Autodesk FBX SDK (proprietary) |
 | `zstd` | Derived-data and package compression | BSD-3-Clause library; Rust wrapper MIT | Fast decompression and tunable compression | LZ4, Deflate |
-| Rapier 2D/3D | Initial physics implementation | Apache-2.0 | Rust-native, cross-platform, 2D and 3D; hidden behind `PhysicsWorld` | Jolt, PhysX, Box2D |
+| Rapier 2D/3D | Planned full rigid-body physics backend | Apache-2.0 | Rust-native, cross-platform, 2D and 3D; hidden behind `PhysicsWorld` | Jolt, PhysX, Box2D |
 | `kira` + `cpal` | Mixer/streaming and native audio devices | MIT; Apache-2.0 | Rust-native control layer and broad host audio support | `rodio`, SDL audio, FMOD/Wwise commercial SDKs |
 | `gilrs` | Gamepad discovery and events | Apache-2.0 OR MIT | Cross-platform controller normalization | SDL3 gamepad API, platform APIs |
 | `mlua` with Lua/Luau features | Initial Lua and Luau adapters | MIT | Maintained Rust bindings, selectable vendored runtime, broad Lua API | `rlua`, direct Lua/Luau C API |
@@ -111,6 +111,11 @@ that an unintegrated version has been tested.
 | `memmap2` | Shared-memory frame/bulk-data transport | Apache-2.0 OR MIT | Portable memory mapping behind the IPC transport | OS shared-memory APIs, local sockets only |
 | `clap` | CLI and `xtask` argument parsing | Apache-2.0 OR MIT | Typed, testable command surfaces | `lexopt`, `argh` |
 | Wasmtime (plugin milestone) | Sandboxed portable editor/runtime plugins | Apache-2.0 WITH LLVM exception | Capability-based WASM host with resource limits | Wasmer, Extism, out-of-process native plugins |
+
+Current Play physics uses the engine-owned basic translational simulator in
+`engine-play`, not Rapier. It provides gravity, swept enclosing-box collision, and
+equal-mass stacking for built-in primitives. See `PHYSICS.md` for supported flags,
+setup, and limits; the full backend and query API below remain planned.
 
 External language toolchains are optional adapter dependencies: LLVM/Clang
 (Apache-2.0 with LLVM exception), .NET (MIT), CPython (PSF-2.0), OpenJDK

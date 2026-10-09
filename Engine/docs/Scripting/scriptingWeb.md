@@ -61,8 +61,8 @@ const camera = Game.scene.Find("Room.Camera");
 Game.setCurrentCamera(camera);
 instance.add("Cube");
 
-if (rustic.key("Escape").pressed) {
-  rustic.log("info", "escape pressed");
+if (rustic.key("KeyW").held) {
+  rustic.log("info", "forward key held in Play");
 }
 ```
 
@@ -70,11 +70,13 @@ JavaScript mutations are applied in command order after the callback. Properties
 be declared and type-compatible. Scene lookup returns stable IDs; JavaScript
 `Game.scene.List()` currently returns path strings. Instance operations are queued
 and do not return the created ID.
+The [Play input limits](scriptingLua.md#input) also apply to inline JavaScript:
+only held WASD, arrow, and Shift state is forwarded from the embedded Play viewport.
 
 ## Security and limitations
 
-Inline code cannot call another script object, and API 1.0 does not yet expose
-script-level Engine Event `emit`/`subscribe`; use shared engine state for coordination.
+Inline code cannot call another script object. API 1.1 adds shared `Events`
+and gameplay actions to inline JavaScript; see [Shared gameplay actions](gameplayActions.md).
 
 Inline code has no DOM, filesystem, network, Node APIs, processes, environment
 variables, package loading, or editor/backend access. Source must be UTF-8 and no
@@ -82,3 +84,16 @@ larger than 1 MiB. Syntax/structure is validated before Play or reload. A valida
 failure leaves the previous good instance running; a callback failure disables only
 the failing behavior. Use Web assets for lifecycle-driven UI logic or future-facing
 content organization, not for browser rendering in the current release.
+
+## Target another scene object
+
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.
+
+## Shared gameplay actions
+
+API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedural
+animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
+See [Shared gameplay actions](gameplayActions.md) for attachment, native call
+conventions, duration/speed options, callbacks, scene-clock controls and backend limits.

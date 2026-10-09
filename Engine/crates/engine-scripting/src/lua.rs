@@ -1,12 +1,61 @@
 use crate::{ActionState, EngineValue, EntityId, InputFrame, ScriptId};
-use mlua::{Error as MluaError, Function, Lua, RegistryKey, Table, Value};
+use mlua::{Error as MluaError, Function, Lua, LuaSerdeExt, RegistryKey, Table, Value, Variadic};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
+pub(crate) fn normalize_query(value: &mut serde_json::Value) {
+    if let serde_json::Value::Object(fields) = value {
+        for (key, value) in fields {
+            if matches!(
+                key.as_str(),
+                "commands"
+                    | "actions"
+                    | "mask"
+                    | "tracks"
+                    | "keys"
+                    | "markers"
+                    | "points"
+                    | "ignore"
+                    | "arguments"
+            ) && value.as_object().is_some_and(serde_json::Map::is_empty)
+            {
+                *value = serde_json::Value::Array(Vec::new());
+            }
+            normalize_query(value);
+        }
+    } else if let serde_json::Value::Array(values) = value {
+        for value in values {
+            normalize_query(value);
+        }
+    }
+}
+
 /// Engine-owned runtime surface. Implementations live in the isolated runtime process.
 #[allow(clippy::missing_errors_doc)]
 pub trait GameplayHost: Send {
+    fn gameplay_query(&mut self, query: serde_json::Value) -> Result<serde_json::Value, String> {
+        let query: engine_core::gameplay::query::Query =
+            serde_json::from_value(query).map_err(|e| e.to_string())?;
+        serde_json::to_value(query.evaluate()?).map_err(|e| e.to_string())
+    }
+    fn gameplay_request(&mut self, _request: engine_core::gameplay::Request) -> Result<(), String> {
+        Err("high-level gameplay API is unavailable in this host".into())
+    }
+    fn gameplay_connections(&self) -> Vec<String> {
+        Vec::new()
+    }
+    fn gameplay_states(&self) -> Vec<engine_core::gameplay::OperationState> {
+        Vec::new()
+    }
+    fn gameplay_callbacks(&mut self) -> Vec<engine_core::gameplay::Delivery> {
+        Vec::new()
+    }
+    fn cleanup_gameplay(&mut self) {}
+    fn fork_for_reload(&self) -> Option<Box<dyn GameplayHost>> {
+        None
+    }
+
     fn set_current_camera(&mut self, _source: &str) -> Result<(), String> {
         Err("camera selection is unavailable".into())
     }
@@ -45,6 +94,17 @@ pub trait GameplayHost: Send {
     }
     fn edit_attribute(&mut self, _name: &str, _value: EngineValue) -> Result<(), String> {
         Err("attribute editing is unavailable".into())
+    }
+    fn object_attribute(&self, _source: &str, _name: &str) -> Result<Option<EngineValue>, String> {
+        Err("object attribute access is unavailable".into())
+    }
+    fn edit_object_attribute(
+        &mut self,
+        _source: &str,
+        _name: &str,
+        _value: EngineValue,
+    ) -> Result<(), String> {
+        Err("object attribute editing is unavailable".into())
     }
     fn input_action(&self, name: &str) -> ActionState;
     fn input_frame(&self) -> InputFrame {
@@ -161,6 +221,9 @@ impl LuaBehavior {
             std::str::from_utf8(source).map_err(|e| LuaRuntimeError::InvalidUtf8(e.to_string()))?;
         let lua = sandbox_lua().map_err(|error| runtime_error(&error))?;
         install_api(&lua, Arc::clone(&host)).map_err(|error| runtime_error(&error))?;
+        lua.load(include_str!("sdk/gameplay.lua"))
+            .exec()
+            .map_err(|error| runtime_error(&error))?;
         let budget_remaining = Arc::new(AtomicU64::new(instruction_budget.max(1)));
         let hook_budget = Arc::clone(&budget_remaining);
         lua.set_hook(
@@ -217,7 +280,7 @@ impl LuaBehavior {
     /// # Errors
     /// Returns and contains a callback exception or exhausted instruction budget.
     pub fn on_create(&mut self) -> Result<(), LuaRuntimeError> {
-        self.call("on_create", None)
+        self.call_compatible("OnCreate", "on_create", None)
     }
     /// # Errors
     /// Returns and contains a callback exception or exhausted instruction budget.
@@ -252,11 +315,7 @@ impl LuaBehavior {
     /// # Errors
     /// Returns and contains a callback exception or exhausted instruction budget.
     pub fn on_stop(&mut self) -> Result<(), LuaRuntimeError> {
-        self.call("on_stop", None)
-    }
-
-    fn call(&mut self, name: &str, delta: Option<f64>) -> Result<(), LuaRuntimeError> {
-        self.call_compatible(name, name, delta)
+        self.call_compatible("OnStop", "on_stop", None)
     }
 
     fn call_compatible(
@@ -271,6 +330,14 @@ impl LuaBehavior {
         self.budget_remaining
             .store(self.instruction_budget, Ordering::Relaxed);
         let result = (|| {
+            if canonical == "Update"
+                && let Some(dispatch) = self
+                    .lua
+                    .globals()
+                    .get::<Option<Function>>("__rustic_gameplay_dispatch")?
+            {
+                dispatch.call::<()>(())?;
+            }
             let table: Table = self.lua.registry_value(&self.behavior)?;
             let callback = table
                 .get::<Option<Function>>(canonical)?
@@ -321,9 +388,101 @@ fn lock_host(
         .map_err(|_| MluaError::RuntimeError("gameplay host lock poisoned".into()))
 }
 
+// Resolve at call time so rename/reparent and stale references never silently target another owner.
+fn object_proxy(
+    lua: &Lua,
+    host: Arc<Mutex<Box<dyn GameplayHost>>>,
+    path: String,
+) -> mlua::Result<Table> {
+    let table = lua.create_table()?;
+    table.raw_set("__source", path.clone())?;
+    let meta = lua.create_table()?;
+    meta.set(
+        "__index",
+        lua.create_function(move |lua, (_table, key): (Table, String)| {
+            let h = Arc::clone(&host);
+            let source = path.clone();
+            match key.as_str() {
+                "EditAttribute" | "edit_attribute" => Ok(Value::Function(lua.create_function(
+                    move |_, (_self, name, value): (Table, String, Value)| {
+                        let mut host = lock_host(&h)?;
+                        let current = host
+                            .object_attribute(&source, &name)
+                            .map_err(MluaError::RuntimeError)?;
+                        host.edit_object_attribute(
+                            &source,
+                            &name,
+                            lua_attribute_value(value, current.as_ref())?,
+                        )
+                        .map_err(MluaError::RuntimeError)
+                    },
+                )?)),
+                "GetAttribute" | "get_attribute" => Ok(Value::Function(lua.create_function(
+                    move |lua, (_self, name): (Table, String)| {
+                        let value = lock_host(&h)?
+                            .object_attribute(&source, &name)
+                            .map_err(MluaError::RuntimeError)?;
+                        engine_to_lua(lua, value)
+                    },
+                )?)),
+                _ => Ok(Value::Table(object_proxy(
+                    lua,
+                    h,
+                    format!("{source}.{key}"),
+                )?)),
+            }
+        })?,
+    )?;
+    table.set_metatable(Some(meta))?;
+    Ok(table)
+}
+
 #[allow(clippy::too_many_lines)]
 fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Result<()> {
     let api = lua.create_table()?;
+    let h = Arc::clone(&host);
+    api.set(
+        "query",
+        lua.create_function(move |lua, value: Value| {
+            let mut query = lua.from_value(value)?;
+            normalize_query(&mut query);
+            let result = lock_host(&h)?
+                .gameplay_query(query)
+                .map_err(MluaError::RuntimeError)?;
+            lua.to_value(&result)
+        })?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay",
+        lua.create_function(move |lua, value: Value| {
+            let mut request = lua.from_value::<serde_json::Value>(value)?;
+            normalize_query(&mut request);
+            let request = serde_json::from_value(request).map_err(MluaError::external)?;
+            lock_host(&h)?
+                .gameplay_request(request)
+                .map_err(MluaError::RuntimeError)
+        })?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay_connections",
+        lua.create_function(move |lua, ()| lua.to_value(&lock_host(&h)?.gameplay_connections()))?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay_states",
+        lua.create_function(move |lua, ()| lua.to_value(&lock_host(&h)?.gameplay_states()))?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "gameplay_callbacks",
+        lua.create_function(move |lua, ()| lua.to_value(&lock_host(&h)?.gameplay_callbacks()))?,
+    )?;
+    api.set(
+        "new_handle",
+        lua.create_function(|_, ()| Ok(EntityId::new().to_string()))?,
+    )?;
     let h = Arc::clone(&host);
     api.set(
         "entity_id",
@@ -380,12 +539,33 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
     api.set("GetAttribute", get_attribute)?;
     let h = Arc::clone(&host);
     let edit_attribute = lua.create_function(move |_, (name, value): (String, Value)| {
-        lock_host(&h)?
-            .edit_attribute(&name, lua_to_engine(value)?)
+        let mut host = lock_host(&h)?;
+        let current = host.attribute(&name).map_err(MluaError::RuntimeError)?;
+        host.edit_attribute(&name, lua_attribute_value(value, current.as_ref())?)
             .map_err(MluaError::RuntimeError)
     })?;
     api.set("edit_attribute", edit_attribute.clone())?;
     api.set("EditAttribute", edit_attribute)?;
+    api.set(
+        "game",
+        object_proxy(lua, Arc::clone(&host), "rustic.game".into())?,
+    )?;
+    let h = Arc::clone(&host);
+    api.set(
+        "edit_object_attribute",
+        lua.create_function(move |_, (source, name, value): (String, String, Value)| {
+            let mut host = lock_host(&h)?;
+            let current = host
+                .object_attribute(&source, &name)
+                .map_err(MluaError::RuntimeError)?;
+            host.edit_object_attribute(
+                &source,
+                &name,
+                lua_attribute_value(value, current.as_ref())?,
+            )
+            .map_err(MluaError::RuntimeError)
+        })?,
+    )?;
     let scene = lua.create_table()?;
     let h = Arc::clone(&host);
     scene.set(
@@ -532,6 +712,22 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
                 .map_err(MluaError::RuntimeError)
         })?,
     )?;
+    for (name, level) in [("print", "info"), ("warn", "warn")] {
+        let h = Arc::clone(&host);
+        lua.globals().set(
+            name,
+            lua.create_function(move |lua, values: Variadic<Value>| {
+                let tostring: Function = lua.globals().get("tostring")?;
+                let mut parts = Vec::with_capacity(values.len());
+                for value in values {
+                    parts.push(tostring.call::<String>(value)?);
+                }
+                lock_host(&h)?
+                    .log(level, &parts.join("\t"))
+                    .map_err(MluaError::RuntimeError)
+            })?,
+        )?;
+    }
     let h = Arc::clone(&host);
     api.set(
         "get_property",
@@ -582,6 +778,49 @@ fn engine_to_lua(lua: &Lua, value: Option<EngineValue>) -> mlua::Result<Value> {
         }
     })
 }
+fn lua_attribute_value(value: Value, current: Option<&EngineValue>) -> mlua::Result<EngineValue> {
+    match current {
+        Some(EngineValue::Vec3(_)) => {
+            let Value::Table(table) = value else {
+                return Err(MluaError::RuntimeError(
+                    "expected a three-number attribute vector".into(),
+                ));
+            };
+            if table.raw_len() != 3 {
+                return Err(MluaError::RuntimeError(
+                    "expected exactly three vector components".into(),
+                ));
+            }
+            let result = [
+                table.get::<f64>(1)?,
+                table.get::<f64>(2)?,
+                table.get::<f64>(3)?,
+            ];
+            if !result.iter().all(|v| v.is_finite()) {
+                return Err(MluaError::RuntimeError(
+                    "attribute vector must be finite".into(),
+                ));
+            }
+            Ok(EngineValue::Vec3(result))
+        }
+        Some(EngineValue::Entity(_)) => match value {
+            Value::Nil => Ok(EngineValue::Entity(None)),
+            Value::String(value) => value
+                .to_str()?
+                .parse::<EntityId>()
+                .map(|id| EngineValue::Entity(Some(id)))
+                .map_err(|_| {
+                    MluaError::RuntimeError("expected a stable parent entity ID or nil".into())
+                }),
+            _ => Err(MluaError::RuntimeError(
+                "expected a stable parent entity ID or nil".into(),
+            )),
+        },
+        Some(_) => lua_to_engine(value),
+        None => Err(MluaError::RuntimeError("unknown attribute".into())),
+    }
+}
+
 fn lua_to_engine(value: Value) -> mlua::Result<EngineValue> {
     match value {
         Value::Boolean(v) => Ok(EngineValue::Boolean(v)),
@@ -598,6 +837,10 @@ fn runtime_error(error: &impl ToString) -> LuaRuntimeError {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
@@ -675,6 +918,26 @@ return { on_create=function() rustic.log('info','created') end, fixed_update=fun
         b.on_create().unwrap();
         b.fixed_update(0.02).unwrap();
         assert!((b.host().lock().unwrap().translation()[0] - 0.02).abs() < f64::EPSILON);
+    }
+    #[test]
+    fn canonical_lifecycle_and_native_logging_functions_are_available() {
+        let source = br#"return {
+            OnCreate=function() print("created", 1); warn("careful"); rustic.set_translation(1,2,3) end,
+            OnStop=function() rustic.set_translation(4,5,6) end
+        }"#;
+        let mut behavior =
+            LuaBehavior::load(ScriptId::new(), source, "native-log.lua", host(), 100_000).unwrap();
+
+        behavior.on_create().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [1.0, 2.0, 3.0]
+        );
+        behavior.on_stop().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [4.0, 5.0, 6.0]
+        );
     }
     #[test]
     fn syntax_error_is_diagnostic_and_infinite_loop_is_contained() {

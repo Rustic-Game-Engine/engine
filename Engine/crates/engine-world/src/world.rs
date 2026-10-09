@@ -224,6 +224,8 @@ impl SceneWorld {
     }
 
     /// Resolves a dot- or slash-separated name path (for example `Workspace.Room.Table`).
+    /// # Errors
+    /// This lookup currently returns `Ok` even when no entity matches.
     pub fn find_path(&self, path: &str) -> Result<Option<EntityId>, WorldError> {
         let parts: Vec<_> = path
             .split(['.', '/'])
@@ -234,7 +236,7 @@ impl SceneWorld {
         let mut parent = None;
         for part in parts {
             let mut matches = self.entity_ids().filter(|id| {
-                self.ecs_entity(*id).ok().is_some_and(|entity| {
+                self.ecs_entity(*id).is_ok_and(|entity| {
                     self.ecs
                         .get::<Name>(entity)
                         .is_some_and(|name| name.0 == part)
@@ -249,6 +251,8 @@ impl SceneWorld {
         Ok(parent)
     }
 
+    /// # Errors
+    /// Propagates errors from resolving the parent path.
     pub fn list_path(&self, path: &str) -> Result<Vec<EntityId>, WorldError> {
         let parent = if path.is_empty() || matches!(path, "Game.scene" | "scene" | "Workspace") {
             None
@@ -261,6 +265,8 @@ impl SceneWorld {
             .collect())
     }
 
+    /// # Errors
+    /// Returns an error if the entity or an ancestor is absent.
     pub fn entity_path(&self, id: EntityId) -> Result<String, WorldError> {
         let mut names = Vec::new();
         let mut current = Some(id);
@@ -649,6 +655,8 @@ impl SceneWorld {
         Ok(self.ecs.get::<Primitive>(entity))
     }
 
+    /// # Errors
+    /// Returns `WorldError::EntityNotFound` if the entity is absent.
     pub fn part_attributes(&self, id: EntityId) -> Result<PartAttributes, WorldError> {
         let entity = self.ecs_entity(id)?;
         Ok(self
@@ -694,11 +702,16 @@ impl SceneWorld {
             let Ok(entity) = self.ecs_entity(id) else {
                 continue;
             };
-            let local = self
-                .ecs
-                .get::<LocalTransform>(entity)
-                .copied()
-                .unwrap_or_default();
+            // Folders only organize the scene tree. They deliberately contribute no
+            // spatial transform to themselves or their descendants.
+            let local = if self.ecs.get::<Folder>(entity).is_some() {
+                LocalTransform::IDENTITY
+            } else {
+                self.ecs
+                    .get::<LocalTransform>(entity)
+                    .copied()
+                    .unwrap_or_default()
+            };
             let parent_matrix = self
                 .ecs
                 .get::<Parent>(entity)
@@ -1060,6 +1073,34 @@ mod tests {
             Vec3::X
         );
         assert_eq!(world.propagate_transforms(), 0);
+    }
+
+    #[test]
+    fn folders_do_not_affect_descendant_world_transforms() {
+        let folder = EntityId::new();
+        let child = EntityId::new();
+        let mut folder_snapshot = entity(folder, None);
+        folder_snapshot.folder = true;
+        folder_snapshot.local_transform.translation = Vec3::new(100.0, 200.0, 300.0);
+        let mut child_snapshot = entity(child, Some(folder));
+        child_snapshot.local_transform.translation = Vec3::new(1.0, 2.0, 3.0);
+        let mut world = SceneWorld::new();
+        world
+            .apply_commands(&[
+                WorldCommand::Spawn(Box::new(folder_snapshot)),
+                WorldCommand::Spawn(Box::new(child_snapshot)),
+            ])
+            .unwrap();
+
+        world.propagate_transforms();
+        assert_eq!(
+            world
+                .world_transform(child)
+                .unwrap()
+                .0
+                .transform_point3(Vec3::ZERO),
+            Vec3::new(1.0, 2.0, 3.0)
+        );
     }
 
     #[test]

@@ -9,7 +9,20 @@ const BRIDGE: &str = r#"
 (() => {
   let state = Object.create(null);
   let commands = [];
+  const objectAt = source => new Proxy(Object.create(null), {get: (_, key) => {
+    if (key === "__source") return source;
+    if (key === "EditAttribute" || key === "edit_attribute") return (name, value) => commands.push({op:"edit_attribute", source, name, value});
+    if (typeof key !== "string") return undefined;
+    return objectAt(source + "." + key);
+  }});
   const rustic = Object.freeze({
+    game: objectAt("rustic.game"),
+    query: request => JSON.parse(__rustic_query(JSON.stringify(request))),
+    gameplay: request => commands.push({op:"gameplay",request}),
+    gameplay_connections: () => state.gameplay_connections || [],
+    gameplay_states: () => state.gameplay_states || [],
+    gameplay_callbacks: () => state.gameplay_callbacks || [],
+    edit_object_attribute: (source, name, value) => commands.push({op:"edit_attribute", source, name, value}),
     entity_id: () => state.entity_id,
     delta_time: () => state.delta_time,
     fixed_delta_time: () => state.fixed_delta_time,
@@ -29,6 +42,18 @@ const BRIDGE: &str = r#"
     set_enabled: enabled => commands.push({op:"set_enabled", enabled:Boolean(enabled)})
   });
   Object.defineProperty(globalThis, "rustic", {value:rustic, writable:false, configurable:false});
+  const writeLog = level => (...values) => rustic.log(level, values.map(value => String(value)).join(" "));
+  const print = writeLog("info");
+  const warn = writeLog("warn");
+  Object.defineProperty(globalThis, "print", {value:print, writable:false, configurable:false});
+  Object.defineProperty(globalThis, "warn", {value:warn, writable:false, configurable:false});
+  Object.defineProperty(globalThis, "console", {value:Object.freeze({
+    log: print,
+    info: print,
+    warn,
+    error: writeLog("error"),
+    debug: writeLog("debug")
+  }), writable:false, configurable:false});
   const scene = new Proxy(Object.create(null), {get: (_, key) => {
     if (key === "Find") return path => state.scene_paths[path];
     if (key === "List") return () => Object.keys(state.scene_paths);
@@ -139,8 +164,36 @@ impl JavaScriptBehavior {
         let text = std::str::from_utf8(source)
             .map_err(|error| JavaScriptRuntimeError::InvalidUtf8(error.to_string()))?;
         let (runtime, context, budget) = sandbox_runtime(instruction_budget.max(1))?;
+        let query_host = Arc::clone(&host);
         context
-            .with(|context| context.eval::<(), _>(BRIDGE))
+            .with(|ctx| {
+                ctx.globals().set(
+                    "__rustic_query",
+                    rquickjs::Function::new(
+                        ctx.clone(),
+                        move |request: String| -> rquickjs::Result<String> {
+                            let response = (|| -> Result<serde_json::Value, String> {
+                                let request =
+                                    serde_json::from_str(&request).map_err(|e| e.to_string())?;
+                                query_host
+                                    .lock()
+                                    .map_err(|_| "gameplay lock poisoned")?
+                                    .gameplay_query(request)
+                            })();
+                            match response {
+                                Ok(value) => serde_json::to_string(&value)
+                                    .map_err(|_| rquickjs::Error::Unknown),
+                                Err(_) => Err(rquickjs::Error::Unknown),
+                            }
+                        },
+                    )?,
+                )
+            })
+            .map_err(|e| JavaScriptRuntimeError::Runtime(e.to_string()))?;
+        context
+            .with(|context| {
+                context.eval::<(), _>(format!("{}\n{}", BRIDGE, include_str!("sdk/gameplay.js")))
+            })
             .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
         context
             .with(|context| {
@@ -182,7 +235,7 @@ impl JavaScriptBehavior {
     /// # Errors
     /// Returns and contains a callback failure.
     pub fn on_create(&mut self) -> Result<(), JavaScriptRuntimeError> {
-        self.call("on_create", None)
+        self.call_compatible("OnCreate", "on_create", None)
     }
 
     /// # Errors
@@ -222,11 +275,7 @@ impl JavaScriptBehavior {
     /// # Errors
     /// Returns and contains a callback failure.
     pub fn on_stop(&mut self) -> Result<(), JavaScriptRuntimeError> {
-        self.call("on_stop", None)
-    }
-
-    fn call(&mut self, callback: &str, delta: Option<f64>) -> Result<(), JavaScriptRuntimeError> {
-        self.call_compatible(callback, callback, delta)
+        self.call_compatible("OnStop", "on_stop", None)
     }
 
     fn call_compatible(
@@ -252,7 +301,7 @@ impl JavaScriptBehavior {
         delta: Option<f64>,
     ) -> Result<(), JavaScriptRuntimeError> {
         let state = {
-            let host = self.host.lock().map_err(|_| {
+            let mut host = self.host.lock().map_err(|_| {
                 JavaScriptRuntimeError::Runtime("gameplay host lock poisoned".into())
             })?;
             let attributes = [
@@ -279,6 +328,9 @@ impl JavaScriptBehavior {
                 .map(|(path, id)| (path, Value::String(id.to_string())))
                 .collect::<Map<_, _>>();
             json!({
+                "gameplay_connections":host.gameplay_connections(),
+                "gameplay_states": host.gameplay_states(),
+                "gameplay_callbacks": if canonical == "Update" {host.gameplay_callbacks()} else {Vec::new()},
                 "entity_id": host.entity_id().to_string(),
                 "delta_time": host.delta_time(),
                 "fixed_delta_time": host.fixed_delta_time(),
@@ -303,7 +355,7 @@ impl JavaScriptBehavior {
             .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
         let argument = delta.map_or_else(String::new, |value| value.to_string());
         let invocation = format!(
-            "if (typeof behavior.{canonical} === 'function') behavior.{canonical}({argument}); else if (typeof behavior.{legacy} === 'function') behavior.{legacy}({argument})"
+            "if (typeof __rustic_gameplay_dispatch === 'function') __rustic_gameplay_dispatch(); if (typeof behavior.{canonical} === 'function') behavior.{canonical}({argument}); else if (typeof behavior.{legacy} === 'function') behavior.{legacy}({argument})"
         );
         self.context
             .with(|context| context.eval::<(), _>(invocation))
@@ -328,6 +380,9 @@ impl JavaScriptBehavior {
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum Command {
+    Gameplay {
+        request: Box<engine_core::gameplay::Request>,
+    },
     SetCurrentCamera {
         source: String,
     },
@@ -339,6 +394,8 @@ enum Command {
         value: Value,
     },
     EditAttribute {
+        #[serde(default)]
+        source: Option<String>,
         name: String,
         value: Value,
     },
@@ -364,6 +421,7 @@ fn apply_command(
     command: Command,
 ) -> Result<(), JavaScriptRuntimeError> {
     let result = match command {
+        Command::Gameplay { request } => host.gameplay_request(*request),
         Command::SetTranslation { value } => host.set_translation(value),
         Command::SetProperty { name, value } => host.property(&name).map_or_else(
             || Err(format!("property `{name}` is not declared")),
@@ -372,11 +430,23 @@ fn apply_command(
                     .and_then(|converted| host.set_property(&name, converted))
             },
         ),
-        Command::EditAttribute { name, value } => host.attribute(&name).and_then(|current| {
-            let current = current.ok_or_else(|| format!("unknown attribute `{name}`"))?;
-            json_to_engine(value, &current)
-                .and_then(|converted| host.edit_attribute(&name, converted))
-        }),
+        Command::EditAttribute {
+            source,
+            name,
+            value,
+        } => source
+            .as_ref()
+            .map_or_else(
+                || host.attribute(&name),
+                |source| host.object_attribute(source, &name),
+            )
+            .and_then(|current| {
+                let current = current.ok_or_else(|| format!("unknown attribute `{name}`"))?;
+                json_to_engine(value, &current).and_then(|converted| match &source {
+                    Some(source) => host.edit_object_attribute(source, &name, converted),
+                    None => host.edit_attribute(&name, converted),
+                })
+            }),
         Command::Log { level, message } => host.log(&level, &message),
         Command::SetEnabled { enabled } => {
             host.set_enabled(enabled);
@@ -460,6 +530,10 @@ fn sandbox_runtime(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
     use crate::ActionState;
@@ -547,6 +621,28 @@ mod tests {
         let mut behavior =
             JavaScriptBehavior::load(ScriptId::new(), looping, "loop.js", host(), 100).unwrap();
         assert!(behavior.update(0.016).is_err());
+    }
+
+    #[test]
+    fn canonical_lifecycle_and_native_logging_functions_are_available() {
+        let source = br#"globalThis.behavior = {
+            OnCreate() { print("created", 1); warn("careful"); console.debug("detail"); rustic.set_translation(1,2,3); },
+            OnStop() { rustic.set_translation(4,5,6); }
+        };"#;
+        let mut behavior =
+            JavaScriptBehavior::load(ScriptId::new(), source, "native-log.js", host(), 100_000)
+                .unwrap();
+
+        behavior.on_create().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [1.0, 2.0, 3.0]
+        );
+        behavior.on_stop().unwrap();
+        assert_eq!(
+            behavior.host().lock().unwrap().translation(),
+            [4.0, 5.0, 6.0]
+        );
     }
 
     #[test]

@@ -3,7 +3,9 @@
 use crate::changes::RuntimeChangeSet;
 use crate::frame_ring::{BgraFrame, FrameRing, FrameRingError, FrameRingLimits};
 use crate::local_ipc::{AuthenticatedConnection, LocalEndpoint, connect_authenticated};
-use crate::protocol::{AuthenticationToken, ConsoleEvent, ProtocolError, ProtocolMessage};
+use crate::protocol::{
+    AuthenticationToken, ConsoleEvent, LiveEntityProperties, ProtocolError, ProtocolMessage,
+};
 use crate::simulation::{ControlAck, ControlRequest, PlayMode};
 use engine_core::ScriptId;
 use sha2::{Digest, Sha256};
@@ -112,8 +114,11 @@ impl SupervisedRuntime {
             .args(&launch.extra_arguments)
             .env(TOKEN_ENVIRONMENT_VARIABLE, token.to_secret_hex())
             .stdin(Stdio::null())
+            // Runtime diagnostics are transported over the authenticated IPC
+            // channel. The editor is a GUI process, so inheriting its standard
+            // handles can pass invalid handles to a console child on Windows.
             .stdout(Stdio::null())
-            .stderr(Stdio::inherit());
+            .stderr(Stdio::null());
         configure_process_group(&mut command);
         let mut child = command.spawn().map_err(|source| SupervisorError::Spawn {
             executable: launch.executable.clone(),
@@ -145,6 +150,22 @@ impl SupervisedRuntime {
         self.child.id()
     }
 
+    /// Sends the keys currently held by the focused play viewport.
+    /// # Errors
+    /// Returns an error if the runtime terminated or the protocol send fails.
+    pub fn set_input_keys(&mut self, keys: Vec<String>) -> Result<(), SupervisorError> {
+        if self.terminal {
+            return Err(SupervisorError::AlreadyTerminated);
+        }
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        self.connection
+            .as_mut()
+            .ok_or(SupervisorError::AlreadyTerminated)?
+            .send(request_id, &ProtocolMessage::InputKeys(keys))?;
+        Ok(())
+    }
+
     /// Sends a pause/resume/step/query request and waits for its barrier acknowledgement.
     ///
     /// # Errors
@@ -171,6 +192,42 @@ impl SupervisedRuntime {
             match received.message {
                 ProtocolMessage::ControlAck(ack) if received.request_id == request_id => {
                     return Ok(ack);
+                }
+                ProtocolMessage::Console(event) => self.console_events.push_back(*event),
+                ProtocolMessage::Frame(frame) => publish_frame(&self.frames, &frame)?,
+                ProtocolMessage::RuntimeChanges(changes) => self.runtime_changes = Some(changes),
+                ProtocolMessage::Error { code, message } => {
+                    return Err(SupervisorError::Runtime { code, message });
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Reads the selected entity's current runtime properties.
+    /// # Errors
+    /// Returns an error for a terminated runtime, protocol failure, or timeout.
+    pub fn query_entity(
+        &mut self,
+        id: String,
+        timeout: Duration,
+    ) -> Result<Option<LiveEntityProperties>, SupervisorError> {
+        if self.terminal {
+            return Err(SupervisorError::AlreadyTerminated);
+        }
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        let connection = self
+            .connection
+            .as_mut()
+            .ok_or(SupervisorError::AlreadyTerminated)?;
+        connection.set_receive_timeout(Some(timeout))?;
+        connection.send(request_id, &ProtocolMessage::QueryEntity(id))?;
+        loop {
+            let received = connection.receive()?;
+            match received.message {
+                ProtocolMessage::LiveEntity(entity) if received.request_id == request_id => {
+                    return Ok(entity);
                 }
                 ProtocolMessage::Console(event) => self.console_events.push_back(*event),
                 ProtocolMessage::Frame(frame) => publish_frame(&self.frames, &frame)?,
@@ -401,7 +458,8 @@ fn wait_for_exit(
 fn configure_process_group(command: &mut Command) {
     use std::os::windows::process::CommandExt;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP);
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
 }
 
 #[cfg(unix)]

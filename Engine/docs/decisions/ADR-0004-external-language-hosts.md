@@ -42,3 +42,22 @@ Rustic generates a starter program for every language and a JSON schema at
 programs may organize code freely as long as their entry point implements protocol
 version 1. Hot reload restarts external processes rather than unloading arbitrary
 native code.
+
+## Built-in API update (2026-10-07)
+
+The versioned transport is an engine implementation detail. All supported gameplay
+languages now use engine-owned SDK functions and callbacks; generated starters no
+longer require user-written request/response loops. C#, Java and C expose native
+values rather than JSON objects. C++ registers enable/disable callbacks too.
+Luau runs in the bundled rustic-luau-host executable, with a persistent sandboxed
+VM and explicit response flushing. Its standalone Cargo graph keeps its native
+Luau library separate from the engine's Lua 5.4 library. Build it through the
+Windows installer script, or from source:
+
+```powershell
+cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
+```
+
+Build the main workspace into the same target directory so the editor/runtime can
+find the host beside their executable. Tests built into debug/deps can instead put
+target/debug on PATH. Run `cargo xtask doctor` to verify all adapters.

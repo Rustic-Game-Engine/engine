@@ -1,10 +1,11 @@
 use engine_editor::AuthoringDocument;
 use engine_play::{
-    ControlAck, ControlRequest, PlayMode, PlaySnapshot, RuntimeChangeSet, RuntimeLaunch,
-    RuntimeState, SnapshotBuilder, SnapshotInput, SupervisedRuntime,
+    ControlAck, ControlRequest, LiveEntityProperties, PlayMode, PlaySnapshot, RuntimeChangeSet,
+    RuntimeLaunch, RuntimeState, SnapshotBuilder, SnapshotInput, SupervisedRuntime,
 };
 use engine_project::VirtualDirectory;
 use engine_scripting::{GAME_SETTINGS_FILE, GameSettings, load_manifest, validate_script};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -15,6 +16,9 @@ pub struct EditorPlaySession {
     state: RuntimeState,
     fixed_tick: u64,
     last_frame_request: std::time::Instant,
+    held_keys: BTreeSet<String>,
+    live_entity: Option<LiveEntityProperties>,
+    last_entity_request: std::time::Instant,
 }
 
 impl EditorPlaySession {
@@ -96,6 +100,11 @@ impl EditorPlaySession {
             state: RuntimeState::Running,
             fixed_tick: 0,
             last_frame_request: std::time::Instant::now(),
+            held_keys: BTreeSet::new(),
+            live_entity: None,
+            last_entity_request: std::time::Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(std::time::Instant::now),
         })
     }
 
@@ -111,6 +120,36 @@ impl EditorPlaySession {
         self.fixed_tick
     }
 
+    pub fn live_entity(&self) -> Option<&LiveEntityProperties> {
+        self.live_entity.as_ref()
+    }
+
+    pub fn refresh_entity(
+        &mut self,
+        selected: Option<engine_core::EntityId>,
+    ) -> Result<(), String> {
+        let Some(id) = selected else {
+            self.live_entity = None;
+            return Ok(());
+        };
+        if self
+            .live_entity
+            .as_ref()
+            .is_some_and(|entity| entity.entity_id != id.to_string())
+        {
+            self.live_entity = None;
+        }
+        if self.last_entity_request.elapsed() < Duration::from_millis(100) {
+            return Ok(());
+        }
+        self.last_entity_request = std::time::Instant::now();
+        self.live_entity = self
+            .runtime
+            .query_entity(id.to_string(), Duration::from_secs(2))
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    }
+
     pub fn control(&mut self, request: ControlRequest) -> Result<ControlAck, String> {
         let ack = self
             .runtime
@@ -119,6 +158,16 @@ impl EditorPlaySession {
         self.state = ack.state;
         self.fixed_tick = ack.fixed_tick;
         Ok(ack)
+    }
+
+    pub fn set_input_keys(&mut self, keys: BTreeSet<String>) -> Result<(), String> {
+        if keys != self.held_keys {
+            self.runtime
+                .set_input_keys(keys.iter().cloned().collect())
+                .map_err(|error| error.to_string())?;
+            self.held_keys = keys;
+        }
+        Ok(())
     }
 
     pub fn reload_scripts(&mut self, project_root: &Path) -> Result<Vec<String>, String> {

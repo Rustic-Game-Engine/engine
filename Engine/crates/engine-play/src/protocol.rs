@@ -4,6 +4,7 @@ use crate::simulation::{ControlAck, ControlRequest, PlayMode};
 use crate::{changes::RuntimeChangeSet, frame_ring::BgraFrame};
 use engine_core::ScriptId;
 use engine_core::logging::{LogMetadata, LogRecord, Severity, SourceLocation};
+use engine_world::{PartAttributes, ScriptComponent};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::io::{Read, Write};
@@ -26,6 +27,18 @@ pub struct ProtocolVersion {
 
 /// Protocol understood by this engine build.
 pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 2, minor: 0 };
+
+/// Current values for the selected entity while the isolated runtime is active.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveEntityProperties {
+    pub entity_id: String,
+    pub name: Option<String>,
+    pub translation: [f32; 3],
+    pub rotation: [f32; 4],
+    pub scale: [f32; 3],
+    pub part_attributes: PartAttributes,
+    pub scripts: Vec<ScriptComponent>,
+}
 
 /// Process responsibility carried in every frame and authenticated handshake.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +202,9 @@ pub enum ProtocolMessage {
         fixed_tick: u64,
     },
     Control(ControlRequest),
+    InputKeys(Vec<String>),
+    QueryEntity(String),
+    LiveEntity(Option<LiveEntityProperties>),
     ControlAck(ControlAck),
     Console(Box<ConsoleEvent>),
     Frame(BgraFrame),
@@ -223,6 +239,9 @@ impl ProtocolMessage {
             Self::ServerHello { .. } => 2,
             Self::Ready { .. } => 3,
             Self::Control(_) => 4,
+            Self::InputKeys(_) => 13,
+            Self::QueryEntity(_) => 14,
+            Self::LiveEntity(_) => 15,
             Self::ControlAck(_) => 5,
             Self::Console(_) => 6,
             Self::Frame(_) => 7,
@@ -376,7 +395,10 @@ fn encode_frame(
             frame.width,
             frame.height,
             frame.stride_bytes,
-            frame.pixels.len() as u32,
+            u32::try_from(frame.pixels.len()).map_err(|_| ProtocolError::PayloadTooLarge {
+                found: frame.pixels.len(),
+                maximum: MAX_PAYLOAD_BYTES,
+            })?,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());
         }
@@ -608,12 +630,14 @@ mod pixel_wire_tests {
             sequence: 12,
             width: 640,
             height: 360,
-            stride_bytes: 2560,
-            pixels: (0..921600).map(|i| (i % 256) as u8).collect(),
+            stride_bytes: 2_560,
+            pixels: (0..921_600_u32)
+                .map(|i| u8::try_from(i % 256).unwrap())
+                .collect(),
         };
         let message = ProtocolMessage::Frame(frame);
         let bytes = encode_frame(ProcessRole::Runtime, PROTOCOL_VERSION, 7, 0, &message).unwrap();
-        assert_eq!(bytes.len(), HEADER_BYTES + 24 + 921600);
+        assert_eq!(bytes.len(), HEADER_BYTES + 24 + 921_600);
         assert!(bytes.len() < MAX_PAYLOAD_BYTES);
         assert_eq!(
             decode_frame(&mut std::io::Cursor::new(bytes))

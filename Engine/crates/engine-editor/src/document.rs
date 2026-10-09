@@ -101,6 +101,8 @@ impl AuthoringDocument {
     }
 
     /// Returns the project for metadata edits when the document is writable.
+    /// # Errors
+    /// Returns `AuthoringError::ReadOnly` when the document is read-only.
     pub fn project_mut(&mut self) -> Result<&mut Project, AuthoringError> {
         if self.read_only {
             return Err(AuthoringError::ReadOnly);
@@ -124,6 +126,8 @@ impl AuthoringDocument {
         &self.scene_startup_scripts
     }
 
+    /// # Errors
+    /// Returns `AuthoringError::ReadOnly` when the document is read-only.
     pub fn set_scene_startup_scripts(
         &mut self,
         scripts: Vec<ScriptReference>,
@@ -183,6 +187,33 @@ impl AuthoringDocument {
             name: Some(name.into()),
             primitive: Some(primitive),
             parent,
+            ..EntitySnapshot::default()
+        };
+        let id = snapshot.id;
+        self.undo
+            .execute(&mut self.world, SceneEdit::Create { snapshot })?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
+    /// Creates a model instance through the centralized undo stack.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a read-only document or failed world edit.
+    pub fn add_model(
+        &mut self,
+        name: impl Into<String>,
+        asset: engine_core::AssetId,
+        parent: Option<EntityId>,
+        local_transform: LocalTransform,
+    ) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        let snapshot = EntitySnapshot {
+            name: Some(name.into()),
+            mesh: Some(engine_world::Mesh { asset }),
+            parent,
+            local_transform,
             ..EntitySnapshot::default()
         };
         let id = snapshot.id;
@@ -288,6 +319,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an invalid parent or transform.
     pub fn add_camera_or_light(
         &mut self,
         camera: bool,
@@ -311,6 +344,8 @@ impl AuthoringDocument {
     }
 
     /// Creates an organizational folder in the scene hierarchy.
+    /// # Errors
+    /// Returns an error for read-only state or an invalid parent.
     pub fn add_folder(&mut self, parent: Option<EntityId>) -> Result<EntityId, AuthoringError> {
         self.ensure_writable()?;
         let snapshot = EntitySnapshot {
@@ -326,6 +361,31 @@ impl AuthoringDocument {
         Ok(id)
     }
 
+    /// Moves an entity within the scene hierarchy as one undoable edit.
+    /// # Errors
+    /// Returns an error for read-only state, absent entities, or an invalid hierarchy.
+    pub fn reparent(
+        &mut self,
+        entity: EntityId,
+        parent: Option<EntityId>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.parent(entity)?;
+        if before != parent {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::Reparent {
+                    entity,
+                    before,
+                    after: parent,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_camera(
         &mut self,
         entity: EntityId,
@@ -344,6 +404,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_light(
         &mut self,
         entity: EntityId,
@@ -362,6 +424,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_part_attributes(
         &mut self,
         entity: EntityId,
@@ -382,6 +446,8 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// # Errors
+    /// Returns an error for read-only state or an absent entity.
     pub fn set_name(&mut self, entity: EntityId, after: String) -> Result<(), AuthoringError> {
         self.ensure_writable()?;
         let before = self.world.snapshot(entity)?.name;
@@ -400,6 +466,8 @@ impl AuthoringDocument {
     }
 
     /// Inserts a `.rscene` from the project's `scenes` folder as an additive instance.
+    /// # Errors
+    /// Returns an error for read-only state, an unsafe path, or invalid scene data.
     pub fn insert_scene(
         &mut self,
         relative_path: impl AsRef<Path>,
@@ -480,7 +548,9 @@ impl AuthoringDocument {
     pub fn save(&mut self) -> Result<(), AuthoringError> {
         self.ensure_writable()?;
         let mut document = SceneDocument::from_world(self.scene_id, &self.scene_name, &self.world)?;
-        document.startup_scripts = self.scene_startup_scripts.clone();
+        document
+            .startup_scripts
+            .clone_from(&self.scene_startup_scripts);
         save_scene_atomic(&self.scene_path, &document)?;
         self.undo.mark_saved();
         Ok(())
@@ -493,7 +563,9 @@ impl AuthoringDocument {
     /// Returns an error when the world cannot be converted to a valid scene document.
     pub fn snapshot_bytes(&self) -> Result<Vec<u8>, AuthoringError> {
         let mut document = SceneDocument::from_world(self.scene_id, &self.scene_name, &self.world)?;
-        document.startup_scripts = self.scene_startup_scripts.clone();
+        document
+            .startup_scripts
+            .clone_from(&self.scene_startup_scripts);
         Ok(document.to_bytes()?)
     }
 
@@ -773,6 +845,47 @@ mod tests {
         assert!(folder_snapshot.folder);
         assert_eq!(folder_snapshot.name.as_deref(), Some("Environment"));
         assert_eq!(reopened.world().parent(child).unwrap(), Some(folder));
+    }
+
+    #[test]
+    fn model_instance_is_created_at_drop_transform_and_is_undoable() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("model-instance"),
+            "Model Instance",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let asset = engine_core::AssetId::new();
+        let transform = LocalTransform {
+            translation: Vec3::new(2.0, 0.0, -3.0),
+            ..LocalTransform::IDENTITY
+        };
+
+        let entity = document.add_model("Chair", asset, None, transform).unwrap();
+
+        assert_eq!(document.world().mesh(entity).unwrap().unwrap().asset, asset);
+        assert_eq!(document.world().local_transform(entity).unwrap(), transform);
+        assert!(document.undo().unwrap());
+        assert!(!document.world().contains(entity));
+    }
+
+    #[test]
+    fn hierarchy_reparent_is_undoable() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("reparent");
+        let project = Project::create(&root, "Reparent", ProjectTemplate::Blank).unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let folder = document.add_folder(None).unwrap();
+        let child = document
+            .add_primitive("Cube", Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+
+        document.reparent(child, Some(folder)).unwrap();
+        assert_eq!(document.world().parent(child).unwrap(), Some(folder));
+        assert!(document.undo().unwrap());
+        assert_eq!(document.world().parent(child).unwrap(), None);
     }
 
     #[test]

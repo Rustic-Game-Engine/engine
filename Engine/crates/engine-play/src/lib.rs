@@ -7,6 +7,7 @@
 pub mod changes;
 pub mod frame_ring;
 pub mod local_ipc;
+mod physics;
 pub mod protocol;
 pub mod runtime_server;
 mod script_runtime;
@@ -23,8 +24,9 @@ pub use local_ipc::{
     AuthenticatedConnection, LocalEndpoint, LocalIpcListener, connect_authenticated,
 };
 pub use protocol::{
-    AuthenticationToken, ConsoleEvent, ConsoleRecord, IpcConnection, PROTOCOL_VERSION,
-    ProcessDescriptor, ProcessRole, ProtocolError, ProtocolMessage, ProtocolVersion,
+    AuthenticationToken, ConsoleEvent, ConsoleRecord, IpcConnection, LiveEntityProperties,
+    PROTOCOL_VERSION, ProcessDescriptor, ProcessRole, ProtocolError, ProtocolMessage,
+    ProtocolVersion,
 };
 pub use runtime_server::{
     RuntimeServerConfig, RuntimeServerError, record_runtime_crash, run_runtime_server,
@@ -38,3 +40,6 @@ pub use snapshot::{
     SnapshotManifestFile,
 };
 pub use supervisor::{RuntimeLaunch, SupervisedRuntime, SupervisorError, SupervisorExit};
+
+mod audio_output;
+mod gameplay_world;

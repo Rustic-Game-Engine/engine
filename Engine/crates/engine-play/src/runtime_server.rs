@@ -57,6 +57,16 @@ pub fn run_runtime_server(config: RuntimeServerConfig) -> Result<(), RuntimeServ
 }
 
 /// Runs the protocol with an application-owned renderer of the live simulation world.
+///
+/// # Errors
+/// Returns snapshot, authentication, protocol, simulation, or synchronization errors.
+///
+/// # Panics
+/// Panics when the explicit `crash_after_ready` failure-injection flag is set.
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep session protocol, simulation worker, and shutdown ordering together"
+)]
 pub fn run_runtime_server_with_renderer(
     config: RuntimeServerConfig,
     mut render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,
@@ -145,6 +155,26 @@ pub fn run_runtime_server_with_renderer(
             }
             let request = match received.message {
                 ProtocolMessage::Control(request) => request,
+                ProtocolMessage::InputKeys(keys) => {
+                    scripts
+                        .lock()
+                        .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                        .set_input_keys(keys);
+                    continue;
+                }
+                ProtocolMessage::QueryEntity(id) => {
+                    let entity = id.parse().ok();
+                    let live = match entity {
+                        Some(entity) => scripts
+                            .lock()
+                            .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                            .live_entity(entity)
+                            .map_err(RuntimeServerError::Scripts)?,
+                        None => None,
+                    };
+                    connection.send(received.request_id, &ProtocolMessage::LiveEntity(live))?;
+                    continue;
+                }
                 ProtocolMessage::ReloadScript {
                     format_version,
                     script_id,
@@ -344,6 +374,7 @@ fn emit_console(
     message: String,
 ) -> Result<(), ProtocolError> {
     let record = LogRecord::new(severity, message, LogMetadata::new(subsystem));
+    println!("[{}] [{}] {}", severity.as_str(), subsystem, record.message);
     if let Some(logger) = logger {
         let _ = logger.log_record(&record);
     }

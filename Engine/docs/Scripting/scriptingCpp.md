@@ -1,6 +1,6 @@
 # Scripting Rustic games with C++
 
-C++ is the most complete external-language adapter. Rustic supplies `rustic.hpp`,
+C++ uses the built-in Rustic API, like every gameplay language. Rustic supplies `rustic.hpp`,
 compiles each `.cc`, `.cpp`, or `.cxx` behavior as C++20, and runs one isolated
 process per instance. The header parses protocol requests and exposes typed native
 helpers, so ordinary game code should not emit JSON.
@@ -43,11 +43,10 @@ int main() {
 }
 ```
 
-`RusticBehavior` currently has `on_create`, `on_start`, `fixed_update`, `update`,
-`on_destroy`, and `on_stop` function slots. The external runtime also sends
-`on_enable` and `on_disable`, but the current generated C++ header has no slots for
-them; the host loop safely returns an empty response. Collision callbacks are not in
-the external protocol. Omitted `std::function` members are not called.
+`RusticBehavior` has `on_create`, `on_start`, `on_enable`, `on_disable`,
+`on_destroy`, `on_stop`, `fixed_update`, and `update` slots. Omitted callbacks
+are handled automatically. Frame callbacks receive seconds. Collision callbacks
+are not exposed by this external SDK.
 
 ## Typed API
 
@@ -65,7 +64,7 @@ rustic.EditAttribute("Position",
     RusticValue::Array{1.0, 2.0, 3.0});
 
 RusticActionState jump = rustic.input("Jump");
-RusticActionState space = rustic.key("Space");
+RusticActionState forward = rustic.key("KeyW");
 std::vector<RusticKeyEvent> events = rustic.key_events();
 bool pressed = rustic.any_key_pressed();
 rustic.log("warn", "message");
@@ -74,8 +73,10 @@ rustic.set_enabled(false);
 
 `RusticActionState` contains `pressed`, `released`, `held`, and `axis`.
 `RusticKeyEvent` contains `key`, `state`, and `repeat`. Named actions currently arrive
-as an empty map for external adapters, so use raw keys until action-map forwarding is
-implemented. `RusticValue` supports null, boolean, double, string, array, and object;
+as an empty map for external adapters. Only held WASD, arrow, and Shift keys from
+the embedded Play viewport are populated; press/release fields and key events remain
+empty. See the [Lua input guide](scriptingLua.md#input) for exact names and setup.
+`RusticValue` supports null, boolean, double, string, array, and object;
 use its type accessors only when the stored alternative matches.
 
 ## Scene and object operations
@@ -116,3 +117,16 @@ three-second deadline and 1 MiB response limit. The process environment and work
 directory are isolated. Syntax/build failures prevent replacement; runtime failures
 disable the instance. Legacy C++ behavior members are the current native contract and
 remain backward compatible.
+
+## Target another scene object
+
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.
+
+## Shared gameplay actions
+
+API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedural
+animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
+See [Shared gameplay actions](gameplayActions.md) for attachment, native call
+conventions, duration/speed options, callbacks, scene-clock controls and backend limits.

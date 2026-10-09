@@ -15,6 +15,14 @@ use std::time::Duration;
 use tempfile::TempDir;
 use thiserror::Error;
 
+mod c;
+mod cpp;
+mod csharp;
+mod java;
+mod luau;
+mod php;
+mod python;
+
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 const CALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
@@ -63,7 +71,21 @@ pub fn probe_language_toolchain(language: ScriptLanguage) -> LanguageAvailabilit
         };
     }
     let specification = toolchain_spec(language);
-    let executable = specification.and_then(|spec| find_executable(spec.candidates));
+    let executable = if language == ScriptLanguage::Luau {
+        std::env::current_exe()
+            .ok()
+            .and_then(|path| {
+                let candidate = path.parent()?.join(if cfg!(windows) {
+                    "rustic-luau-host.exe"
+                } else {
+                    "rustic-luau-host"
+                });
+                candidate.is_file().then_some(candidate)
+            })
+            .or_else(|| specification.and_then(|spec| find_executable(spec.candidates)))
+    } else {
+        specification.and_then(|spec| find_executable(spec.candidates))
+    };
     let version = executable.as_ref().and_then(|path| {
         let spec = specification?;
         let output = Command::new(path)
@@ -79,7 +101,8 @@ pub fn probe_language_toolchain(language: ScriptLanguage) -> LanguageAvailabilit
     });
     LanguageAvailability {
         language,
-        available: executable.is_some(),
+        available: executable.is_some()
+            && (language != ScriptLanguage::Java || find_executable(&["javac"]).is_some()),
         executable,
         version,
         detail: specification.map_or_else(
@@ -102,9 +125,6 @@ pub fn validate_external(
     validate_source_bytes(language, source, maximum_bytes)?;
     if language == ScriptLanguage::Web {
         return validate_web(source, source_name);
-    }
-    if language == ScriptLanguage::Luau {
-        return validate_with_stdin(language, source, &["--compile=-", "-"]);
     }
     PreparedProgram::build(language, source, source_name).map(|_| ())
 }
@@ -232,83 +252,102 @@ impl ExternalBehavior {
         self.call("on_stop", None)
     }
 
+    fn invocation(
+        &mut self,
+        callback: &str,
+        delta: Option<f64>,
+    ) -> Result<Invocation, ExternalRuntimeError> {
+        let mut host = self.host.lock().map_err(|_| {
+            ExternalRuntimeError::Runtime(
+                self.language.display_name(),
+                "gameplay host lock poisoned".into(),
+            )
+        })?;
+        let input = host.input_frame();
+        let keys = input
+            .keys
+            .iter()
+            .chain(input.keys_pressed.iter())
+            .chain(input.keys_released.iter())
+            .map(|key| {
+                (
+                    key.clone(),
+                    serde_json::to_value(input.key(key)).unwrap_or(Value::Null),
+                )
+            })
+            .collect();
+        let any_key_pressed = input.any_key_pressed();
+        let attributes = [
+            "Name",
+            "Position",
+            "Size",
+            "Color",
+            "CanTouch",
+            "CanCollide",
+            "Anchored",
+            "Parent",
+        ]
+        .into_iter()
+        .filter_map(|name| {
+            host.attribute(name)
+                .ok()
+                .flatten()
+                .map(|value| (name.to_owned(), engine_to_json(&value)))
+        })
+        .collect();
+        let scene_paths = host
+            .scene_paths()
+            .into_iter()
+            .map(|(path, id)| (path, Value::String(id.to_string())))
+            .collect();
+        Ok(Invocation {
+            gameplay_connections: host.gameplay_connections(),
+            gameplay_states: host.gameplay_states(),
+            gameplay_callbacks: if callback == "update" {
+                host.gameplay_callbacks()
+            } else {
+                Vec::new()
+            },
+            format_version: 1,
+            callback: callback.into(),
+            delta,
+            entity_id: host.entity_id().to_string(),
+            delta_time: host.delta_time(),
+            fixed_delta_time: host.fixed_delta_time(),
+            translation: host.translation(),
+            properties: host
+                .properties()
+                .into_iter()
+                .map(|(key, value)| (key, engine_to_json(&value)))
+                .collect(),
+            actions: Map::new(),
+            attributes,
+            scene_paths,
+            keys,
+            key_events: input.key_events,
+            any_key_pressed,
+        })
+    }
+
     fn call(&mut self, callback: &str, delta: Option<f64>) -> Result<(), ExternalRuntimeError> {
         if !self.enabled {
             return Ok(());
         }
-        let request = {
-            let host = self.host.lock().map_err(|_| {
-                ExternalRuntimeError::Runtime(
-                    self.language.display_name(),
-                    "gameplay host lock poisoned".into(),
-                )
-            })?;
-            let input = host.input_frame();
-            let keys = input
-                .keys
-                .iter()
-                .chain(input.keys_pressed.iter())
-                .chain(input.keys_released.iter())
-                .map(|key| {
-                    (
-                        key.clone(),
-                        serde_json::to_value(input.key(key)).unwrap_or(Value::Null),
-                    )
-                })
-                .collect();
-            let any_key_pressed = input.any_key_pressed();
-            let attributes = [
-                "Name",
-                "Position",
-                "Size",
-                "Color",
-                "CanTouch",
-                "CanCollide",
-                "Anchored",
-                "Parent",
-            ]
-            .into_iter()
-            .filter_map(|name| {
-                host.attribute(name)
-                    .ok()
-                    .flatten()
-                    .map(|value| (name.to_owned(), engine_to_json(&value)))
-            })
-            .collect();
-            let scene_paths = host
-                .scene_paths()
-                .into_iter()
-                .map(|(path, id)| (path, Value::String(id.to_string())))
-                .collect();
-            Invocation {
-                format_version: 1,
-                callback: callback.into(),
-                delta,
-                entity_id: host.entity_id().to_string(),
-                delta_time: host.delta_time(),
-                fixed_delta_time: host.fixed_delta_time(),
-                translation: host.translation(),
-                properties: host
-                    .properties()
-                    .into_iter()
-                    .map(|(key, value)| (key, engine_to_json(&value)))
-                    .collect(),
-                actions: Map::new(),
-                attributes,
-                scene_paths,
-                keys,
-                key_events: input.key_events,
-                any_key_pressed,
-            }
-        };
+        let request = self.invocation(callback, delta)?;
         let result = self
             .session
-            .invoke(self.language, &request)
+            .invoke(self.language, &request, Some(&self.host))
             .and_then(|response| {
                 if response.format_version != 1 {
                     return Err(ExternalRuntimeError::Runtime(
                         self.language.display_name(),
                         format!("unsupported response version {}", response.format_version),
+                    ));
+                }
+                if let Some(message) = response.error {
+                    return Err(ExternalRuntimeError::Runtime(
+                        self.language.display_name(),
+                        message,
                     ));
                 }
                 let mut host = self.host.lock().map_err(|_| {
@@ -447,7 +486,7 @@ fn web_javascript_error(error: JavaScriptRuntimeError) -> ExternalRuntimeError {
 }
 
 #[derive(Clone, Copy)]
-struct ToolchainSpec {
+pub(super) struct ToolchainSpec {
     candidates: &'static [&'static str],
     version_arguments: &'static [&'static str],
     install_hint: &'static str,
@@ -455,46 +494,18 @@ struct ToolchainSpec {
 
 fn toolchain_spec(language: ScriptLanguage) -> Option<ToolchainSpec> {
     match language {
-        ScriptLanguage::Luau => Some(ToolchainSpec {
-            candidates: &["luau"],
-            version_arguments: &["--version"],
-            install_hint: "the Luau CLI",
-        }),
-        ScriptLanguage::Python => Some(ToolchainSpec {
-            candidates: &["python", "python3"],
-            version_arguments: &["--version"],
-            install_hint: "Python 3",
-        }),
-        ScriptLanguage::C => Some(ToolchainSpec {
-            candidates: &["clang", "gcc", "cl"],
-            version_arguments: &["--version"],
-            install_hint: "Clang, GCC, or MSVC",
-        }),
-        ScriptLanguage::Cpp => Some(ToolchainSpec {
-            candidates: &["clang++", "g++", "cl"],
-            version_arguments: &["--version"],
-            install_hint: "Clang, GCC, or MSVC",
-        }),
-        ScriptLanguage::CSharp => Some(ToolchainSpec {
-            candidates: &["dotnet"],
-            version_arguments: &["--version"],
-            install_hint: ".NET SDK 10 or newer",
-        }),
-        ScriptLanguage::Java => Some(ToolchainSpec {
-            candidates: &["java"],
-            version_arguments: &["--version"],
-            install_hint: "OpenJDK 11 or newer (java and javac)",
-        }),
-        ScriptLanguage::Php => Some(ToolchainSpec {
-            candidates: &["php"],
-            version_arguments: &["--version"],
-            install_hint: "PHP CLI",
-        }),
+        ScriptLanguage::Luau => Some(luau::SPEC),
+        ScriptLanguage::Python => Some(python::SPEC),
+        ScriptLanguage::C => Some(c::SPEC),
+        ScriptLanguage::Cpp => Some(cpp::SPEC),
+        ScriptLanguage::CSharp => Some(csharp::SPEC),
+        ScriptLanguage::Java => Some(java::SPEC),
+        ScriptLanguage::Php => Some(php::SPEC),
         _ => None,
     }
 }
 
-struct PreparedProgram {
+pub(super) struct PreparedProgram {
     directory: TempDir,
     executable: PathBuf,
     arguments: Vec<OsString>,
@@ -502,10 +513,6 @@ struct PreparedProgram {
 }
 
 impl PreparedProgram {
-    #[allow(
-        clippy::too_many_lines,
-        reason = "all build recipes remain together so the language/toolchain matrix is auditable"
-    )]
     fn build(
         language: ScriptLanguage,
         source: &[u8],
@@ -536,6 +543,10 @@ impl PreparedProgram {
             std::fs::write(directory.path().join("rustic.hpp"), crate::cpp_sdk::HEADER)
                 .map_err(|error| runtime_io(language, error))?;
         }
+        for (name, content) in crate::external_sdk::files(language) {
+            std::fs::write(directory.path().join(name), content)
+                .map_err(|error| runtime_io(language, error))?;
+        }
         let availability = probe_language_toolchain(language);
         let executable = availability.executable.ok_or_else(|| {
             let spec = toolchain_spec(language).expect("external language has toolchain spec");
@@ -548,97 +559,15 @@ impl PreparedProgram {
             language,
         };
         match language {
-            ScriptLanguage::Python => {
-                run_checked(
-                    language,
-                    Command::new(&program.executable)
-                        .args(["-I", "-m", "py_compile"])
-                        .arg(&source_path),
-                )?;
-                program.arguments = vec![OsString::from("-I"), source_path.into_os_string()];
-            }
-            ScriptLanguage::Php => {
-                run_checked(
-                    language,
-                    Command::new(&program.executable)
-                        .arg("-l")
-                        .arg(&source_path),
-                )?;
-                program.arguments = vec![source_path.into_os_string()];
-            }
-            ScriptLanguage::C | ScriptLanguage::Cpp => {
-                let output = program.directory.path().join(if cfg!(windows) {
-                    "behavior.exe"
-                } else {
-                    "behavior"
-                });
-                let compiler_name = program
-                    .executable
-                    .file_stem()
-                    .and_then(OsStr::to_str)
-                    .unwrap_or_default()
-                    .to_ascii_lowercase();
-                let mut command = Command::new(&program.executable);
-                if compiler_name == "cl" {
-                    command
-                        .args(["/nologo", "/W4"])
-                        .arg(&source_path)
-                        .arg(format!("/Fe:{}", output.display()));
-                } else {
-                    command.args(["-Wall", "-Wextra", "-Werror"]);
-                    command.arg(if language == ScriptLanguage::Cpp {
-                        "-std=c++20"
-                    } else {
-                        "-std=c17"
-                    });
-                    command.arg(&source_path).arg("-o").arg(&output);
-                }
-                run_checked(language, &mut command)?;
-                program.executable = output;
-            }
+            ScriptLanguage::Python => python::prepare(&mut program, &source_path)?,
+            ScriptLanguage::Php => php::prepare(&mut program, &source_path)?,
+            ScriptLanguage::C => c::prepare(&mut program, &source_path)?,
+            ScriptLanguage::Cpp => cpp::prepare(&mut program, &source_path)?,
             ScriptLanguage::CSharp => {
-                let version = availability.version.unwrap_or_else(|| "10.0".into());
-                let major = version.split('.').next().unwrap_or("10");
-                let project = program.directory.path().join("RusticBehavior.csproj");
-                std::fs::write(
-                    &project,
-                    format!("<Project Sdk=\"Microsoft.NET.Sdk\"><PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net{major}.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable></PropertyGroup></Project>"),
-                ).map_err(|error| runtime_io(language, error))?;
-                run_checked(
-                    language,
-                    Command::new(&program.executable)
-                        .args(["build", "-c", "Release", "--nologo"])
-                        .arg(&project),
-                )?;
-                let dll = program
-                    .directory
-                    .path()
-                    .join(format!("bin/Release/net{major}.0/RusticBehavior.dll"));
-                program.arguments = vec![dll.into_os_string()];
+                csharp::prepare(&mut program, &source_path, availability.version)?;
             }
-            ScriptLanguage::Java => {
-                let javac = find_executable(&["javac"]).ok_or(
-                    ExternalRuntimeError::ToolchainUnavailable("Java", "OpenJDK javac"),
-                )?;
-                let classes = program.directory.path().join("classes");
-                std::fs::create_dir(&classes).map_err(|error| runtime_io(language, error))?;
-                run_checked(
-                    language,
-                    Command::new(javac)
-                        .arg("-d")
-                        .arg(&classes)
-                        .arg(&source_path),
-                )?;
-                program.arguments = vec![
-                    OsString::from("-cp"),
-                    classes.into_os_string(),
-                    OsString::from("RusticBehavior"),
-                ];
-            }
-            ScriptLanguage::Luau => {
-                validate_with_stdin(language, source, &["--compile=-", "-"])?;
-                program.arguments = vec![source_path.into_os_string()];
-            }
+            ScriptLanguage::Java => java::prepare(&mut program, &source_path)?,
+            ScriptLanguage::Luau => luau::prepare(&mut program, &source_path, source)?,
             _ => {
                 return Err(ExternalRuntimeError::Runtime(
                     language.display_name(),
@@ -723,6 +652,7 @@ impl ProcessSession {
         &mut self,
         language: ScriptLanguage,
         request: &Invocation,
+        host: Option<&Arc<Mutex<Box<dyn GameplayHost>>>>,
     ) -> Result<InvocationResponse, ExternalRuntimeError> {
         let bytes = serde_json::to_vec(request).map_err(|error| {
             ExternalRuntimeError::Runtime(language.display_name(), error.to_string())
@@ -732,39 +662,77 @@ impl ProcessSession {
             .and_then(|()| self.stdin.write_all(b"\n"))
             .and_then(|()| self.stdin.flush())
             .map_err(|error| runtime_io(language, error))?;
-        let stdout_bytes = match self.responses.recv_timeout(CALLBACK_TIMEOUT) {
-            Ok(Ok(bytes)) => bytes,
-            Ok(Err(message)) => {
-                return Err(ExternalRuntimeError::Runtime(
-                    language.display_name(),
-                    message,
-                ));
+        let deadline = std::time::Instant::now() + CALLBACK_TIMEOUT;
+        for _ in 0..4096 {
+            let stdout_bytes = match self
+                .responses
+                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
+            {
+                Ok(Ok(bytes)) => bytes,
+                Ok(Err(message)) => {
+                    return Err(ExternalRuntimeError::Runtime(
+                        language.display_name(),
+                        message,
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    let _ = self.child.kill();
+                    let _ = self.child.wait();
+                    return Err(ExternalRuntimeError::Timeout(
+                        language.display_name(),
+                        CALLBACK_TIMEOUT,
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let detail = self
+                        .stderr
+                        .lock()
+                        .map_or_else(|_| "host exited".into(), |bytes| diagnostic_text(&bytes));
+                    return Err(ExternalRuntimeError::Runtime(
+                        language.display_name(),
+                        detail,
+                    ));
+                }
+            };
+            let mut message: Value = serde_json::from_slice(&stdout_bytes).map_err(|e| {
+                ExternalRuntimeError::Runtime(language.display_name(), e.to_string())
+            })?;
+            crate::lua::normalize_query(&mut message);
+            if let Some(query) = message.get("query") {
+                let result = (|| -> Result<Value, String> {
+                    let host = host.ok_or("query host unavailable")?;
+                    let mut host = host.lock().map_err(|_| "gameplay lock poisoned")?;
+                    if let Some(commands) = message.get("commands") {
+                        let commands: Vec<ExternalCommand> =
+                            serde_json::from_value(commands.clone()).map_err(|e| e.to_string())?;
+                        for command in commands {
+                            apply_command(language, host.as_mut(), command)
+                                .map_err(|e| e.to_string())?;
+                        }
+                    }
+                    host.gameplay_query(query.clone())
+                })();
+                let response = match result {
+                    Ok(value) => json!({"result":value}),
+                    Err(error) => json!({"error":error}),
+                };
+                let bytes = serde_json::to_vec(&response)
+                    .map_err(|e| runtime_io(language, std::io::Error::other(e)))?;
+                self.stdin
+                    .write_all(&bytes)
+                    .and_then(|()| self.stdin.write_all(b"\n"))
+                    .and_then(|()| self.stdin.flush())
+                    .map_err(|e| runtime_io(language, e))?;
+                continue;
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = self.child.kill();
-                let _ = self.child.wait();
-                return Err(ExternalRuntimeError::Timeout(
-                    language.display_name(),
-                    CALLBACK_TIMEOUT,
-                ));
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let detail = self
-                    .stderr
-                    .lock()
-                    .map_or_else(|_| "host exited".into(), |bytes| diagnostic_text(&bytes));
-                return Err(ExternalRuntimeError::Runtime(
-                    language.display_name(),
-                    detail,
-                ));
-            }
-        };
-        serde_json::from_slice(&stdout_bytes).map_err(|error| {
-            ExternalRuntimeError::Runtime(
-                language.display_name(),
-                format!("invalid response JSON: {error}"),
-            )
-        })
+            return serde_json::from_value(message).map_err(|e| {
+                ExternalRuntimeError::Runtime(language.display_name(), e.to_string())
+            });
+        }
+        Err(ExternalRuntimeError::Runtime(
+            language.display_name(),
+            "query budget exceeded".into(),
+        ))
     }
 }
 
@@ -823,6 +791,9 @@ fn read_response_lines(
 
 #[derive(Serialize)]
 struct Invocation {
+    gameplay_connections: Vec<String>,
+    gameplay_states: Vec<engine_core::gameplay::OperationState>,
+    gameplay_callbacks: Vec<engine_core::gameplay::Delivery>,
     format_version: u32,
     callback: String,
     delta: Option<f64>,
@@ -844,11 +815,16 @@ struct InvocationResponse {
     format_version: u32,
     #[serde(default)]
     commands: Vec<ExternalCommand>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 enum ExternalCommand {
+    Gameplay {
+        request: Box<engine_core::gameplay::Request>,
+    },
     SetCurrentCamera {
         source: String,
     },
@@ -860,6 +836,8 @@ enum ExternalCommand {
         value: Value,
     },
     EditAttribute {
+        #[serde(default)]
+        source: Option<String>,
         name: String,
         value: Value,
     },
@@ -886,6 +864,7 @@ fn apply_command(
     command: ExternalCommand,
 ) -> Result<(), ExternalRuntimeError> {
     let result = match command {
+        ExternalCommand::Gameplay { request } => host.gameplay_request(*request),
         ExternalCommand::SetTranslation { value } => host.set_translation(value),
         ExternalCommand::SetProperty { name, value } => host.property(&name).map_or_else(
             || Err(format!("property `{name}` is not declared")),
@@ -894,17 +873,27 @@ fn apply_command(
                     .and_then(|converted| host.set_property(&name, converted))
             },
         ),
-        ExternalCommand::EditAttribute { name, value } => {
-            host.attribute(&name).and_then(|current| {
+        ExternalCommand::EditAttribute {
+            source,
+            name,
+            value,
+        } => source
+            .as_ref()
+            .map_or_else(
+                || host.attribute(&name),
+                |source| host.object_attribute(source, &name),
+            )
+            .and_then(|current| {
                 current.map_or_else(
                     || Err(format!("attribute `{name}` is unavailable")),
                     |current| {
-                        json_to_engine(value, &current)
-                            .and_then(|converted| host.edit_attribute(&name, converted))
+                        json_to_engine(value, &current).and_then(|converted| match &source {
+                            Some(source) => host.edit_object_attribute(source, &name, converted),
+                            None => host.edit_attribute(&name, converted),
+                        })
                     },
                 )
-            })
-        }
+            }),
         ExternalCommand::Log { level, message } => host.log(&level, &message),
         ExternalCommand::SetEnabled { enabled } => {
             host.set_enabled(enabled);
@@ -1007,47 +996,6 @@ pub(crate) fn extract_inline_scripts(text: &str) -> Result<String, ExternalRunti
         remaining = &remaining[after_open + close + "</script>".len()..];
     }
     Ok(output)
-}
-
-fn validate_with_stdin(
-    language: ScriptLanguage,
-    source: &[u8],
-    arguments: &[&str],
-) -> Result<(), ExternalRuntimeError> {
-    let availability = probe_language_toolchain(language);
-    let executable = availability.executable.ok_or_else(|| {
-        let spec = toolchain_spec(language).expect("external language has toolchain spec");
-        ExternalRuntimeError::ToolchainUnavailable(language.display_name(), spec.install_hint)
-    })?;
-    let mut child = Command::new(executable)
-        .args(arguments)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| runtime_io(language, error))?;
-    child
-        .stdin
-        .take()
-        .ok_or_else(|| {
-            ExternalRuntimeError::Build(
-                language.display_name(),
-                "compiler stdin unavailable".into(),
-            )
-        })?
-        .write_all(source)
-        .map_err(|error| runtime_io(language, error))?;
-    let output = child
-        .wait_with_output()
-        .map_err(|error| runtime_io(language, error))?;
-    if output.status.success() {
-        Ok(())
-    } else {
-        Err(ExternalRuntimeError::Build(
-            language.display_name(),
-            diagnostic_text(&output.stderr),
-        ))
-    }
 }
 
 fn run_checked(
@@ -1162,6 +1110,10 @@ fn json_to_engine(value: Value, current: &EngineValue) -> Result<EngineValue, St
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
     use crate::ActionState;
@@ -1214,6 +1166,32 @@ mod tests {
         ) -> Result<EntityId, String> {
             Ok(EntityId::new())
         }
+        fn object_attribute(
+            &self,
+            source: &str,
+            name: &str,
+        ) -> Result<Option<EngineValue>, String> {
+            if source != "rustic.game.Demo.Player" {
+                return Err("target missing".into());
+            }
+            Ok((name == "Position").then_some(EngineValue::Vec3(self.translation)))
+        }
+        fn edit_object_attribute(
+            &mut self,
+            source: &str,
+            name: &str,
+            value: EngineValue,
+        ) -> Result<(), String> {
+            if source != "rustic.game.Demo.Player" || name != "Position" {
+                return Err("target missing".into());
+            }
+            if let EngineValue::Vec3(value) = value {
+                self.translation = value;
+                Ok(())
+            } else {
+                Err("type mismatch".into())
+            }
+        }
         fn input_action(&self, _name: &str) -> ActionState {
             ActionState::default()
         }
@@ -1230,6 +1208,197 @@ mod tests {
             Err("not declared".into())
         }
         fn set_enabled(&mut self, _enabled: bool) {}
+    }
+
+    #[test]
+    fn builtin_sdks_dispatch_persistent_callbacks_without_user_protocol_code() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Python, "test.py", br#"from rustic import rustic, run
+count = 0
+def on_start():
+    rustic.log('info', 'quote " slash \\ snow unicode')
+def on_enable():
+    rustic.set_translation(10, 0, 0)
+def on_disable():
+    rustic.set_translation(20, 0, 0)
+def fixed_update(dt):
+    global count
+    count += 1
+    x,y,z = rustic.get_translation()
+    rustic.set_translation(x + count, y, z)
+    rustic.log('info', str(count))
+run(globals())
+"#),
+            (ScriptLanguage::CSharp, "test.cs", br#"using static Rustic;
+int count=0;
+Run((cb,dt)=>{
+    if(cb=="on_start") rustic.log("info", "quote \" slash \\ snow unicode");
+    if(cb=="on_enable") rustic.set_translation(10,0,0);
+    if(cb=="on_disable") rustic.set_translation(20,0,0);
+    if(cb=="fixed_update"){var p=rustic.get_translation();rustic.set_translation(p[0]+ ++count,p[1],p[2]);rustic.log("info",count.ToString());}
+});"#),
+            (ScriptLanguage::Java, "test.java", br#"class RusticBehavior extends Rustic {
+public static void main(String[] args)throws Exception{int[] count={0};run((cb,dt)->{
+if(cb.equals("on_start"))rustic.log("info","quote \" slash \\ snow unicode");
+if(cb.equals("on_enable"))rustic.set_translation(10,0,0);
+if(cb.equals("on_disable"))rustic.set_translation(20,0,0);
+if(cb.equals("fixed_update")){double[] p=rustic.get_translation();rustic.set_translation(p[0]+ ++count[0],p[1],p[2]);rustic.log("info","tick");}
+});}}"#),
+            (ScriptLanguage::C, "test.c", br#"#include "rustic.h"
+static int count=0;
+void start(void){rustic.log("info","quote \" slash \\ snow");}
+void enable(void){rustic.set_translation(10,0,0);}
+void disable(void){rustic.set_translation(20,0,0);}
+void fixed(double dt){(void)dt;RusticVector3 p=rustic.get_translation();rustic.set_translation(p.x+ ++count,p.y,p.z);rustic.log("info","tick");}
+int main(void){return rustic_run((RusticBehavior){.on_start=start,.on_enable=enable,.on_disable=disable,.fixed_update=fixed});}"#),
+            (ScriptLanguage::Cpp, "test.cpp", br#"#include "rustic.hpp"
+int count=0;
+void start(){rustic.log("info","quote \" slash \\ snow");}
+void enable(){rustic.set_translation(10,0,0);}
+void disable(){rustic.set_translation(20,0,0);}
+void fixed(double dt){(void)dt;auto p=rustic.get_translation();rustic.set_translation(p.x+ ++count,p.y,p.z);rustic.log("info","tick");}
+int main(){return rustic_run(RusticBehavior{.on_start=start,.on_enable=enable,.on_disable=disable,.fixed_update=fixed});}"#),
+            (ScriptLanguage::Php, "test.php", br#"<?php
+require __DIR__.'/rustic.php';
+$count=0;
+rustic_run([
+'on_start'=>function()use($rustic){$rustic->log('info','quote " slash \\ snow unicode');},
+'on_enable'=>function()use($rustic){$rustic->set_translation(10,0,0);},
+'on_disable'=>function()use($rustic){$rustic->set_translation(20,0,0);},
+'fixed_update'=>function($dt)use($rustic,&$count){[$x,$y,$z]=$rustic->get_translation();$rustic->set_translation($x+ ++$count,$y,$z);$rustic->log('info','tick');}
+]);"#),
+            (ScriptLanguage::Luau, "test.luau", br#"local count: number = 0
+return {
+on_start=function() rustic.log('info','quote " slash \\ snow unicode') end,
+on_enable=function() rustic.set_translation(10,0,0) end,
+on_disable=function() rustic.set_translation(20,0,0) end,
+fixed_update=function(dt) count+=1;local x,y,z=rustic.get_translation();rustic.set_translation(x+count,y,z);rustic.log('info','tick') end,
+}"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !probe_language_toolchain(*language).available {
+                eprintln!("skipped {}: unavailable", language.display_name());
+                continue;
+            }
+            let mut behavior = ExternalBehavior::load(
+                ScriptId::new(),
+                *language,
+                source,
+                name,
+                Box::new(Host {
+                    entity: EntityId::new(),
+                    translation: [0.0; 3],
+                }),
+            )
+            .unwrap_or_else(|e| panic!("{} build: {e}", language.display_name()));
+            behavior.on_create().unwrap();
+            behavior.on_start().unwrap();
+            behavior.on_enable().unwrap();
+            behavior.fixed_update(0.5).unwrap();
+            behavior.fixed_update(0.5).unwrap();
+            assert_eq!(
+                behavior.host().lock().unwrap().translation(),
+                [13.0, 0.0, 0.0],
+                "{}",
+                language.display_name()
+            );
+            behavior.on_disable().unwrap();
+            assert_eq!(
+                behavior.host().lock().unwrap().translation(),
+                [20.0, 0.0, 0.0]
+            );
+            behavior.on_destroy().unwrap();
+            behavior.on_stop().unwrap();
+        }
+    }
+
+    #[test]
+    fn targeted_attribute_command_is_shared_by_all_external_languages() {
+        for language in [
+            ScriptLanguage::Luau,
+            ScriptLanguage::Python,
+            ScriptLanguage::C,
+            ScriptLanguage::Cpp,
+            ScriptLanguage::CSharp,
+            ScriptLanguage::Java,
+            ScriptLanguage::Php,
+        ] {
+            let mut host = Host {
+                entity: EntityId::new(),
+                translation: [0.; 3],
+            };
+            let command=serde_json::from_str(r#"{"op":"edit_attribute","source":"rustic.game.Demo.Player","name":"Position","value":[1,2,3]}"#).unwrap();
+            apply_command(language, &mut host, command).unwrap();
+            assert_eq!(host.translation, [1., 2., 3.]);
+            for bad in [
+                r#"{"op":"edit_attribute","source":"Missing","name":"Position","value":[4,5,6]}"#,
+                r#"{"op":"edit_attribute","source":"rustic.game.Demo.Player","name":"Position","value":true}"#,
+            ] {
+                assert!(
+                    apply_command(language, &mut host, serde_json::from_str(bad).unwrap()).is_err()
+                );
+                assert_eq!(host.translation, [1., 2., 3.]);
+            }
+        }
+    }
+
+    #[test]
+    fn native_sdks_preserve_integer_precision_and_escaped_strings() {
+        for (language, source) in [
+            (ScriptLanguage::C, br#"#include "rustic.h"
+void start(void){rustic.set_property("count",rustic.get_property("count"));rustic.log("info",rustic.get_attribute("Name").string);}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#.as_slice()),
+            (ScriptLanguage::Cpp, br#"#include "rustic.hpp"
+void start(){rustic.set_property("count",rustic.get_property("count"));rustic.log("info",rustic.GetAttribute("Name").string());}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#.as_slice()),
+        ] {
+            if !probe_language_toolchain(language).available { continue; }
+            let program=PreparedProgram::build(language, source, "native").unwrap();
+            let mut session=ProcessSession::start(&program).unwrap();
+            let count=9_007_199_254_740_993_i64;
+            let name = "Unicode \u{96ea} \u{1} quote \" slash \\ newline\n";
+            let request=Invocation {gameplay_connections:vec![],gameplay_states:vec![],gameplay_callbacks:vec![],format_version:1,callback:"on_start".into(),delta:None,
+                entity_id:EntityId::new().to_string(),delta_time:0.5,fixed_delta_time:0.5,
+                translation:[0.0;3],properties:Map::from_iter([("count".into(), json!(count))]),
+                attributes:Map::from_iter([("Name".into(), json!(name))]),
+                actions:Map::new(),scene_paths:Map::new(),keys:Map::new(),key_events:vec![],any_key_pressed:false};
+            let response=session.invoke(language,&request,None).unwrap();
+            assert_eq!(response.commands.len(),2);
+            assert!(matches!(&response.commands[0],ExternalCommand::SetProperty{value,..} if value.as_i64()==Some(count)));
+            assert!(matches!(&response.commands[1],ExternalCommand::Log{message,..} if message==name));
+        }
+    }
+
+    #[test]
+    fn luau_validation_and_callback_errors_are_contained() {
+        if !probe_language_toolchain(ScriptLanguage::Luau).available {
+            return;
+        }
+        validate_external(
+            ScriptLanguage::Luau,
+            b"error('validation must not execute source')",
+            "test.luau",
+            1024,
+        )
+        .unwrap();
+        assert!(
+            validate_external(ScriptLanguage::Luau, b"return {broken=", "test.luau", 1024).is_err()
+        );
+        let mut behavior = ExternalBehavior::load(
+            ScriptId::new(),
+            ScriptLanguage::Luau,
+            b"return {on_start=function() error('expected callback error') end}",
+            "test.luau",
+            Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            }),
+        )
+        .unwrap();
+        behavior.on_create().unwrap();
+        let error = behavior.on_start().unwrap_err();
+        assert!(error.to_string().contains("expected callback error"));
+        assert!(!behavior.enabled());
     }
 
     #[test]
@@ -1425,7 +1594,7 @@ for line in sys.stdin:
         match language {
             ScriptLanguage::Python => ("behavior.py", b"import json,sys\nfor line in sys.stdin:\n print(json.dumps({'format_version':1,'commands':[]}),flush=True)\n"),
             ScriptLanguage::CSharp => ("behavior.cs", b"using System; string? line; while ((line = Console.ReadLine()) is not null) Console.WriteLine(\"{\\\"format_version\\\":1,\\\"commands\\\":[]}\");"),
-            ScriptLanguage::C => ("behavior.c", b"#include <stdio.h>\nint main(void){char line[1048577];while(fgets(line,sizeof line,stdin)){puts(\"{\\\"format_version\\\":1,\\\"commands\\\":[]}\");fflush(stdout);}return 0;}\n"),
+            ScriptLanguage::C => ("behavior.c", b"#include <stdio.h>\nint main(void){static char line[1048577];while(fgets(line,sizeof line,stdin)){puts(\"{\\\"format_version\\\":1,\\\"commands\\\":[]}\");fflush(stdout);}return 0;}\n"),
             ScriptLanguage::Cpp => ("behavior.cpp", br#"#include "rustic.hpp"
 void start(){rustic.log("info", "C++ SDK started");}
 void fixed(double dt){auto p=rustic.get_translation();rustic.set_translation(p.x+dt,p.y,p.z);auto key=rustic.key("KeyW");(void)key;auto found=Game.scene.Find("Room.Table");(void)found;rustic.EditAttribute("Position",RusticValue::Array{1.0,2.0,3.0});}

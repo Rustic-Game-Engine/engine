@@ -37,7 +37,7 @@ gltf = { version = "1.4.1", default-features = false, features = ["names", "util
 hound = "3.5.1"
 image = { version = "0.25.8", default-features = false, features = ["hdr", "jpeg", "png", "tga"] }
 interprocess = "2.4.0"
-mlua = { version = "0.11.4", features = ["lua54", "vendored", "send"] }
+mlua = { version = "0.11.4", features = ["lua54", "vendored", "send", "serialize"] }
 lewton = "0.10.2"
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 num-traits = "0.2"
@@ -54,6 +54,7 @@ sha2 = "0.10.9"
 skrifa = { version = "0.44.0", default-features = false, features = ["std"] }
 tempfile = "3.27.0"
 thiserror = "2.0.20"
+toml_edit = "0.25.13"
 time = { version = "0.3.55", features = ["formatting", "local-offset", "macros"] }
 tobj = "4.0.3"
 uuid = { version = "1.26.0", features = ["serde", "v4"] }

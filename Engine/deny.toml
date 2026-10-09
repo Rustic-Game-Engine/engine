@@ -4,7 +4,12 @@ all-features = true
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# SVG loaders in egui_extras/resvg still require these crates. These are
+# maintenance notices with no fixed release, not vulnerability exemptions.
+ignore = [
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz is transitive via resvg/usvg SVG text rendering; upstream has no compatible maintained release yet" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser is transitive via usvg/fontdb; upstream has no compatible maintained release yet" },
+]
 
 [licenses]
 version = 2

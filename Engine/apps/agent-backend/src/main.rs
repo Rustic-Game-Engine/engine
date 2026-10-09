@@ -8,19 +8,25 @@ const MAX_READ_BYTES: u64 = 2 * 1024 * 1024;
 
 fn main() {
     let mut arguments = std::env::args_os().skip(1);
-    let project_root = match (arguments.next(), arguments.next()) {
+    let first = arguments.next();
+    if first.as_deref() == Some(std::ffi::OsStr::new("--install-user-integrations")) {
+        if let Err(error) = engine_scripting::install_user_agent_integrations() {
+            eprintln!("Could not install Rustic agent integrations: {error}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    let project_root = match (first, arguments.next()) {
         (Some(flag), Some(root)) if flag == "--project" => PathBuf::from(root),
+        (None, None) => std::env::current_dir().unwrap_or_default(),
         _ => {
-            eprintln!("Usage: rustic-agent-backend --project <project-folder>");
+            eprintln!("Usage: rustic-agent-backend [--project <project-folder>]");
             std::process::exit(2);
         }
     };
-    let root = match project_root.canonicalize() {
-        Ok(root) if Project::open(&root).is_ok() => root,
-        _ => {
-            eprintln!("The supplied folder is not a readable Rustic project");
-            std::process::exit(2);
-        }
+    let Some(root) = find_project_root(&project_root) else {
+        eprintln!("The supplied folder is not a readable Rustic project");
+        std::process::exit(2);
     };
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
@@ -33,6 +39,14 @@ fn main() {
             let _ = stdout.flush();
         }
     }
+}
+
+fn find_project_root(start: &Path) -> Option<PathBuf> {
+    let canonical = start.canonicalize().ok()?;
+    canonical
+        .ancestors()
+        .find(|path| Project::open(path).is_ok())
+        .map(Path::to_path_buf)
 }
 
 fn handle(root: &Path, request: &Value) -> Option<Value> {
@@ -78,6 +92,9 @@ fn handle(root: &Path, request: &Value) -> Option<Value> {
 fn tools() -> Value {
     json!([
         {"name":"workspace_info","description":"Return the canonical Rustic project root, project metadata, and repository guidance.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"list_agent_files","description":"List agent information in Rustic editor app data. Scope defaults to project; user selects shared integrations.","inputSchema":{"type":"object","properties":{"scope":{"type":"string","enum":["project","user"]}}}},
+        {"name":"read_agent_file","description":"Read a UTF-8 agent file relative to the app-data agent directory (maximum 2 MiB). Scope defaults to project.","inputSchema":{"type":"object","required":["path"],"properties":{"path":{"type":"string"},"scope":{"type":"string","enum":["project","user"]}}}},
+        {"name":"write_agent_file","description":"Atomically edit app-data agent information; edits persist across editor restarts. Scope defaults to project.","inputSchema":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"scope":{"type":"string","enum":["project","user"]}}}},
         {"name":"list_files","description":"List project files below an optional relative directory.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},
         {"name":"read_file","description":"Read a UTF-8 project file (maximum 2 MiB).","inputSchema":{"type":"object","required":["path"],"properties":{"path":{"type":"string"}}}},
         {"name":"write_file","description":"Write a UTF-8 file atomically inside the project. Parent directories are created.","inputSchema":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}},
@@ -90,9 +107,44 @@ fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
     match name {
         "workspace_info" => {
             let project = Project::open(root).map_err(|error| error.to_string())?;
+            let agent_root = ensure_agent_directory(root)?;
             Ok(
-                json!({"project_root":root,"name":project.metadata().name,"project_file":root.join("project.engine"),"instructions":["Make game-content changes inside this project root.","Do not edit the engine source repository unless the user explicitly requests engine changes.","Read AGENTS.md or CLAUDE.md before editing."]}),
+                json!({"project_root":root,"name":project.metadata().name,"project_file":root.join("project.engine"),"agent_directory":agent_root,"instructions":["Make game-content changes inside this project root.","Do not edit the engine source repository unless the user explicitly requests engine changes.","Use read_agent_file to read AGENTS.md or CLAUDE.md before editing; use list_agent_files and write_agent_file to inspect or edit agent information in editor app data."]}),
             )
+        }
+        "list_agent_files" | "read_agent_file" | "write_agent_file" => {
+            let agent_root = match arg(args, "scope").unwrap_or("project") {
+                "project" => ensure_agent_directory(root)?,
+                "user" => {
+                    let directory = engine_scripting::agent_data_directory()
+                        .map_err(|error| error.to_string())?
+                        .join("user");
+                    fs::create_dir_all(&directory).map_err(|error| error.to_string())?;
+                    directory
+                        .canonicalize()
+                        .map_err(|error| error.to_string())?
+                }
+                _ => return Err("scope must be project or user".into()),
+            };
+            let mapped = match name {
+                "list_agent_files" => "list_files",
+                "read_agent_file" => "read_file",
+                _ => "write_file",
+            };
+            if mapped == "write_file" {
+                let path = safe_path(&agent_root, required_arg(args, "path")?, true)?;
+                let content = required_arg(args, "content")?;
+                if content.len() as u64 > MAX_READ_BYTES {
+                    return Err("content exceeds the 2 MiB write limit".into());
+                }
+                engine_scripting::write_agent_information(&path, content)
+                    .map_err(|error| error.to_string())?;
+                Ok(json!({"written":relative(&agent_root, &path)}))
+            } else if mapped == "list_files" {
+                call_tool(&agent_root, mapped, &json!({}))
+            } else {
+                call_tool(&agent_root, mapped, args)
+            }
         }
         "list_files" => {
             let base = safe_path(root, arg(args, "path").unwrap_or("."), true)?;
@@ -139,6 +191,17 @@ fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
     }
 }
 
+fn ensure_agent_directory(root: &Path) -> Result<PathBuf, String> {
+    let directory =
+        engine_scripting::project_agent_directory(root).map_err(|error| error.to_string())?;
+    if !directory.is_dir() {
+        let project = Project::open(root).map_err(|error| error.to_string())?;
+        engine_scripting::generate_programming_workspace(root, &project.metadata().name)
+            .map_err(|error| error.to_string())?;
+    }
+    directory.canonicalize().map_err(|error| error.to_string())
+}
+
 fn scene_summary(root: &Path, value: &str) -> Result<Value, String> {
     let path = safe_path(root, value, false)?;
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
@@ -154,6 +217,10 @@ fn scene_summary(root: &Path, value: &str) -> Result<Value, String> {
 }
 
 fn safe_path(root: &Path, relative_path: &str, allow_missing: bool) -> Result<PathBuf, String> {
+    // Unix would otherwise treat Windows drive paths as local filenames.
+    if relative_path.contains('\\') || relative_path.contains(':') {
+        return Err("path must use relative slash-separated components".into());
+    }
     let relative_path = Path::new(relative_path);
     if relative_path.is_absolute()
         || relative_path.components().any(|part| {
@@ -284,6 +351,66 @@ fn required_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn agent_tools_read_write_list_and_reject_escapes() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temp.path().join("game"),
+            "Agent test",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let root = project.root().canonicalize().unwrap();
+        let info = call_tool(&root, "workspace_info", &json!({})).unwrap();
+        assert!(info["agent_directory"].as_str().is_some());
+        call_tool(
+            &root,
+            "write_agent_file",
+            &json!({"path":"notes/behavior.md","content":"first"}),
+        )
+        .unwrap();
+        call_tool(
+            &root,
+            "write_agent_file",
+            &json!({"path":"notes/behavior.md","content":"replaced"}),
+        )
+        .unwrap();
+        let read = call_tool(
+            &root,
+            "read_agent_file",
+            &json!({"path":"notes/behavior.md"}),
+        )
+        .unwrap();
+        assert_eq!(read["content"], "replaced");
+        let listed = call_tool(&root, "list_agent_files", &json!({})).unwrap();
+        assert!(
+            listed["files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|value| value.as_str().unwrap().ends_with("behavior.md"))
+        );
+        assert!(!root.join("notes/behavior.md").exists());
+        for path in [
+            "../other/AGENTS.md",
+            "C:/outside.md",
+            "C:\\outside.md",
+            "..\\other\\AGENTS.md",
+            "//server/share/outside.md",
+            ".git/config",
+        ] {
+            assert!(
+                call_tool(
+                    &root,
+                    "write_agent_file",
+                    &json!({"path":path,"content":"bad"})
+                )
+                .is_err(),
+                "accepted {path}"
+            );
+        }
+        assert!(call_tool(&root, "list_agent_files", &json!({"scope":"other"})).is_err());
+    }
     #[test]
     fn rejects_parent_traversal() {
         let temp = tempfile::tempdir().unwrap();

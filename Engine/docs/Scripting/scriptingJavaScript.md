@@ -53,9 +53,15 @@ const health = rustic.get_property("health");
 rustic.set_property("health", 90);
 const color = rustic.GetAttribute("Color"); // [red, green, blue]
 rustic.EditAttribute("Anchored", true);
-rustic.log("warn", "message");
+print("loaded", id);
+warn("message");
+console.debug("details");
 rustic.set_enabled(false);
 ```
+
+`print(...)`, `warn(...)`, and `console.log/info/warn/error/debug(...)` write directly
+to the Rustic console. `rustic.log(level, message)` remains available when code needs
+to select a level dynamically.
 
 Lower-case `get_attribute`/`edit_attribute` are equivalent. Set `Color`, `Position`,
 and `Size` with three-number arrays, and `Parent` with an entity ID string or `null`.
@@ -74,12 +80,9 @@ instance.add("Cube");
 instance.clone("assets/models/chair.obj", camera); // optional parent ID
 Game.setCurrentCamera(camera);
 
-const action = rustic.input("Jump");
-const key = rustic.key("Space");
-for (const event of rustic.key_events()) {
-  rustic.log("debug", `${event.key}: ${event.state}`);
+if (rustic.key("KeyW").held) {
+  rustic.log("debug", "forward key is held");
 }
-if (rustic.any_key_pressed()) { /* one or more press edges */ }
 ```
 
 `Find` and direct scene properties return a stable entity ID or `undefined`.
@@ -88,20 +91,39 @@ and the external SDKs, whose `List` returns IDs. An instance source can be a sta
 ID, scene path, model path, or built-in object name. Instance calls queue creation and
 do not return the new ID. A parent, when supplied, must be a stable ID.
 
-Input states expose `pressed`, `released`, `held`, and `axis`; key events also expose
-`repeat`. Use physical names such as `KeyW`, `Space`, `ArrowLeft`, and `Escape`.
+The editor's embedded Play viewport currently forwards held WASD, arrow, and Shift
+keys. Use `rustic.key(name).held` with `KeyW`, `KeyA`, `KeyS`, `KeyD`,
+`ArrowUp`, `ArrowDown`, `ArrowLeft`, `ArrowRight`, `ShiftLeft`, or `ShiftRight`.
+The API exposes `pressed`, `released`, `key_events()`, `any_key_pressed()`, and
+named `input()` actions, but those values are not populated by the current Play
+bridge. Other key names and separate runtime windows do not forward input yet.
+For focus and setup steps, see the [Lua input guide](scriptingLua.md#input); the
+input transport and limitations are the same for JavaScript.
 
 ## Sandbox, values, and diagnostics
 
-JavaScript cannot obtain or invoke another behavior's VM object. API 1.0 does not yet
-expose script-level Engine Event `emit`/`subscribe`; cross-language coordination must
-use shared engine state.
+JavaScript cannot obtain another behavior's VM object. API 1.1 adds shared
+`Events.on`, `once`, `emit`, and object signals; see [Shared gameplay actions](gameplayActions.md).
 
 There is no DOM, `window`, Node `require`, module loader, filesystem, network,
-environment, timer, process, or editor/backend access. Script-visible state and API
+environment, native browser timers, process, or editor/backend access.
+Use the engine-owned `Timer` facade for delayed/repeating gameplay callbacks. Script-visible state and API
 objects are frozen; do not attempt to modify them. Values crossing the bridge are
 JSON-compatible representations of the shared engine types. A callback exception or
 instruction-budget failure disables that behavior, while other scripts continue.
 Generated type declarations are at
 `.rustic/generated/programming/rustic_api.d.ts`; generated files may be regenerated,
 so never put game logic there.
+
+## Target another scene object
+
+See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
+attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
+limitations.
+
+## Shared gameplay actions
+
+API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedural
+animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
+See [Shared gameplay actions](gameplayActions.md) for attachment, native call
+conventions, duration/speed options, callbacks, scene-clock controls and backend limits.

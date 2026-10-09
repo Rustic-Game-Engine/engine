@@ -99,8 +99,8 @@ blocking the editor/render thread.
 - Implement `.rmeta`, importer/version contracts, content hashes, dependency graph,
   SQLite cache index, derived-data cache, async handles, placeholder/error assets, and
   file-watch debounce.
-- First importers: glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/OGG, and TTF/OTF. Add EXR and
-  FBX after their isolated decoder workers and corpus tests are ready.
+- First importers: glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/OGG, and TTF/OTF. FBX geometry, skeletons and named animation takes now use the bounded ufbx importer;
+  EXR remains deferred.
 - Implement textures, static meshes, basic PBR materials, asset moves, reimport,
   duplicate-ID quarantine, and missing-reference reports.
 
@@ -177,6 +177,9 @@ loop is timed out/restarted without editor failure; no project-language setting 
 - Implement action-mapped keyboard/mouse/gamepad input.
 - Implement initial Rapier rigid/static/kinematic bodies, colliders, triggers, layers,
   raycasts, fixed-step synchronization, and debug draw behind `physics-api`.
+  Basic Play gravity and enclosing-box primitive collision are already implemented
+  in `engine-play`; see `PHYSICS.md`. Full rigid-body rotation, triggers, queries,
+  collision callbacks, and imported-mesh physics remain future work.
 - Implement WAV/OGG 2D/3D playback, source/listener, attenuation, loop, bus, volume,
   pitch, and streaming music behind `audio-api`.
 - Implement native runtime labels, buttons, images, panels, text input, basic flex/grid
