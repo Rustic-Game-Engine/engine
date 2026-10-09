@@ -37,6 +37,9 @@ for scripting, and read the [architecture](Engine/docs/ARCHITECTURE.md) and
 
 ## Contribution rules
 
+See [pull request checks and review automation](.github/CI.md) for CI requirements
+and troubleshooting.
+
 Follow the repository's [`AGENTS.md`](AGENTS.md), the engine-specific
 [`Engine/AGENTS.md`](Engine/AGENTS.md), and
 [`Engine/CONTRIBUTING.md`](Engine/CONTRIBUTING.md).
