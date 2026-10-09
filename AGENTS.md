@@ -34,4 +34,4 @@ Before reporting the task complete, apply at least one change-type label and eve
 
 For example, label an engine feature with `type:feature` and `area:engine`; add `type:docs` when its documentation changes, and `area:website` if website files also change. A root-level instructions-only change uses `type:docs` and needs no area label.
 
-Use `gh pr create` / `gh pr edit --add-label`, or equivalent GitHub tools. The `Sync PR labels` workflow creates missing labels when its definition is pushed and can also be run manually from Actions. If authentication or permissions prevent pushing, opening the PR, or labeling it, report the blocker and the remaining step explicitly.
+Use `gh pr create` / `gh pr edit --add-label`, or equivalent GitHub tools. If authentication or permissions prevent pushing, opening the PR, or labeling it, report the blocker and the remaining step explicitly.
