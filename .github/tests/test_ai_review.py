@@ -58,9 +58,29 @@ class ReviewTests(unittest.TestCase):
     @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
     @patch.object(review, "git")
     def test_oversized_diff_is_never_silently_truncated(self, git):
-        git.side_effect = [b"", b"a" * 40, b"x" * (review.MAX_DIFF_BYTES + 1)]
+        oversized = b"x" * (review.MAX_DIFF_BYTES + 1)
+        git.side_effect = [b"", b"a" * 40, oversized, oversized]
         with self.assertRaisesRegex(RuntimeError, "no partial review"):
             review.collect_diff("a" * 40, "b" * 40, True)
+
+    @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
+    @patch.object(review, "git")
+    def test_oversized_context_is_compacted_without_omitting_changed_files(self, git):
+        compact = b"diff --git a/file.rs b/file.rs\n-old code\n+new code\n"
+        git.side_effect = [
+            b"", b"c" * 40, b"x" * (review.MAX_DIFF_BYTES + 1), compact,
+            b"1\t1\tfile.rs\0", b"file.rs\0",
+        ]
+        diff, names = review.collect_diff("a" * 40, "b" * 40, True)
+        self.assertEqual((diff, names), (compact.decode(), {"file.rs"}))
+        expanded, fallback = git.call_args_list[2:4]
+        self.assertIn("--unified=30", expanded.args)
+        self.assertIn("--unified=3", fallback.args)
+        self.assertEqual(
+            [arg for arg in expanded.args if not arg.startswith("--unified=")],
+            [arg for arg in fallback.args if not arg.startswith("--unified=")],
+        )
+        self.assertEqual(expanded.kwargs, fallback.kwargs)
 
     @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
     @patch.object(review, "git")
