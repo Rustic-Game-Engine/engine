@@ -107,7 +107,7 @@ pub struct ScriptApiVersion {
 }
 
 impl ScriptApiVersion {
-    pub const CURRENT: Self = Self { major: 1, minor: 0 };
+    pub const CURRENT: Self = Self { major: 1, minor: 1 };
 
     pub const fn accepts(self, requested: Self) -> bool {
         requested.major == self.major && requested.minor <= self.minor

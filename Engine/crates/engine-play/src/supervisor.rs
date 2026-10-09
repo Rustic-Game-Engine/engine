@@ -151,6 +151,8 @@ impl SupervisedRuntime {
     }
 
     /// Sends the keys currently held by the focused play viewport.
+    /// # Errors
+    /// Returns an error if the runtime terminated or the protocol send fails.
     pub fn set_input_keys(&mut self, keys: Vec<String>) -> Result<(), SupervisorError> {
         if self.terminal {
             return Err(SupervisorError::AlreadyTerminated);
@@ -203,6 +205,8 @@ impl SupervisedRuntime {
     }
 
     /// Reads the selected entity's current runtime properties.
+    /// # Errors
+    /// Returns an error for a terminated runtime, protocol failure, or timeout.
     pub fn query_entity(
         &mut self,
         id: String,

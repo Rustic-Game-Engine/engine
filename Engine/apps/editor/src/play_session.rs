@@ -102,7 +102,9 @@ impl EditorPlaySession {
             last_frame_request: std::time::Instant::now(),
             held_keys: BTreeSet::new(),
             live_entity: None,
-            last_entity_request: std::time::Instant::now() - Duration::from_secs(1),
+            last_entity_request: std::time::Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or_else(std::time::Instant::now),
         })
     }
 

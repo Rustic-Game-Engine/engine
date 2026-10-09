@@ -59,8 +59,29 @@ class ReviewTests(unittest.TestCase):
     @patch.object(review, "git")
     def test_oversized_diff_is_never_silently_truncated(self, git):
         git.side_effect = [b"", b"a" * 40, b"x" * (review.MAX_DIFF_BYTES + 1)]
+        oversized = b"x" * (review.MAX_DIFF_BYTES + 1)
+        git.side_effect = [b"", b"a" * 40, oversized, oversized]
         with self.assertRaisesRegex(RuntimeError, "no partial review"):
             review.collect_diff("a" * 40, "b" * 40, True)
+
+    @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
+    @patch.object(review, "git")
+    def test_oversized_context_is_compacted_without_omitting_changed_files(self, git):
+        compact = b"diff --git a/file.rs b/file.rs\n-old code\n+new code\n"
+        git.side_effect = [
+            b"", b"c" * 40, b"x" * (review.MAX_DIFF_BYTES + 1), compact,
+            b"1\t1\tfile.rs\0", b"file.rs\0",
+        ]
+        diff, names = review.collect_diff("a" * 40, "b" * 40, True)
+        self.assertEqual((diff, names), (compact.decode(), {"file.rs"}))
+        expanded, fallback = git.call_args_list[2:4]
+        self.assertIn("--unified=30", expanded.args)
+        self.assertIn("--unified=3", fallback.args)
+        self.assertEqual(
+            [arg for arg in expanded.args if not arg.startswith("--unified=")],
+            [arg for arg in fallback.args if not arg.startswith("--unified=")],
+        )
+        self.assertEqual(expanded.kwargs, fallback.kwargs)
 
     @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
     @patch.object(review, "git")
@@ -150,11 +171,111 @@ class ReviewTests(unittest.TestCase):
                 collect.assert_not_called()
                 self.assertEqual(status.call_args.args[:2], ("b" * 40, "failure"))
                 self.assertIn("Missing OPEN\\_AI\\_API\\_KEY", report.call_args.args[0])
-                comment.assert_called_once()
+                self.assertEqual(comment.call_count, 2)
+                self.assertIn("Review started", comment.call_args_list[0].args[1])
 
     def test_merge_queue_status_uses_merge_group_commit(self):
         event = {"merge_group": {"base_sha": "a" * 40, "head_sha": "b" * 40}}
         self.assertEqual(review.commits(event, "merge_group"), ("a" * 40, "b" * 40))
+
+    @patch.object(review, "RepositoryContext")
+    @patch.object(review, "review")
+    def test_agent_reads_requested_files_and_follows_its_own_question(self, call, context):
+        context.return_value.files = {"caller.rs": "oid"}
+        context.return_value.read.return_value = {"file": "caller.rs", "lines": [{"line": 1, "text": "caller"}]}
+        request = {"file": "caller.rs", "start_line": 1, "end_line": 10}
+        call.side_effect = [
+            {"summary": "Checking", "findings": [finding()], "finished": False,
+             "next_focus": "Does the caller handle failure?", "file_requests": [request]},
+            {"summary": "Confirmed", "findings": [finding()], "finished": True,
+             "next_focus": "", "file_requests": []},
+        ]
+        progress = unittest.mock.Mock()
+        result = review.agentic_review("diff", {"Engine/src/example.rs"}, "a" * 40, on_progress=progress)
+        self.assertEqual(result["summary"], "Confirmed")
+        context.return_value.read.assert_called_once_with(request)
+        self.assertIn("Does the caller handle failure?", call.call_args.args[0])
+        self.assertIn('"text": "caller"', call.call_args.args[0])
+        self.assertEqual(call.call_args.kwargs["effort"], "high")
+        progress.assert_called_once()
+
+    @patch.object(review, "RepositoryContext")
+    @patch.object(review, "review")
+    def test_agent_budget_preserves_findings_and_never_passes(self, call, context):
+        context.return_value.files = {}
+        call.return_value = {"summary": "Investigating", "findings": [finding()],
+                             "finished": False, "next_focus": "Check errors", "file_requests": []}
+        with patch.object(review, "MAX_AGENT_TURNS", 2), self.assertRaises(review.IncompleteAgentReview) as raised:
+            review.agentic_review("diff", {"Engine/src/example.rs"}, "a" * 40)
+        self.assertEqual(raised.exception.result["findings"], [finding()])
+        self.assertIn("without finishing", str(raised.exception))
+
+    @patch.dict(os.environ, {"GH_TOKEN": "test-token"})
+    @patch.object(review, "git")
+    def test_context_blocks_secrets_symlinks_generated_files_and_untracked_paths(self, git):
+        git.side_effect = [
+            b"100644 blob abc\t.env\0" + b"120000 blob def\tlink.rs\0" +
+            b"100644 blob ghi\tEngine/target/debug/file.rs\0" + b"100644 blob jkl\tsrc.rs\0",
+            b"10", b"one\ntwo\n",
+        ]
+        context = review.RepositoryContext("a" * 40)
+        self.assertEqual(set(context.files), {"src.rs"})
+        for path in (".env", "link.rs", "../src.rs", "Engine/target/debug/file.rs"):
+            self.assertIn("unavailable", context.read({"file": path, "start_line": 1, "end_line": 2}))
+        result = context.read({"file": "src.rs", "start_line": 2, "end_line": 2})
+        self.assertEqual(result["lines"], [{"line": 2, "text": "two"}])
+        self.assertEqual(git.call_count, 3)
+
+    def test_agent_rejects_invalid_ranges_and_contradictory_completion(self):
+        decision = {"summary": "Done", "findings": [], "finished": True, "next_focus": "", "file_requests": []}
+        review.validate_agent_turn(decision)
+        for update in ({"next_focus": "Still checking"}, {"finished": "true"},
+                       {"file_requests": [{"file": "a", "start_line": 1, "end_line": 401}]}):
+            with self.subTest(update=update), self.assertRaises(ValueError):
+                review.validate_agent_turn(dict(decision, **update))
+
+    def test_comments_have_severity_table_collapsible_findings_and_escaped_titles(self):
+        report = review.render_report({"summary": "Summary", "findings": [finding(title="<script>@everyone</script>")]}, "a" * 40)
+        self.assertIn("| Critical | High | Medium | Low |", report)
+        self.assertIn("<details>", report)
+        self.assertIn("**Suggested fix**", report)
+        self.assertNotIn("<script>", report)
+        self.assertNotIn("@everyone", report)
+        pending = review.render_progress("a" * 40, turn=1, result={"summary": "Checking", "findings": []})
+        self.assertNotIn("PASS", pending)
+        self.assertIn("provisional", pending)
+
+    @patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"})
+    @patch.object(review, "request_json")
+    def test_agent_response_schema_and_completion_are_validated(self, request):
+        decision = {"summary": "Checking", "findings": [], "finished": False,
+                    "next_focus": "Check caller", "file_requests": []}
+        def response(value):
+            return {"status": "completed", "output": [{"type": "message", "content": [
+                {"type": "output_text", "text": json.dumps(value)}]}]}
+        request.return_value = response(decision)
+        self.assertEqual(review.review("diff", {"a.rs"}, schema=review.AGENT_SCHEMA), decision)
+        self.assertIs(request.call_args.args[2]["text"]["format"]["schema"], review.AGENT_SCHEMA)
+        request.return_value = response(dict(decision, finished=True))
+        with self.assertRaisesRegex(RuntimeError, "invalid review"):
+            review.review("diff", {"a.rs"}, schema=review.AGENT_SCHEMA)
+
+    @patch.object(review, "publish_comment")
+    @patch.object(review, "publish_status")
+    @patch.object(review, "collect_diff", return_value=("diff", {"a.rs"}))
+    @patch.object(review, "agentic_review", return_value={"summary": "Done", "findings": []})
+    @patch.object(review, "write_report")
+    def test_started_comment_is_updated_for_final_result(self, write, agent, collect, status, comment):
+        comment.return_value = {"id": 42}
+        with tempfile.TemporaryDirectory() as directory:
+            event = Path(directory) / "event.json"
+            event.write_text(json.dumps({"pull_request": {"number": 1, "base": {"sha": "a" * 40}, "head": {"sha": "b" * 40}}}))
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key", "GITHUB_EVENT_PATH": str(event), "GITHUB_EVENT_NAME": "pull_request_target"}):
+                self.assertEqual(review.main(), 0)
+        self.assertIn("Review started", comment.call_args_list[0].args[1])
+        self.assertEqual(comment.call_args.args[2], 42)
+        self.assertIn("PASS", comment.call_args.args[1])
+        self.assertEqual(status.call_args.args[:2], ("b" * 40, "success"))
 
 
 if __name__ == "__main__":

@@ -99,8 +99,8 @@ blocking the editor/render thread.
 - Implement `.rmeta`, importer/version contracts, content hashes, dependency graph,
   SQLite cache index, derived-data cache, async handles, placeholder/error assets, and
   file-watch debounce.
-- First importers: glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/OGG, and TTF/OTF. Add EXR and
-  FBX after their isolated decoder workers and corpus tests are ready.
+- First importers: glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/OGG, and TTF/OTF. FBX geometry, skeletons and named animation takes now use the bounded ufbx importer;
+  EXR remains deferred.
 - Implement textures, static meshes, basic PBR materials, asset moves, reimport,
   duplicate-ID quarantine, and missing-reference reports.
 

@@ -280,12 +280,18 @@ mod tests {
         let mut mounts = MountTable::new();
         mounts.mount("project", directory.path(), false).unwrap();
         let path = VfsPath::new("project", "assets/new/item.bin").unwrap();
-        assert!(
-            mounts
-                .resolve_write(&path)
+        let resolved = mounts.resolve_write(&path).unwrap();
+        fs::create_dir_all(resolved.parent().unwrap()).unwrap();
+        fs::write(&resolved, b"asset").unwrap();
+        assert_eq!(
+            resolved.canonicalize().unwrap(),
+            directory
+                .path()
+                .canonicalize()
                 .unwrap()
-                .starts_with(directory.path())
+                .join("assets/new/item.bin")
         );
+        assert_eq!(mounts.resolve_read(&path).unwrap(), resolved);
     }
 
     #[cfg(unix)]

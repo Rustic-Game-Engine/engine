@@ -97,8 +97,8 @@ returns a `RusticList` with count/items.
 
 The embedded Play viewport forwards held WASD, arrows, and Shift. Other keys,
 press/release events, named actions, and separate runtime-window input are not wired
-in this build. Collision callbacks and cross-language event emit/subscribe are not
-exposed by these external SDKs. Coordinate through shared engine state.
+in this build. Collision callbacks remain unavailable. API 1.1 provides cross-language
+`Events` for every supported script type; see [Shared gameplay actions](gameplayActions.md).
 
 Each instance runs in its own process with a safe environment allowlist and a
 temporary working directory. Sources and responses are limited to 1 MiB; callbacks
@@ -122,3 +122,10 @@ keeps the last good instance running.
 See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
 attributes, copyable examples, and native calls to edit another object. Use your language's native call syntax and its current runtime
 limitations.
+
+## Shared gameplay actions
+
+API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedural
+animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
+See [Shared gameplay actions](gameplayActions.md) for attachment, native call
+conventions, duration/speed options, callbacks, scene-clock controls and backend limits.

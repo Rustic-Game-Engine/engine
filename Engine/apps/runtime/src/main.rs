@@ -208,6 +208,10 @@ impl RuntimeWindowApp {
         event_loop.exit();
     }
 
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen dimensions are bounded by GPU texture limits and converted to float layout coordinates"
+    )]
     fn resize_surface(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
         let Some(window) = &self.window else {
             return;
@@ -227,6 +231,10 @@ impl RuntimeWindowApp {
 }
 
 impl ApplicationHandler for RuntimeWindowApp {
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "screen dimensions are bounded by GPU texture limits and converted to float layout coordinates"
+    )]
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -304,14 +312,14 @@ impl ApplicationHandler for RuntimeWindowApp {
                 }
             }
             WindowEvent::RedrawRequested => {
-                if let Ok(mut latest) = self.latest_frame.lock() {
-                    if let Some(frame) = latest.take() {
-                        self.mesh.texture_width = frame.width;
-                        self.mesh.texture_height = frame.height;
-                        self.mesh.texture_rgba8 = frame.pixels;
-                        for pixel in self.mesh.texture_rgba8.chunks_exact_mut(4) {
-                            pixel.swap(0, 2);
-                        }
+                if let Ok(mut latest) = self.latest_frame.lock()
+                    && let Some(frame) = latest.take()
+                {
+                    self.mesh.texture_width = frame.width;
+                    self.mesh.texture_height = frame.height;
+                    self.mesh.texture_rgba8 = frame.pixels;
+                    for pixel in self.mesh.texture_rgba8.as_chunks_mut::<4>().0 {
+                        pixel.swap(0, 2);
                     }
                 }
 
@@ -390,18 +398,23 @@ fn render_runtime(
     config: RuntimeServerConfig,
     latest: Option<Arc<Mutex<Option<engine_play::BgraFrame>>>>,
 ) -> Result<(), String> {
+    let models = engine_assets::load_model_library(&config.snapshot_root)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .map(|(id, (_, model))| (id, model))
+        .collect();
     let game_ui = game_ui::GameUi::load(&config.snapshot_root)?;
     let mut renderer = renderer_wgpu::SceneViewportRenderer::new(BackendRequest::Auto)
         .map_err(|e| e.to_string())?;
     run_runtime_server_with_renderer(config, move |world, tick| {
-        let scene = renderer_wgpu::game_scene(world, 16.0 / 9.0);
+        let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &models);
         let frame = renderer
             .render(640, 360, &scene)
             .map_err(|e| e.to_string())?
             .ok_or("empty game frame")?;
         let mut pixels = frame.rgba8;
         game_ui.composite_rgba(640, 360, &mut pixels)?;
-        for pixel in pixels.chunks_exact_mut(4) {
+        for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let frame = engine_play::BgraFrame {
@@ -455,6 +468,10 @@ fn usage() -> String {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::float_cmp,
+    reason = "tests compare exact round trips and deterministic values"
+)]
 mod tests {
     use super::*;
 

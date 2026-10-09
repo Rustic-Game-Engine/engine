@@ -21,7 +21,7 @@ jobs:
         shell: pwsh
         working-directory: Engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           filter: blob:none
           sparse-checkout-cone-mode: false
@@ -33,7 +33,7 @@ jobs:
       - name: Build Windows installer
         run: ./tools/build-windows-installer.ps1
       - name: Upload installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: RusticGameEngine-Windows-Installer
           path: Engine/dist/RusticGameEngine-Setup-*.exe

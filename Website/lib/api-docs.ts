@@ -6,6 +6,26 @@ const protocolNote = "Every gameplay language calls the engine-owned API. Rustic
 const p = (name: string, type: string, required: boolean, description: string): Parameter => ({ name, type, required, description });
 
 const docs: Record<string, ApiDoc> = {
+  gameplay: {
+    title: "Shared gameplay actions (API 1.1)", summary: "Shared easing, tweens, movement, clip and procedural animation, timelines, timers, paths, cameras, physics, effects, audio and signals in all ten script types.",
+    when: "Start an action during Start or an event callback. The scene advances it once per frame, even if the behavior has no Update function. Follow [Use gameplay actions](/docs/guides/gameplay-actions) for attachment, complete signatures and backend limits.",
+    calls: ["Tween.to / move / rotate / scale / value", "Movement.move / moveTo / rotateTo / lookAt / follow / orbit", "Animation.play / blend / transition / register / addMarker / value / ik", "Sequence / Timeline: move / to / wait / call / animation / parallel / play", "Timer.after / every", "Smooth / Interpolation: lerp / slerp / inverseLerp / remap / smoothDamp", "Path.create / follow", "Camera.moveTo / zoom / lookAt / follow / orbit / shake / transition", "Physics.raycast / sphereCast / overlap / force / impulse / explosion / knockback / launch", "Effects.fade / flash / shake / pulse", "Audio.play / playAt / fadeIn / fadeOut / crossfade / volume / pitch", "Events.on / once / emit / connect / disconnect", "Clock.timeScale / pause / resume", "handle.state / pause / resume / cancel / reverse / onFinished"],
+    parameters: [p("entity", "stable entity ID / resolved path", true, "Transform target; use an anchored Part to avoid competing gravity."), p("duration", "finite non-negative seconds", true, "Time to completion. Movement and tween helpers also provide duration or speed options."), p("easing", "Ease identifier", false, "Linear by default; all 31 shared curves are available.")],
+    returns: "An operation handle. Completion is queued during Update. Cancellation and destroyed targets do not invoke completion.",
+    examples: {
+      "Lua 5.4": "return { Start=function()\n  Tween.move(rustic.entity_id(),Vector3(10,0,0),2,Ease.OutCubic)\n    .onFinished(function() print('done') end)\nend }",
+      JavaScript: "globalThis.behavior={Start(){\n  Tween.move(rustic.entity_id(),[10,0,0],2,Ease.OutCubic)\n    .onFinished(()=>print('done'));\n}};",
+      Python: "from rustic import rustic,run,Tween,Ease\ndef on_start():\n    Tween.move(None,[10,0,0],2,Ease.OutCubic)\nrun(globals())",
+      "C++": "// In on_start:\nTween::move(rustic.entity_id(),{10,0,0},2,Ease::OutCubic);",
+      "C#": "// In on_start, with using static Rustic:\nTween.move(rustic.entity_id(),new double[]{10,0,0},2,Ease.OutCubic);",
+      Luau: "return {Start=function()\n  Tween.move(rustic.entity_id(),Vector3(10,0,0),2,Ease.OutCubic)\nend}",
+      C: "// In on_start, NULL means no completion callback:\nTween.move(rustic.entity_id(),(RusticVector3){10,0,0},2,Ease.OutCubic,NULL);",
+      Java: "// Inside a Rustic subclass on_start callback:\nTween.move(rustic.entity_id(),new double[]{10,0,0},2,Ease.OutCubic);",
+      PHP: "// Inside an on_start function with global $rustic:\nTween::move($rustic->entity_id(),[10,0,0],2,Ease::OutCubic);",
+      "HTML / inline JS": "globalThis.behavior={Start(){\n  Tween.move(rustic.entity_id(),[10,0,0],2,Ease.OutCubic);\n}};",
+    },
+    notes: ["Targets use local Position, Scale/Size, quaternion Rotation, Color, Opacity, perspective Fov in radians, or voice Volume/Pitch. Value callbacks animate script or UI state.", "Imported glTF/GLB/FBX clips retain source timing, inverse binds and skin weights. Physics uses primitive world AABBs and unit mass. Windows has device audio output; other platforms mix headlessly. See the guide for full signatures and backend limits.", "Operations and subscriptions clean up with their owner, scene, or reload. Failed reload retains previous operations. Callback exceptions disable the owner."]
+  },
   entity: {
     title: "Entity & time API", summary: "Identify the behavior owner and read engine-supplied frame intervals.",
     when: "Read the entity ID when another system needs a stable reference to this owner. Use `delta_time` with `Update` for frame-rate-independent presentation and `fixed_delta_time` with `FixedUpdate` for simulation.",
@@ -106,7 +126,7 @@ const docs: Record<string, ApiDoc> = {
     calls: ["rustic.log(level, message, fields?)", "print(...) — Lua and JavaScript info", "warn(...) — Lua and JavaScript warning"],
     parameters: [p("level", "string", true, "debug, info, warn, or error."), p("message", "string", true, "Human-readable diagnostic text."), p("fields", "table / object", false, "Optional structured fields where supported; omit for portability.")],
     returns: "No value. The message is queued for the bounded console sink.",
-    examples: simpleMutationExamples("rustic.log('info', 'player spawned')", "rustic.log(\"info\", \"player spawned\");", "log", "level", "info", "message", "player spawned"),
+    examples: simpleMutationExamples("rustic.log('info', 'player spawned')", "rustic.log(\"info\", \"player spawned\");"),
     notes: ["In Lua and JavaScript, print(...) writes an info entry and warn(...) writes a warning entry to the Rustic Console. Lua separates multiple arguments with tabs; JavaScript separates them with spaces. Use rustic.log for an explicit level. External programs must not print diagnostics to stdout; stdout is reserved for protocol responses.", protocolNote],
   },
   enabled: {
@@ -114,7 +134,7 @@ const docs: Record<string, ApiDoc> = {
     when: "Disable an entity when its behavior should stop after the current callback. Re-enable it from a controlling behavior or editor action. Use a local boolean instead when the entity should remain active.",
     calls: ["rustic.set_enabled(enabled)"], parameters: [p("enabled", "boolean", true, "True to enable; false to disable.")],
     returns: "No value. The change applies after the callback and can trigger enable/disable lifecycle callbacks.",
-    examples: simpleMutationExamples("rustic.set_enabled(false)", "rustic.set_enabled(false);", "set_enabled", "enabled", false), notes: [protocolNote],
+    examples: simpleMutationExamples("rustic.set_enabled(false)", "rustic.set_enabled(false);"), notes: [protocolNote],
   },
   scene: {
     title: "Scene lookup API", summary: "Resolve stable scene paths to entity IDs and list paths in the play snapshot.",
@@ -139,12 +159,12 @@ const docs: Record<string, ApiDoc> = {
     when: "Call when gameplay changes viewpoints—vehicles, players, cutscenes, or returning to the main camera. Do not call every frame when unchanged.",
     calls: ["Game.setCurrentCamera(source)"], parameters: [p("source", "string or camera reference", true, "Stable camera entity ID or scene path.")],
     returns: "No camera object. Selection is queued for the next render.",
-    examples: simpleMutationExamples("Game.setCurrentCamera('Game.scene.Room.Camera')", "Game.setCurrentCamera(\"Game.scene.Room.Camera\");", "set_current_camera", "source", "Game.scene.Room.Camera"),
+    examples: simpleMutationExamples("Game.setCurrentCamera('Game.scene.Room.Camera')", "Game.setCurrentCamera(\"Game.scene.Room.Camera\");"),
     notes: ["The target must resolve to a camera in the play snapshot.", protocolNote],
   },
 };
 
-function simpleMutationExamples(dynamic: string, compiled: string, _op: string, ..._pairs: unknown[]): Record<string, string> {
+function simpleMutationExamples(dynamic: string, compiled: string): Record<string, string> {
   const php = dynamic.replace(/^(rustic|Game|instance)\./, "$$$1->") + ";";
   return { "Lua 5.4": dynamic, JavaScript: dynamic + ";", Python: dynamic.replace("false", "False"),
     "C++": compiled, "C#": compiled, Luau: dynamic, C: compiled, Java: compiled, PHP: php,
@@ -163,5 +183,5 @@ export function buildApiMarkdown(id: string) {
 }
 
 function codeLanguage(lang: string) { return ({ "Lua 5.4": "lua", JavaScript: "javascript", Python: "python", "C++": "cpp", "C#": "csharp", Luau: "lua", C: "c", Java: "java", PHP: "php", "HTML / inline JS": "javascript" } as Record<string, string>)[lang]; }
-function overview() { return `# Rustic scripting API\n\nThe reference is organized by what game code needs to do. Every operation page includes purpose, timing, variables, return behavior, and equivalent calls for all ten supported script types.\n\n## Execution model\n\nGlobal scripts run before Scene scripts, then Object Component scripts. Mutations are queued and applied after the callback in issue order. Every gameplay language calls built-in functions. Lua, JavaScript, and Web use embedded bindings; external languages use engine-supplied SDKs with private transport.\n\n## Language support\n\n| Languages | Integration |\n| --- | --- |\n| Lua 5.4, JavaScript, HTML / inline JS | bundled embedded API |\n| Python, C#, C++, Luau, C, Java, PHP | engine-owned SDK and persistent external session |\n\n## Safety limits\n\nSource and responses are limited to 1 MiB. External callbacks have a three-second deadline. Boundary values are booleans, integers, finite numbers, strings, vectors, and optional stable entity IDs.`; }
+function overview() { return `# Rustic scripting API\n\nThe reference is organized by what game code needs to do. Core operation pages include purpose, timing, variables, return behavior, and equivalent calls for all ten supported script types. The Gameplay APIs navigation section provides dedicated references for actions, easing, animation, composition, physics, audio, events and the scene clock. API 1.1 gameplay actions have an explicit language support matrix in [Use gameplay actions](/docs/guides/gameplay-actions).\n\n## Execution model\n\nGlobal scripts run before Scene scripts, then Object Component scripts. Mutations are queued and applied after the callback in issue order. Every gameplay language calls built-in functions. Lua, JavaScript, and Web use embedded bindings; external languages use engine-supplied SDKs with private transport.\n\n## Language support\n\n| Languages | Integration |\n| --- | --- |\n| Lua 5.4, JavaScript, HTML / inline JS | bundled embedded API |\n| Python, C#, C++, Luau, C, Java, PHP | engine-owned SDK and persistent external session |\n\n## Safety limits\n\nSource and responses are limited to 1 MiB. External callbacks have a three-second deadline. Boundary values are booleans, integers, finite numbers, strings, vectors, and optional stable entity IDs.`; }
 function callbacks() { return `# Lifecycle callbacks\n\nCallbacks are entry points invoked by Rustic. Define only those a behavior needs.\n\n## When each callback runs\n\n| Callback | When to use it | Variables |\n| --- | --- | --- |\n| \`OnCreate\` | One-time construction before startup. | None |\n| \`Start\` | Resolve references and initialize gameplay state. | None |\n| \`OnEnable\` | Resume state when the owner becomes enabled. | None |\n| \`FixedUpdate\` | Physics and deterministic simulation. | \`dt\`: required fixed-step seconds |\n| \`Update\` | Input, presentation, timers, and per-frame logic. | \`dt\`: required frame seconds |\n| \`OnDisable\` | Pause state when the owner becomes disabled. | None |\n| \`OnDestroy\` | Release instance resources before destruction. | None |\n| \`OnStop\` | Final play-session cleanup. | None |\n\n## Lua 5.4\n\n\`\`\`lua\nreturn { Start=function() end, Update=function(dt) end, FixedUpdate=function(dt) end, OnDestroy=function() end }\n\`\`\`\n\n## JavaScript and HTML / inline JS\n\n\`\`\`javascript\nglobalThis.behavior={Start(){},Update(dt){},FixedUpdate(dt){},OnDestroy(){}};\n\`\`\`\n\n## External languages\n\nRustic invokes callbacks through each language SDK. Python calls run(globals()); PHP calls rustic_run(callbacks); C and C++ register RusticBehavior slots; C# calls Run and Java calls run with a callback dispatcher; Luau returns a behavior table. External callback names are \`on_create\`, \`on_start\`, \`on_enable\`, \`fixed_update\`, \`update\`, \`on_disable\`, \`on_destroy\`, and \`on_stop\`. Omitted callbacks are handled automatically by the SDK; frame callbacks receive dt in seconds. Physics runs after FixedUpdate callbacks, including during Frame Advance. Gravity and solid box response work for built-in primitives, but the simulator does not dispatch collision or touch callbacks to any language.`; }

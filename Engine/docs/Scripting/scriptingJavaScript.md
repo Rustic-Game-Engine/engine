@@ -102,12 +102,12 @@ input transport and limitations are the same for JavaScript.
 
 ## Sandbox, values, and diagnostics
 
-JavaScript cannot obtain or invoke another behavior's VM object. API 1.0 does not yet
-expose script-level Engine Event `emit`/`subscribe`; cross-language coordination must
-use shared engine state.
+JavaScript cannot obtain another behavior's VM object. API 1.1 adds shared
+`Events.on`, `once`, `emit`, and object signals; see [Shared gameplay actions](gameplayActions.md).
 
 There is no DOM, `window`, Node `require`, module loader, filesystem, network,
-environment, timer, process, or editor/backend access. Script-visible state and API
+environment, native browser timers, process, or editor/backend access.
+Use the engine-owned `Timer` facade for delayed/repeating gameplay callbacks. Script-visible state and API
 objects are frozen; do not attempt to modify them. Values crossing the bridge are
 JSON-compatible representations of the shared engine types. A callback exception or
 instruction-budget failure disables that behavior, while other scripts continue.
@@ -120,3 +120,10 @@ so never put game logic there.
 See [Edit scene objects](sceneObjects.md) for named-scene hierarchy calls, supported
 attributes, copyable examples, and native SDK calls to edit another object. Use your language's native call syntax and its current runtime
 limitations.
+
+## Shared gameplay actions
+
+API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedural
+animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
+See [Shared gameplay actions](gameplayActions.md) for attachment, native call
+conventions, duration/speed options, callbacks, scene-clock controls and backend limits.

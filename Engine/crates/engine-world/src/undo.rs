@@ -115,7 +115,7 @@ impl SceneEdit {
                 output.push(WorldCommand::SetPartAttributes {
                     entity: *entity,
                     value: *after,
-                })
+                });
             }
             Self::Scripts { entity, after, .. } => output.push(WorldCommand::SetScripts {
                 entity: *entity,
@@ -165,7 +165,7 @@ impl SceneEdit {
                 output.push(WorldCommand::SetPartAttributes {
                     entity: *entity,
                     value: *before,
-                })
+                });
             }
             Self::Scripts { entity, before, .. } => output.push(WorldCommand::SetScripts {
                 entity: *entity,

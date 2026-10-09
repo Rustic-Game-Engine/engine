@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+#[cfg(windows)]
 use std::process::Command;
 use thiserror::Error;
 use uuid::Uuid;
