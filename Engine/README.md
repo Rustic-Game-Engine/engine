@@ -33,11 +33,6 @@ qualification are recorded in [`docs/M0-M6_STATUS.md`](docs/M0-M6_STATUS.md).
 
 ## Build
 
-The repository has two independent projects: `Engine/` contains this Rust workspace,
-and `Website/` contains the Next.js documentation website. From the repository root,
-run `cd Engine` before using the commands below. Run website commands from `Website/`;
-the repository root is neither a Cargo nor a Node.js project.
-
 Install the Rust toolchain named in `rust-toolchain.toml`, then run:
 
 ```powershell
@@ -45,21 +40,19 @@ cargo install cargo-deny --locked --version 0.20.2
 cargo xtask doctor
 cargo xtask test
 
-# Individual formatting, lint, test, and check commands:
+# Equivalent individual quality commands:
 cargo fmt --all --check
-cargo clippy --locked --workspace --all-targets -- -D warnings
-cargo test --locked --workspace
-cargo check --locked --workspace --all-targets
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo check --workspace --all-targets
 ```
-
-`cargo xtask test` also runs dependency/license checks and process smoke tests.
 
 Launch the native project manager with `cargo xtask run project-manager`. It can create
 or import a project and starts the editor as a separate native process.
 
 ## Windows installer
 
-On Windows, from PowerShell in `Engine/`, build a self-contained `.exe` installer with:
+From PowerShell, build a self-contained `.exe` installer with:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
@@ -89,39 +82,3 @@ from the run page and extract the ZIP to obtain the setup `.exe`. Artifacts requ
 GitHub access to this repository and are retained for 30 days.
 
 Gameplay authors should start with [`docs/GAMEPLAY_PROGRAMMING.md`](docs/GAMEPLAY_PROGRAMMING.md).
-
-## Contributing and completing changes
-
-Follow the repository-wide [`AGENTS.md`](../AGENTS.md) and the engine-specific
-[`AGENTS.md`](AGENTS.md), together with [`CONTRIBUTING.md`](CONTRIBUTING.md).
-
-When changing a script function, callback, Script API behavior, or other engine
-functionality, update the affected website documentation in the same task. The
-website serves guides from `Engine/docs` through `Website/lib/docs.ts` and generates
-API pages from `Website/lib/api-docs.ts`. Make new guides reachable through
-`Website/lib/docs-catalog.ts`. Write for first-time users: explain what works and
-where, exact setup and attachment steps, copyable examples, expected results,
-current limitations, and how to diagnose common failures. Correct outdated claims
-and check the documentation against the implemented behavior before completing the
-change.
-
-After code changes, run the Windows installer command above and confirm that it
-produced a fresh `dist\RusticGameEngine-Setup-*.exe`. If the installer build fails,
-report the failure and do not describe the task as fully complete.
-
-Finish the relevant validation and documentation, commit on a feature branch, push
-it, and open a pull request against the branch the work started from. Update an
-existing task pull request instead of creating a duplicate. Include a concise
-summary and the checks run in the pull request description, then return its link.
-Before reporting completion, apply at least one change-type label and every
-relevant area label:
-
-| Label category | Labels |
-| --- | --- |
-| Change type | `type:feature`, `type:fix`, `type:docs`, `type:refactor`, `type:test`, `type:chore` |
-| Area | `area:engine` for `Engine/`, `area:website` for `Website/`, `area:ci` for GitHub Actions, CI, or repository automation |
-
-Use labels that describe the actual changes. Engine documentation changes use
-`type:docs` and `area:engine`; root-level instructions-only changes need `type:docs`
-and no area label. If authentication or permissions prevent pushing, opening the
-pull request, or labeling it, report the blocker and the remaining step explicitly.
