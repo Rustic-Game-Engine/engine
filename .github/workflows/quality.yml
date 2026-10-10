@@ -147,6 +147,8 @@ jobs:
       - run: rustup show active-toolchain
       - run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
       - run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-scripting external_runtime -- --nocapture
+      - name: Scene environment scripting across all adapters
+        run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play environment -- --nocapture
 
   installer:
     name: Windows installer

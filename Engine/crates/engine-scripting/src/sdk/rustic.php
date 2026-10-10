@@ -41,6 +41,9 @@ final class RusticApi {
     public function set_enabled(bool $enabled): void { $this->instance->commands[]=["op"=>"set_enabled","enabled"=>$enabled]; }
 }
 final class SceneApi {
+    public function getEnvironment(): array { global $rustic; return $rustic->query(["op"=>"scene_environment"]); }
+    public function setEnvironment(array $settings): array { global $rustic; return $rustic->query(["op"=>"scene_environment","settings"=>(object)$settings]); }
+    public function setSkyTexture(string $path): array { return $this->setEnvironment(["sky_image"=>$path]); }
     public array $state=[];
     public function Find(string $path): ?string { return $this->state[$path] ?? null; }
     public function List(string $path="Game.scene"): array { return array_values(array_filter($this->state, fn($id,$name)=>$path==="Game.scene" || str_starts_with($name,$path."."), ARRAY_FILTER_USE_BOTH)); }

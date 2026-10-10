@@ -49,6 +49,9 @@ class RusticApi:
     def set_enabled(self, enabled): self.commands.append({"op":"set_enabled","enabled":bool(enabled)})
 
 class SceneApi:
+    def getEnvironment(self): return rustic.query({"op":"scene_environment"})
+    def setEnvironment(self, settings): return rustic.query({"op":"scene_environment", "settings":settings})
+    def setSkyTexture(self, path): return self.setEnvironment({"sky_image":path})
     def __init__(self): self.state = {}
     def Find(self, path): return self.state.get(path)
     def List(self, path="Game.scene"):

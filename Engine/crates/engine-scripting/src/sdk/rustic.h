@@ -151,7 +151,10 @@ static const struct {
     bool (*any_key_pressed)(void);void (*log)(const char*,const char*),(*set_enabled)(bool);
 } rustic={{r_edit_object_attribute},r_entity_id,r_delta_time,r_fixed_delta_time,r_translation,r_set_translation,r_property,r_attribute,r_set_property,r_edit_attribute,r_input,r_key,r_events,r_any,r_log,r_enabled};
 static const struct {void (*add)(const char*,const char*),(*clone)(const char*,const char*);} instance={r_add,r_clone};
-static const struct {struct {const char *(*Find)(const char*);RusticList (*List)(const char*);} scene;void (*setCurrentCamera)(const char*);} Game={{r_find,r_list},r_camera};
+static RusticValue r_environment_get(const char *field);
+static void r_environment_set(const char *field,RusticValue value);
+static void r_environment_sky(const char *path);
+static const struct {struct {RusticValue (*getEnvironment)(const char*);void (*setEnvironment)(const char*,RusticValue);void (*setSkyTexture)(const char*);const char *(*Find)(const char*);RusticList (*List)(const char*);} scene;void (*setCurrentCamera)(const char*);} Game={{r_environment_get,r_environment_set,r_environment_sky,r_find,r_list},r_camera};
 
 /* Queries preserve the lifecycle snapshot while flushing earlier writes in order. */
 typedef struct {char *source,*pending;RToken *tokens;size_t count,at;} RQuerySave;
@@ -196,6 +199,9 @@ static RQueryResult r_query_end(RQuerySave saved){
     strcpy(r_source,saved.source);memcpy(r_tokens,saved.tokens,saved.count*sizeof(RToken));r_count=saved.count;r_at=saved.at;
     free(saved.source);free(saved.pending);free(saved.tokens);r_written=r_commands=0;r_output[0]=0;r_append("{\"format_version\":1,\"commands\":[");return out;
 }
+static RusticValue r_environment_get(const char *field){RQuerySave s=r_query_begin("scene_environment_field");r_q_string("field",field);return r_query_end(s).value;}
+static void r_environment_set(const char *field,RusticValue value){RQuerySave s=r_query_begin("scene_environment");r_append(",\"settings\":{");r_quote(field);r_append(":");r_write_value(value);r_append("}");(void)r_query_end(s);}
+static void r_environment_sky(const char *path){r_environment_set("sky_image",(RusticValue){.type=RUSTIC_STRING,.string=path});}
 static RusticValue r_smooth_lerp(RusticValue a,RusticValue b,double progress,const char *easing){RQuerySave s=r_query_begin("lerp");r_q_value("from",a);r_q_value("to",b);r_q_number("progress",progress);r_q_string("easing",easing?easing:"Linear");return r_query_end(s).value;}
 static RusticValue r_smooth_slerp(RusticValue a,RusticValue b,double progress,const char *easing){RQuerySave s=r_query_begin("slerp");r_q_value("from",a);r_q_value("to",b);r_q_number("progress",progress);r_q_string("easing",easing?easing:"Linear");return r_query_end(s).value;}
 static double r_inverse_lerp(double a,double b,double v){RQuerySave s=r_query_begin("inverse_lerp");r_q_number("from",a);r_q_number("to",b);r_q_number("value",v);RusticValue result=r_query_end(s).value;return result.type==RUSTIC_INTEGER?(double)result.integer:result.number;}

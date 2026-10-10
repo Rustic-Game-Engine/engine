@@ -1,4 +1,14 @@
 -- Thin Lua binding: Rust owns all progress, curves, paths, and composition.
+function Game.scene.getEnvironment() return rustic.query({op='scene_environment'}) end
+function Game.scene.setEnvironment(settings)
+    assert(type(settings)=='table','environment settings must be a table')
+    if next(settings)==nil then return Game.scene.getEnvironment() end
+    return rustic.query({op='scene_environment',settings=settings})
+end
+function Game.scene.setSkyTexture(path)
+    assert(type(path)=='string','sky texture path must be a string')
+    return Game.scene.setEnvironment({sky_image=path})
+end
 local callbacks = {}
 local handles = {}
 local connections={}

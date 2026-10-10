@@ -55,6 +55,15 @@ const BRIDGE: &str = r#"
     debug: writeLog("debug")
   }), writable:false, configurable:false});
   const scene = new Proxy(Object.create(null), {get: (_, key) => {
+    if (key === "getEnvironment") return () => rustic.query({op:"scene_environment"});
+    if (key === "setEnvironment") return settings => {
+      if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new TypeError("environment settings must be an object");
+      return rustic.query({op:"scene_environment", settings});
+    };
+    if (key === "setSkyTexture") return path => {
+      if (typeof path !== "string") throw new TypeError("sky texture path must be a string");
+      return rustic.query({op:"scene_environment", settings:{sky_image:path}});
+    };
     if (key === "Find") return path => state.scene_paths[path];
     if (key === "List") return () => Object.keys(state.scene_paths);
     return state.scene_paths[String(key)];
