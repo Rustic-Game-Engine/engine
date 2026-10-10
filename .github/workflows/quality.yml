@@ -161,8 +161,8 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  review-tests:
-    name: Review automation tests
+  workflow-syntax:
+    name: Workflow syntax
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -170,7 +170,6 @@ jobs:
         with:
           persist-credentials: false
           sparse-checkout: .github
-      - run: python3 -m unittest discover -s .github/tests -v
       - name: Validate GitHub workflow syntax
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
@@ -179,7 +178,7 @@ jobs:
   required:
     name: Required checks
     if: ${{ always() }}
-    needs: [engine, rust-security, secrets, language-adapters, installer, review-tests]
+    needs: [engine, rust-security, secrets, language-adapters, installer, workflow-syntax]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -192,7 +191,7 @@ jobs:
           results = json.loads(os.environ['RESULTS'])
           lines = ['## Code quality and security', '', '| Check | Result |', '| --- | --- |']
           lines.extend(f"| {name} | {job['result']} |" for name, job in results.items())
-          lines += ['', 'Open the failed job and step logs for the exact issues. GPT-6 Luna findings are reported separately on the pull request.']
+          lines += ['', 'Open the failed job and step logs for the exact issues.']
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('\n'.join(lines) + '\n')
           sys.exit(0 if all(job['result'] == 'success' for job in results.values()) else 1)
