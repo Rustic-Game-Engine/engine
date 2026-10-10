@@ -1817,12 +1817,20 @@ impl EditorViewer<'_> {
             } else {
                 axis.vector()
             };
-            let Some(projected) = project_to_rect(view_projection, origin_world + axis_world, rect)
-            else {
+            let offset = projected_gizmo_axis(*self.camera, origin_world, axis_world);
+            // Do not amplify a nearly end-on axis into a full-length handle.
+            // Keep an active handle available so its release still commits.
+            let offset = if offset.length() >= 8.0 {
+                offset
+            } else if let Some(drag) = self.gizmo_drag.as_ref()
+                && drag.axis == axis
+            {
+                drag.pointer_direction * 8.0
+            } else {
                 continue;
             };
-            let direction = (projected - origin).normalized();
-            let end = origin + direction * 72.0;
+            let direction = offset.normalized();
+            let end = origin + offset;
             let display_color = if active_axis == Some(axis) {
                 egui::Color32::from_rgb(255, 214, 71)
             } else {
@@ -1894,7 +1902,7 @@ impl EditorViewer<'_> {
                 drag.amount = accumulate_gizmo_pointer_delta(
                     drag.amount,
                     interaction.drag_delta(),
-                    direction,
+                    drag.pointer_direction,
                     self.gizmo.operation,
                 );
                 if let Some(after) = apply_gizmo_delta(drag.before, axis, drag.amount, *self.gizmo)
@@ -2726,6 +2734,26 @@ struct GizmoDrag {
     last_pointer: egui::Pos2,
 }
 
+fn projected_gizmo_axis(camera: EditorCamera, origin_world: Vec3, axis_world: Vec3) -> egui::Vec2 {
+    let view = camera.view_matrix();
+    let origin = view.transform_point3(origin_world);
+    let axis = view.transform_vector3(axis_world);
+    if !origin.is_finite() || !axis.is_finite() || origin.z >= -camera.near {
+        return egui::Vec2::ZERO;
+    }
+    // The perspective derivative at the pivot gives the screen tangent without
+    // projecting a unit endpoint that may cross the camera plane. Retaining its
+    // magnitude makes an end-on axis shrink instead of spinning at full length.
+    let offset = egui::vec2(
+        axis.x - origin.x / origin.z * axis.z,
+        -(axis.y - origin.y / origin.z * axis.z),
+    ) * 72.0;
+    if !offset.is_finite() {
+        return egui::Vec2::ZERO;
+    }
+    offset / (offset.length() / 72.0).max(1.0)
+}
+
 fn projected_rotation_ring(
     view_projection: Mat4,
     origin_world: Vec3,
@@ -2817,6 +2845,65 @@ fn rotation_from_degrees(rotation: [f32; 3]) -> Quat {
 #[cfg(test)]
 mod gizmo_drag_tests {
     use super::*;
+
+    #[test]
+    fn end_on_handles_shrink_through_camera_alignment() {
+        let mut camera = EditorCamera {
+            yaw: 0.0,
+            pitch: 0.0,
+            ..EditorCamera::default()
+        };
+        assert!(projected_gizmo_axis(camera, Vec3::ZERO, Vec3::Z).length() < 0.001);
+        assert!((projected_gizmo_axis(camera, Vec3::ZERO, Vec3::X).length() - 72.0).abs() < 0.001);
+        let mut previous = egui::Vec2::ZERO;
+        for step in -100_i16..=100 {
+            camera.yaw = f32::from(step) * 0.0001;
+            let offset = projected_gizmo_axis(camera, Vec3::ZERO, Vec3::Z);
+            assert!(offset.is_finite());
+            assert!(offset.length() < 1.0);
+            if step > -100 {
+                assert!((offset - previous).length() < 0.01);
+            }
+            previous = offset;
+        }
+    }
+
+    #[test]
+    fn handles_remain_finite_close_to_camera_and_off_center() {
+        let camera = EditorCamera {
+            yaw: 0.0,
+            pitch: 0.0,
+            ..EditorCamera::default()
+        };
+        // The old unit endpoint lies behind the camera at this pivot.
+        let origin = camera.position() + Vec3::new(0.01, 0.0, -0.1);
+        let offset = projected_gizmo_axis(camera, origin, Vec3::Z);
+        assert!(offset.is_finite());
+        assert!(offset.x > 0.0);
+        assert!(offset.length() <= 72.0);
+        assert_eq!(
+            projected_gizmo_axis(camera, camera.position(), Vec3::Z),
+            egui::Vec2::ZERO
+        );
+    }
+
+    #[test]
+    fn rotated_axes_shrink_when_aligned_with_an_off_center_view_ray() {
+        let camera = EditorCamera::default();
+        let origin = Vec3::new(0.5, -0.3, 0.2);
+        let ray = (origin - camera.position()).normalize();
+        let rotation = Quat::from_rotation_arc(Vec3::Z, ray);
+        assert!(projected_gizmo_axis(camera, origin, rotation * Vec3::Z).length() < 0.001);
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let projection = camera.view_projection(rect.aspect_ratio());
+        let pivot = project_to_rect(projection, origin, rect).unwrap();
+        for axis in [Vec3::X, Vec3::Y] {
+            let axis = rotation * axis;
+            let tangent = project_to_rect(projection, origin + axis * 0.01, rect).unwrap() - pivot;
+            let handle = projected_gizmo_axis(camera, origin, axis);
+            assert!(handle.normalized().dot(tangent.normalized()) > 0.999);
+        }
+    }
 
     #[test]
     fn pointer_motion_accumulates_along_the_visible_axis() {
