@@ -2375,6 +2375,7 @@ mod tests {
         let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
         let mut scene = ViewportScene {
             environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: vec![ViewportMesh {
                 instance_key: 1,
