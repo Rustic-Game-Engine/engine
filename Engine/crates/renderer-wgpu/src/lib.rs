@@ -1687,6 +1687,10 @@ fn multiply_matrix(left: [f32; 16], right: [f32; 16]) -> [f32; 16] {
     output
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "viewport extents are bounded by GPU texture limits and mapped to float screen coordinates"
+)]
 fn selection_outline_model(
     mesh: &ViewportMesh,
     view_projection: [f32; 16],
@@ -1697,57 +1701,33 @@ fn selection_outline_model(
     for vertex in &mesh.vertices {
         half_extents = half_extents.max(glam::Vec3::from(vertex.position).abs());
     }
-    let transform =
-        glam::Mat4::from_cols_array(&view_projection) * glam::Mat4::from_cols_array(&mesh.model);
-    let Some(center) = projected_viewport_point(transform, glam::Vec3::ZERO, width, height) else {
+    let model = glam::Mat4::from_cols_array(&mesh.model);
+    let view_projection = glam::Mat4::from_cols_array(&view_projection);
+    let center = view_projection * model.w_axis;
+    if !center.is_finite() || center.w.abs() <= f32::EPSILON {
         return mesh.model;
-    };
+    }
+
+    // Measure camera-plane pixels per world unit, not the projection of each
+    // object axis. An axis facing the camera projects to zero even when the
+    // object is large; dividing by that projection can inflate the shell until
+    // it crosses the camera and fills the viewport.
+    let pixels_per_world_unit = (view_projection.row(0).truncate().length() * width as f32)
+        .max(view_projection.row(1).truncate().length() * height as f32)
+        * 0.5
+        / center.w.abs();
+    if !pixels_per_world_unit.is_finite() || pixels_per_world_unit <= f32::EPSILON {
+        return mesh.model;
+    }
+    let world_padding = SELECTION_OUTLINE_WIDTH_PIXELS / pixels_per_world_unit;
     let mut outline_scale = glam::Vec3::ONE;
     for axis in 0..3 {
-        let radius = half_extents[axis];
-        if radius <= f32::EPSILON {
-            continue;
-        }
-        let mut projected_radius = 0.0;
-        let mut samples = 0.0;
-        for sign in [-1.0, 1.0] {
-            let mut point = glam::Vec3::ZERO;
-            point[axis] = sign * radius;
-            if let Some(projected) = projected_viewport_point(transform, point, width, height) {
-                projected_radius += projected.distance(center);
-                samples += 1.0;
-            }
-        }
-        if samples > 0.0 {
-            projected_radius /= samples;
-        }
-        if projected_radius > 0.001 {
-            outline_scale[axis] += SELECTION_OUTLINE_WIDTH_PIXELS / projected_radius;
+        let world_radius = half_extents[axis] * model.col(axis).truncate().length();
+        if world_radius > f32::EPSILON {
+            outline_scale[axis] += world_padding / world_radius;
         }
     }
-    (glam::Mat4::from_cols_array(&mesh.model) * glam::Mat4::from_scale(outline_scale))
-        .to_cols_array()
-}
-
-#[allow(
-    clippy::cast_precision_loss,
-    reason = "viewport extents are bounded by GPU texture limits and mapped to float screen coordinates"
-)]
-fn projected_viewport_point(
-    transform: glam::Mat4,
-    point: glam::Vec3,
-    width: u32,
-    height: u32,
-) -> Option<glam::Vec2> {
-    let clip = transform * point.extend(1.0);
-    if !clip.is_finite() || clip.w.abs() <= f32::EPSILON {
-        return None;
-    }
-    let ndc = clip.truncate() / clip.w;
-    Some(glam::Vec2::new(
-        ndc.x * width as f32 * 0.5,
-        ndc.y * height as f32 * 0.5,
-    ))
+    (model * glam::Mat4::from_scale(outline_scale)).to_cols_array()
 }
 
 #[allow(
@@ -2551,6 +2531,121 @@ mod tests {
                 .iter()
                 .any(|pixel| { pixel[2] > 100 && pixel[1] > pixel[0].saturating_mul(2) })
         );
+    }
+
+    fn selected_cube(model: glam::Mat4) -> ViewportMesh {
+        let primitive = engine_world::Primitive::Cube { size: 1.0 }.mesh().unwrap();
+        ViewportMesh {
+            instance_key: 10,
+            mesh_key: 20,
+            vertices: primitive
+                .positions
+                .iter()
+                .zip(&primitive.normals)
+                .map(|(position, normal)| ViewportVertex {
+                    position: *position,
+                    normal: *normal,
+                })
+                .collect(),
+            indices: primitive.indices,
+            model: model.to_cols_array(),
+            color: [0.2, 0.35, 0.65, 1.0],
+            selected: true,
+        }
+    }
+
+    #[test]
+    fn selection_outline_stays_bounded_near_camera_aligned_axes() {
+        // Sweep through the axis-aligned views that used to divide by a nearly
+        // zero projected radius. Include rotation and nonuniform object scale.
+        for model in [
+            glam::Mat4::IDENTITY,
+            glam::Mat4::from_rotation_y(0.4)
+                * glam::Mat4::from_scale(glam::Vec3::new(0.35, 0.5, 1.25)),
+        ] {
+            let mesh = selected_cube(model);
+            for axis in [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z] {
+                let tangent = if axis == glam::Vec3::Y {
+                    glam::Vec3::X
+                } else {
+                    glam::Vec3::Y
+                };
+                for offset in [-0.1, -0.01, -0.001, -0.0001, 0.0, 0.0001, 0.001, 0.01, 0.1] {
+                    let eye = (axis + tangent * offset).normalize() * 3.0;
+                    let view = glam::camera::rh::view::look_at_mat4(eye, glam::Vec3::ZERO, tangent);
+                    let projection = glam::camera::rh::proj::directx::perspective(
+                        60.0_f32.to_radians(),
+                        1.0,
+                        0.1,
+                        100.0,
+                    );
+                    let outline = glam::Mat4::from_cols_array(&selection_outline_model(
+                        &mesh,
+                        (projection * view).to_cols_array(),
+                        256,
+                        256,
+                    ));
+                    assert!(outline.is_finite());
+                    for column in 0..3 {
+                        let ratio = outline.col(column).length() / model.col(column).length();
+                        assert!(
+                            (1.0..1.25).contains(&ratio),
+                            "outline inflated by {ratio} at {eye}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run explicitly for viewport qualification"]
+    fn selection_outline_remains_a_border_when_orbiting_through_aligned_views() {
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let mesh = selected_cube(glam::Mat4::IDENTITY);
+        for axis in [glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z] {
+            let tangent = if axis == glam::Vec3::Y {
+                glam::Vec3::X
+            } else {
+                glam::Vec3::Y
+            };
+            for offset in [-0.01, -0.001, 0.0, 0.001, 0.01] {
+                let eye = (axis + tangent * offset).normalize() * 3.0;
+                let view = glam::camera::rh::view::look_at_mat4(eye, glam::Vec3::ZERO, tangent);
+                let projection = glam::camera::rh::proj::directx::perspective(
+                    60.0_f32.to_radians(),
+                    1.0,
+                    0.1,
+                    100.0,
+                );
+                let scene = ViewportScene {
+                    view_projection: (projection * view).to_cols_array(),
+                    meshes: vec![mesh.clone()],
+                    lights: Vec::new(),
+                    guides: Vec::new(),
+                    grid_vertices: Vec::new(),
+                    clear_color: [0.0, 0.0, 0.0, 1.0],
+                };
+                let frame = renderer.render(256, 256, &scene).unwrap().unwrap();
+                let mut orange_pixels = 0;
+                for (index, pixel) in frame.rgba8.as_chunks::<4>().0.iter().enumerate() {
+                    if pixel[0] > 64 && pixel[0] > pixel[1] && pixel[1] > pixel[2] {
+                        orange_pixels += 1;
+                        let x = index % 256;
+                        let y = index / 256;
+                        assert!(
+                            (75..181).contains(&x) && (75..181).contains(&y),
+                            "outline escaped cube border at ({x}, {y}) for camera {eye}"
+                        );
+                    }
+                }
+                assert!(orange_pixels > 0, "missing outline for camera {eye}");
+                assert!(
+                    orange_pixels < 2000,
+                    "outline covered {orange_pixels} pixels for camera {eye}"
+                );
+            }
+        }
     }
 
     #[test]
