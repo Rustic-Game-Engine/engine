@@ -62,6 +62,7 @@ impl EditorPlaySession {
             }
         }
         collect_snapshot_assets(document.project().root(), &mut programming)?;
+        collect_sky_image(document, &mut programming)?;
         let snapshot = SnapshotBuilder::new(temporary.join("play"))
             .stage(
                 mode,
@@ -222,6 +223,35 @@ impl EditorPlaySession {
             .map(|exit| exit.is_some())
             .map_err(|error| error.to_string())
     }
+}
+
+fn collect_sky_image(
+    document: &AuthoringDocument,
+    programming: &mut Vec<SnapshotInput>,
+) -> Result<(), String> {
+    let env = document.world().environment();
+    if env.enabled
+        && !env.sky_image.is_empty()
+        && !programming
+            .iter()
+            .any(|file| file.relative_path == Path::new(&env.sky_image))
+    {
+        let root = document
+            .project()
+            .root()
+            .canonicalize()
+            .map_err(|e| e.to_string())?;
+        let path = root
+            .join(&env.sky_image)
+            .canonicalize()
+            .map_err(|e| format!("sky image: {e}"))?;
+        if !path.starts_with(&root) {
+            return Err("sky image must stay inside the project".into());
+        }
+        let bytes = std::fs::read(path).map_err(|e| format!("sky image: {e}"))?;
+        programming.push(SnapshotInput::new(&env.sky_image, bytes));
+    }
+    Ok(())
 }
 
 fn collect_snapshot_assets(root: &Path, output: &mut Vec<SnapshotInput>) -> Result<(), String> {

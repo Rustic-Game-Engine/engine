@@ -202,7 +202,8 @@ impl EditorApp {
             });
         let project_scan = Some(spawn_project_scan(document.project().root().to_path_buf()));
         let scene_disk_snapshot = std::fs::read(document.scene_path()).ok();
-        let (viewport_request, preview_result) = spawn_viewport_renderer();
+        let (viewport_request, preview_result) =
+            spawn_viewport_renderer(document.project().root().to_path_buf());
         let game_settings = GameSettings::load(document.project().root()).unwrap_or_default();
         if !read_only
             && !document
@@ -2347,6 +2348,7 @@ impl EditorViewer<'_> {
         reason = "keep conditional inspector controls and their authoring actions together"
     )]
     fn inspector_contents(&mut self, ui: &mut egui::Ui) {
+        self.environment_inspector(ui);
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
@@ -2525,6 +2527,104 @@ impl EditorViewer<'_> {
             );
         }
         self.script_inspector(ui, entity, snapshot.scripts);
+    }
+
+    fn environment_inspector(&mut self, ui: &mut egui::Ui) {
+        let mut env = self.document.world().environment().clone();
+        let before = env.clone();
+        ui.collapsing("Scene sky & atmosphere", |ui| {
+            ui.add_enabled_ui(!self.document.is_read_only(), |ui| {
+                ui.checkbox(&mut env.enabled, "Enable scene environment");
+                ui.label("Sky image (2:1 panorama: HDR, PNG, JPEG, TGA)");
+                ui.label(if env.sky_image.is_empty() {
+                    "Solid sky color"
+                } else {
+                    &env.sky_image
+                });
+                ui.horizontal(|ui| {
+                    if ui.button("Choose image…").clicked()
+                        && let Some(path) = rfd::FileDialog::new()
+                            .set_directory(self.document.project().root())
+                            .add_filter("Sky panorama", &["hdr", "png", "jpg", "jpeg", "tga"])
+                            .pick_file()
+                    {
+                        let root = self.document.project().root().canonicalize();
+                        let chosen = path.canonicalize();
+                        match root.and_then(|root| chosen.map(|path| (root, path))) {
+                            Ok((root, path)) if path.starts_with(&root) => {
+                                env.sky_image = path
+                                    .strip_prefix(root)
+                                    .unwrap()
+                                    .to_string_lossy()
+                                    .replace('\\', "/");
+                            }
+                            _ => self.console.push(simple_console(
+                                Severity::Error,
+                                "scene.environment",
+                                "Copy the sky image into your project folder first.",
+                            )),
+                        }
+                    }
+                    if ui.button("Clear image").clicked() {
+                        env.sky_image.clear();
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Sky color");
+                    ui.color_edit_button_rgb(&mut env.sky_color);
+                });
+                ui.add(
+                    egui::Slider::new(&mut env.rotation_degrees, -180.0..=180.0)
+                        .text("Sky rotation"),
+                );
+                ui.add(
+                    egui::Slider::new(&mut env.exposure, -10.0..=10.0).text("Sky exposure (stops)"),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Ambient color");
+                    ui.color_edit_button_rgb(&mut env.ambient_color);
+                });
+                ui.add(
+                    egui::Slider::new(&mut env.ambient_intensity, 0.0..=5.0)
+                        .text("Ambient intensity"),
+                );
+                ui.horizontal(|ui| {
+                    ui.label("Sun color");
+                    ui.color_edit_button_rgb(&mut env.sun_color);
+                });
+                ui.add(egui::Slider::new(&mut env.sun_intensity, 0.0..=10.0).text("Sun intensity"));
+                ui.label("Direction towards sun (X, Y, Z)");
+                ui.horizontal(|ui| {
+                    for v in &mut env.sun_direction {
+                        ui.add(egui::DragValue::new(v).speed(0.01).range(-1.0..=1.0));
+                    }
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Haze color");
+                    ui.color_edit_button_rgb(&mut env.haze_color);
+                });
+                ui.add(egui::Slider::new(&mut env.haze_density, 0.0..=0.1).text("Haze density"));
+                ui.add(
+                    egui::DragValue::new(&mut env.haze_start)
+                        .speed(1.0)
+                        .range(0.0..=100_000.0)
+                        .prefix("Haze starts at "),
+                );
+                if ui.button("Reset environment").clicked() {
+                    env = engine_world::SceneEnvironment::default();
+                }
+            });
+        });
+        if before != env {
+            match self.document.set_environment(env) {
+                Ok(()) => self.request_preview = true,
+                Err(error) => self.console.push(simple_console(
+                    Severity::Error,
+                    "scene.environment",
+                    error.to_string(),
+                )),
+            }
+        }
     }
 
     fn script_inspector(
@@ -2875,7 +2975,9 @@ struct ViewportRenderRequest {
     scene: ViewportScene,
 }
 
-fn spawn_viewport_renderer() -> (
+fn spawn_viewport_renderer(
+    project_root: PathBuf,
+) -> (
     SyncSender<ViewportRenderRequest>,
     Receiver<Result<Option<RenderedFrame>, String>>,
 ) {
@@ -2891,6 +2993,7 @@ fn spawn_viewport_renderer() -> (
                     return;
                 }
             };
+            renderer.set_environment_root(project_root);
             while let Ok(request) = request_receiver.recv() {
                 let result = renderer
                     .render(request.width, request.height, &request.scene)
@@ -2999,6 +3102,8 @@ fn viewport_scene(
         }
     }
     ViewportScene {
+        environment: document.world().environment().clone(),
+        camera_position: camera.position().to_array(),
         view_projection: camera.view_projection(aspect).to_cols_array(),
         meshes,
         lights: render_world.lights.to_vec(),

@@ -1,5 +1,7 @@
 //! Concrete wgpu backend. No type from the implementation dependency appears in the public API.
 
+mod sky;
+
 use engine_rhi::{
     BindingKind, RendererBackend, ShaderBinding, ShaderReflection, ShaderStage, SurfaceLifecycle,
     SurfaceState,
@@ -60,6 +62,11 @@ struct Uniforms {
     normal_matrix: mat4x4<f32>,
     lighting: vec4<f32>,
     lights: array<Light, 32>,
+    ambient: vec4<f32>,
+    sun: vec4<f32>,
+    sun_direction: vec4<f32>,
+    haze: vec4<f32>,
+    camera: vec4<f32>,
 };
 struct Light {
     position_kind: vec4<f32>,
@@ -86,7 +93,8 @@ struct VertexOutput {
 }
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if uniforms.lighting.y > 0.5 { return uniforms.color; }
-    var illumination = vec3<f32>(0.12);
+    var illumination = uniforms.ambient.rgb * uniforms.ambient.w;
+    illumination += uniforms.sun.rgb * uniforms.sun.w * max(dot(normalize(input.normal), uniforms.sun_direction.xyz), 0.0);
     for (var i = 0u; i < u32(uniforms.lighting.x); i += 1u) {
         let light = uniforms.lights[i];
         var direction = -light.direction_range.xyz;
@@ -104,7 +112,9 @@ struct VertexOutput {
         }
         illumination += light.color_intensity.rgb * light.color_intensity.w * attenuation * max(dot(normalize(input.normal), direction), 0.0);
     }
-    return vec4<f32>(uniforms.color.rgb * illumination, uniforms.color.a);
+    let distance = max(length(input.world_position - uniforms.camera.xyz) - uniforms.camera.w, 0.0);
+    let haze = 1.0 - exp(-uniforms.haze.w * distance);
+    return vec4<f32>(mix(uniforms.color.rgb * illumination, uniforms.haze.rgb, haze), uniforms.color.a);
 }
 ";
 
@@ -184,7 +194,8 @@ async fn initialize_adapter(
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some(label),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults(),
+                required_limits: wgpu::Limits::downlevel_defaults()
+                    .using_resolution(adapter.limits()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
@@ -275,6 +286,8 @@ pub struct ViewportGuide {
 /// Complete editor viewport frame input without backend implementation types.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewportScene {
+    pub environment: engine_world::SceneEnvironment,
+    pub camera_position: [f32; 3],
     pub view_projection: [f32; 16],
     pub meshes: Vec<ViewportMesh>,
     pub lights: Vec<engine_world::RenderLight>,
@@ -942,6 +955,8 @@ struct ViewportTargets {
 /// Device, queue, pipelines, bind groups, mesh buffers, and size-dependent targets are retained;
 /// no backend type crosses this crate's public API.
 pub struct SceneViewportRenderer {
+    sky: sky::SkyRenderer,
+    environment_root: std::path::PathBuf,
     request: BackendRequest,
     context: BackendContext,
     bind_layout: wgpu::BindGroupLayout,
@@ -986,7 +1001,10 @@ impl SceneViewportRenderer {
             None,
             "rustic-viewport-grid-pipeline",
         );
+        let sky = sky::SkyRenderer::new(&context.device)?;
         Ok(Self {
+            sky,
+            environment_root: std::path::PathBuf::new(),
             request,
             context,
             bind_layout,
@@ -1003,6 +1021,11 @@ impl SceneViewportRenderer {
                 ..ViewportResourceStats::default()
             },
         })
+    }
+
+    /// Resolves scene sky image paths against a project or immutable play snapshot.
+    pub fn set_environment_root(&mut self, root: impl Into<std::path::PathBuf>) {
+        self.environment_root = root.into();
     }
 
     pub const fn stats(&self) -> ViewportResourceStats {
@@ -1046,56 +1069,53 @@ impl SceneViewportRenderer {
         }
         if self.context.take_device_loss().is_some() {
             let previous = self.stats;
+            let root = self.environment_root.clone();
             *self = Self::new(self.request)?;
+            self.environment_root = root;
             self.stats.device_generations = previous.device_generations.saturating_add(1);
             self.stats.pipeline_generations = previous.pipeline_generations.saturating_add(1);
         }
+        if !scene.environment.is_valid() || scene.camera_position.iter().any(|v| !v.is_finite()) {
+            return Err(RendererError::InvalidMesh(
+                "invalid scene environment or camera position".to_owned(),
+            ));
+        }
+        self.sky.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &self.environment_root,
+            scene,
+        )?;
         self.ensure_targets(width, height);
         self.ensure_grid(&scene.grid_vertices)?;
         for guide in &scene.guides {
             self.ensure_guide(guide)?;
             self.ensure_instance(guide.key);
-            self.write_instance(
-                guide.key,
-                scene.view_projection,
-                identity_matrix(),
-                guide.color,
-                &[],
-                true,
-            );
+            self.write_instance(guide.key, identity_matrix(), guide.color, true, scene);
         }
         for mesh in &scene.meshes {
             validate_viewport_mesh(mesh)?;
             self.ensure_mesh(mesh)?;
             self.ensure_instance(mesh.instance_key);
-            self.write_instance(
-                mesh.instance_key,
-                scene.view_projection,
-                mesh.model,
-                mesh.color,
-                &scene.lights,
-                false,
-            );
+            self.write_instance(mesh.instance_key, mesh.model, mesh.color, false, scene);
             if mesh.selected {
                 let outline_key = mesh.instance_key ^ (1_u64 << 63);
                 self.ensure_instance(outline_key);
                 self.write_instance(
                     outline_key,
-                    scene.view_projection,
                     selection_outline_model(mesh, scene.view_projection, width, height),
                     [1.0, 0.48, 0.04, 1.0],
-                    &[],
                     true,
+                    scene,
                 );
             }
         }
         self.write_instance(
             u64::MAX,
-            scene.view_projection,
             identity_matrix(),
             [0.28, 0.31, 0.35, 1.0],
-            &[],
             true,
+            scene,
         );
 
         let targets = self.targets.as_ref().ok_or_else(|| {
@@ -1137,6 +1157,9 @@ impl SceneViewportRenderer {
                 multiview_mask: None,
             });
 
+            if scene.environment.enabled {
+                self.sky.draw(&mut pass);
+            }
             if let Some(grid) = &self.grid {
                 let key = u64::MAX;
                 if let Some(instance) = self.instances.get(&key) {
@@ -1423,7 +1446,7 @@ impl SceneViewportRenderer {
         self.instances.entry(key).or_insert_with(|| {
             let uniform = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rustic-viewport-instance-uniform"),
-                size: 2272,
+                size: 2352,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -1448,14 +1471,18 @@ impl SceneViewportRenderer {
     fn write_instance(
         &self,
         key: u64,
-        view_projection: [f32; 16],
         model: [f32; 16],
         color: [f32; 4],
-        lights: &[engine_world::RenderLight],
         unlit: bool,
+        scene: &ViewportScene,
     ) {
-        let mut values = Vec::with_capacity(568);
-        values.extend(multiply_matrix(view_projection, model));
+        let lights = if unlit {
+            &[][..]
+        } else {
+            scene.lights.as_slice()
+        };
+        let mut values = Vec::with_capacity(588);
+        values.extend(multiply_matrix(scene.view_projection, model));
         values.extend(model);
         values.extend(color);
         values.extend(
@@ -1495,6 +1522,26 @@ impl SceneViewportRenderer {
             ]);
         }
         values.resize(568, 0.0);
+        let fallback = engine_world::SceneEnvironment::default();
+        let env = if scene.environment.enabled {
+            &scene.environment
+        } else {
+            &fallback
+        };
+        values.extend(env.ambient_color);
+        values.push(env.ambient_intensity);
+        values.extend(env.sun_color);
+        values.push(env.sun_intensity);
+        values.extend(
+            glam::Vec3::from_array(env.sun_direction)
+                .normalize()
+                .to_array(),
+        );
+        values.push(0.0);
+        values.extend(env.haze_color);
+        values.push(env.haze_density);
+        values.extend(scene.camera_position);
+        values.push(env.haze_start);
         if let Some(instance) = self.instances.get(&key) {
             self.context
                 .queue
@@ -2464,6 +2511,8 @@ mod tests {
             selected: false,
         };
         let scene = ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: vec![
                 mesh(1, 1, 0.8, [0.0, 0.0, 1.0, 1.0]),
@@ -2511,6 +2560,8 @@ mod tests {
     fn viewport_renders_colored_selection_guides() {
         let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
         let scene = ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: Vec::new(),
             lights: Vec::new(),
@@ -2619,6 +2670,8 @@ mod tests {
                     100.0,
                 );
                 let scene = ViewportScene {
+                    environment: engine_world::SceneEnvironment::default(),
+                    camera_position: [0.0; 3],
                     view_projection: (projection * view).to_cols_array(),
                     meshes: vec![mesh.clone()],
                     lights: Vec::new(),
@@ -2680,6 +2733,8 @@ mod tests {
         let projection =
             glam::camera::rh::proj::directx::perspective(60.0_f32.to_radians(), 1.0, 0.1, 100.0);
         let scene = |scale| ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.0; 3],
             view_projection: (projection * view).to_cols_array(),
             meshes: vec![mesh(scale)],
             lights: Vec::new(),
@@ -2720,6 +2775,8 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
     let mut buffer = engine_world::RenderWorldBuffer::new();
     let extracted = buffer.extract(world);
     let mut scene = ViewportScene {
+        environment: engine_world::SceneEnvironment::default(),
+        camera_position: [0.0; 3],
         view_projection: identity_matrix(),
         meshes: Vec::new(),
         lights: extracted.lights.to_vec(),
@@ -2730,6 +2787,11 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
     let Some(camera) = extracted.cameras.last() else {
         return scene;
     };
+    scene.environment = world.environment().clone();
+    scene.camera_position = glam::Mat4::from_cols_array(&camera.transform)
+        .w_axis
+        .truncate()
+        .to_array();
     scene.view_projection = camera.view_projection(aspect).to_cols_array();
     for primitive in extracted.primitives {
         let Ok(mesh) = primitive.primitive.mesh() else {

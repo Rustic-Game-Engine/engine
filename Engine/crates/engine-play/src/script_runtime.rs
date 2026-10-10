@@ -2513,6 +2513,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         };
         let entity_id = entity.id;
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Test".into(),
             startup_scripts: Vec::new(),
@@ -2570,6 +2571,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
             ..EntitySnapshot::default()
         };
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Mixed".into(),
             startup_scripts: Vec::new(),
@@ -2642,6 +2644,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
         let script_id = ScriptId::new();
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Keyboard".into(),
             startup_scripts: Vec::new(),
@@ -2701,6 +2704,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Entry".into(),
             startup_scripts: Vec::new(),
@@ -2738,6 +2742,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
             ..EntitySnapshot::default()
         };
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Attached entry".into(),
             startup_scripts: Vec::new(),
@@ -2790,6 +2795,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
             ..EntitySnapshot::default()
         };
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Linked web script".into(),
             startup_scripts: Vec::new(),
@@ -2842,6 +2848,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
         let script_id = ScriptId::new();
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Entry API error".into(),
             startup_scripts: Vec::new(),
@@ -2886,6 +2893,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         std::fs::create_dir_all(temp.path().join("config")).unwrap();
         std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Configured entry".into(),
             startup_scripts: Vec::new(),
@@ -2956,6 +2964,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         )
         .unwrap();
         let scene = SceneDocument {
+            environment: engine_world::SceneEnvironment::default(),
             id: engine_core::SceneId::new(),
             name: "Invalid settings".into(),
             startup_scripts: Vec::new(),
