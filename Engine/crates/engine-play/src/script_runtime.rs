@@ -2431,29 +2431,29 @@ mod tests {
     #[test]
     fn scene_environment_apis_work_through_all_available_script_adapters() {
         let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
-            (ScriptLanguage::Lua54, "sky.lua", br#"return {Start=function()
+            (ScriptLanguage::Lua54, "sky.lua", br"return {Start=function()
                 Game.scene.setEnvironment({enabled=true,sun_intensity=2})
                 Game.scene.setSkyTexture('assets/night.hdr')
                 assert(Game.scene.getEnvironment().sky_image=='assets/night.hdr')
                 assert(Game.scene.setEnvironment({}).sun_intensity==2)
                 assert(not pcall(function() Game.scene.setEnvironment({enabled=false,exposure=21}) end))
                 assert(Game.scene.getEnvironment().enabled)
-            end}"#),
-            (ScriptLanguage::JavaScript, "sky.js", br#"globalThis.behavior={Start(){
+            end}"),
+            (ScriptLanguage::JavaScript, "sky.js", br"globalThis.behavior={Start(){
                 Game.scene.setEnvironment({enabled:true,sun_intensity:2});
                 Game.scene.setSkyTexture('assets/night.hdr');
                 if(Game.scene.getEnvironment().sky_image!=='assets/night.hdr')throw Error('stale sky');
                 let rejected=false;try{Game.scene.setEnvironment({enabled:false,exposure:21});}catch(e){rejected=true;}
                 if(!rejected || !Game.scene.getEnvironment().enabled)throw Error('invalid patch committed');
-            }};"#),
-            (ScriptLanguage::Web, "sky.html", br#"<!doctype html><html><head><title>Sky</title></head><body><script>globalThis.behavior={Start(){Game.scene.setEnvironment({enabled:true,sun_intensity:2});Game.scene.setSkyTexture('assets/night.hdr');if(Game.scene.getEnvironment().sun_intensity!==2)throw Error('stale lighting');}};</script></body></html>"#),
+            }};"),
+            (ScriptLanguage::Web, "sky.html", br"<!doctype html><html><head><title>Sky</title></head><body><script>globalThis.behavior={Start(){Game.scene.setEnvironment({enabled:true,sun_intensity:2});Game.scene.setSkyTexture('assets/night.hdr');if(Game.scene.getEnvironment().sun_intensity!==2)throw Error('stale lighting');}};</script></body></html>"),
             (ScriptLanguage::Python, "sky.py", br#"from rustic import Game,run
 def on_start():
     Game.scene.setEnvironment({"enabled":True,"sun_intensity":2})
     Game.scene.setSkyTexture("assets/night.hdr")
     assert Game.scene.getEnvironment()["sky_image"]=="assets/night.hdr"
 run(globals())"#),
-            (ScriptLanguage::Luau, "sky.luau", br#"return {Start=function() Game.scene.setEnvironment({enabled=true,sun_intensity=2});Game.scene.setSkyTexture('assets/night.hdr');assert(Game.scene.getEnvironment().sun_intensity==2) end}"#),
+            (ScriptLanguage::Luau, "sky.luau", br"return {Start=function() Game.scene.setEnvironment({enabled=true,sun_intensity=2});Game.scene.setSkyTexture('assets/night.hdr');assert(Game.scene.getEnvironment().sun_intensity==2) end}"),
             (ScriptLanguage::Cpp, "sky.cpp", br#"#include "rustic.hpp"
 void start(){Game.scene.setEnvironment({{"enabled",true},{"sun_intensity",2.0}});Game.scene.setSkyTexture("assets/night.hdr");if(Game.scene.getEnvironment().at("sky_image").string()!="assets/night.hdr")throw std::runtime_error("stale sky");}
 int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
