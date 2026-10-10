@@ -68,9 +68,9 @@ jobs:
         run: |
           cargo test --locked --workspace
           cargo test --locked --manifest-path apps/luau-host/Cargo.toml
-      - name: Verify rendered lighting falloff
+      - name: Verify rendered lighting and viewport
         if: ${{ !cancelled() && runner.os == 'Linux' }}
-        run: cargo test --locked -p renderer-wgpu local_lights_obey_inverse_square_falloff_and_range -- --ignored
+        run: cargo test --locked -p renderer-wgpu -- --include-ignored
       - name: Check all targets
         if: ${{ !cancelled() }}
         run: cargo check --locked --workspace --all-targets
