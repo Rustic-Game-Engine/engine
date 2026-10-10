@@ -292,6 +292,9 @@ sealed class RusticApi {
 }
 
 sealed class SceneApi {
+    public JsonElement getEnvironment() => Rustic.Query(new {op="scene_environment"});
+    public JsonElement setEnvironment(object settings) => Rustic.Query(new {op="scene_environment", settings});
+    public JsonElement setSkyTexture(string path) => setEnvironment(new {sky_image=path});
     public JsonElement State { get; set; }
     public string? Find(string path) => State.TryGetProperty(path, out var value) ? value.GetString() : null;
     public IEnumerable<string> List(string path="Game.scene") => State.EnumerateObject().Where(x => path=="Game.scene" || x.Name.StartsWith(path+".")).Select(x => x.Value.GetString()!);

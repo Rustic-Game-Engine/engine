@@ -297,6 +297,9 @@ class Rustic {
         void clone(String s){clone(s,null);}void clone(String s,String p){command("clone_instance","source",s,"parent",p);}
     }
     static class SceneApi {
+        Object getEnvironment(){return query(args("scene_environment"));}
+        Object setEnvironment(Map<String,Object> settings){return query(args("scene_environment","settings",settings));}
+        Object setSkyTexture(String path){return setEnvironment(Map.of("sky_image",path));}
         String Find(String p){return (String)field("scene_paths",p);}
         List<String> List(){return List("Game.scene");}
         List<String> List(String p){var out=new ArrayList<String>();for(var e:((Map<?,?>)state.get("scene_paths")).entrySet())if(p.isEmpty()||p.equals("Game.scene")||((String)e.getKey()).startsWith(p+"."))out.add((String)e.getValue());return out;}

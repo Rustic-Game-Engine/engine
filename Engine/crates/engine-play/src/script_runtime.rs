@@ -927,6 +927,44 @@ impl GameplayHost for RuntimeHost {
             .get("op")
             .and_then(serde_json::Value::as_str)
             .ok_or("query operation is missing")?;
+        if op == "scene_environment_field" {
+            let world = self
+                .world
+                .lock()
+                .map_err(|_| "runtime world lock poisoned")?;
+            let value = serde_json::to_value(world.environment()).map_err(|e| e.to_string())?;
+            let field = query["field"]
+                .as_str()
+                .ok_or("environment field must be a string")?;
+            return value
+                .get(field)
+                .cloned()
+                .ok_or_else(|| format!("unknown environment setting `{field}`"));
+        }
+        if op == "scene_environment" {
+            let mut world = self
+                .world
+                .lock()
+                .map_err(|_| "runtime world lock poisoned")?;
+            let mut value = serde_json::to_value(world.environment()).map_err(|e| e.to_string())?;
+            if let Some(patch) = query.get("settings") {
+                let fields = patch
+                    .as_object()
+                    .ok_or("environment settings must be an object")?;
+                for (name, setting) in fields {
+                    let slot = value
+                        .get_mut(name)
+                        .ok_or_else(|| format!("unknown environment setting `{name}`"))?;
+                    *slot = setting.clone();
+                }
+                let environment: engine_world::SceneEnvironment = serde_json::from_value(value)
+                    .map_err(|e| format!("invalid environment settings: {e}"))?;
+                world
+                    .apply_commands(&[WorldCommand::SetEnvironment(environment)])
+                    .map_err(|e| e.to_string())?;
+            }
+            return serde_json::to_value(world.environment()).map_err(|e| e.to_string());
+        }
         if op == "operation_state" {
             let context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
             let owner = Owner {
@@ -2292,6 +2330,167 @@ mod tests {
                 .unwrap_err()
                 .contains("ambiguous")
         );
+    }
+
+    fn environment_host(world: &Arc<Mutex<SceneWorld>>) -> RuntimeHost {
+        RuntimeHost {
+            gameplay: Arc::new(Mutex::new(GameplayContext::default())),
+            owner_script: ScriptId::new(),
+            entity_bound: false,
+            scene_name: "Environment".into(),
+            world: Arc::clone(world),
+            entity: EntityId::new(),
+            input_keys: Arc::new(Mutex::new(BTreeSet::new())),
+            snapshot_root: PathBuf::new(),
+            properties: Arc::new(Mutex::new(BTreeMap::new())),
+            logs: Arc::new(Mutex::new(VecDeque::new())),
+            dropped_logs: Arc::new(Mutex::new(0)),
+            enabled: true,
+        }
+    }
+
+    #[test]
+    fn environment_patches_validate_atomically_and_preserve_other_settings() {
+        let world = Arc::new(Mutex::new(SceneWorld::new()));
+        let mut host = environment_host(&world);
+        let settings = serde_json::json!({
+            "enabled":true, "sky_image":"assets/day.hdr", "sky_color":[0.1,0.2,0.3],
+            "rotation_degrees":45, "exposure":2, "ambient_color":[0.4,0.5,0.6],
+            "ambient_intensity":0.5, "sun_color":[1,0.9,0.8], "sun_intensity":2,
+            "sun_direction":[1,2,3], "haze_color":[0.2,0.3,0.4],
+            "haze_density":0.02, "haze_start":20
+        });
+        let expected: engine_world::SceneEnvironment =
+            serde_json::from_value(settings.clone()).unwrap();
+        let expected = serde_json::to_value(expected).unwrap();
+        assert_eq!(
+            host.gameplay_query(serde_json::json!({"op":"scene_environment","settings":settings}))
+                .unwrap(),
+            expected
+        );
+        let before = world.lock().unwrap().environment().clone();
+        for patch in [
+            serde_json::json!({"enabled":false,"ambient_intensity":-1}),
+            serde_json::json!({"exposure":21}),
+            serde_json::json!({"sun_direction":[0,0,0]}),
+            serde_json::json!({"sky_color":[1,2]}),
+            serde_json::json!({"sky_image":"../escape.hdr"}),
+            serde_json::json!({"sky_image":"/outside.hdr"}),
+            serde_json::json!({"sky_image":"C:\\outside.hdr"}),
+            serde_json::json!({"sky_image":null}),
+            serde_json::json!({"enabled":1}),
+            serde_json::json!({"haze_start":"20"}),
+            serde_json::json!({"sun_intensity":1e100}),
+            serde_json::json!({"unknown":1}),
+            serde_json::json!([]),
+            serde_json::json!(null),
+        ] {
+            assert!(
+                host.gameplay_query(serde_json::json!({"op":"scene_environment","settings":patch}))
+                    .is_err()
+            );
+            assert_eq!(world.lock().unwrap().environment(), &before);
+        }
+        let updated = host.gameplay_query(serde_json::json!({"op":"scene_environment","settings":{"sky_image":"assets/night.hdr"}})).unwrap();
+        assert_eq!(updated["sky_image"], "assets/night.hdr");
+        assert_eq!(updated["sun_intensity"], expected["sun_intensity"]);
+        assert_eq!(
+            host.gameplay_query(serde_json::json!({"op":"scene_environment"}))
+                .unwrap(),
+            updated
+        );
+        assert_eq!(
+            host.gameplay_query(
+                serde_json::json!({"op":"scene_environment_field","field":"sky_image"})
+            )
+            .unwrap(),
+            "assets/night.hdr"
+        );
+        assert!(
+            host.gameplay_query(
+                serde_json::json!({"op":"scene_environment_field","field":"unknown"})
+            )
+            .is_err()
+        );
+        let captured = SceneDocument::from_world(
+            engine_world::SceneId::new(),
+            "Environment",
+            &world.lock().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(captured.environment.sky_image, "assets/night.hdr");
+        let cleared = host
+            .gameplay_query(serde_json::json!({"op":"scene_environment",
+            "settings":{"sky_image":"","enabled":false}}))
+            .unwrap();
+        assert_eq!(cleared["sky_image"], "");
+        assert_eq!(cleared["enabled"], false);
+        assert_eq!(cleared["sun_intensity"], expected["sun_intensity"]);
+    }
+
+    #[test]
+    fn scene_environment_apis_work_through_all_available_script_adapters() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54, "sky.lua", br#"return {Start=function()
+                Game.scene.setEnvironment({enabled=true,sun_intensity=2})
+                Game.scene.setSkyTexture('assets/night.hdr')
+                assert(Game.scene.getEnvironment().sky_image=='assets/night.hdr')
+                assert(Game.scene.setEnvironment({}).sun_intensity==2)
+                assert(not pcall(function() Game.scene.setEnvironment({enabled=false,exposure=21}) end))
+                assert(Game.scene.getEnvironment().enabled)
+            end}"#),
+            (ScriptLanguage::JavaScript, "sky.js", br#"globalThis.behavior={Start(){
+                Game.scene.setEnvironment({enabled:true,sun_intensity:2});
+                Game.scene.setSkyTexture('assets/night.hdr');
+                if(Game.scene.getEnvironment().sky_image!=='assets/night.hdr')throw Error('stale sky');
+                let rejected=false;try{Game.scene.setEnvironment({enabled:false,exposure:21});}catch(e){rejected=true;}
+                if(!rejected || !Game.scene.getEnvironment().enabled)throw Error('invalid patch committed');
+            }};"#),
+            (ScriptLanguage::Web, "sky.html", br#"<!doctype html><html><head><title>Sky</title></head><body><script>globalThis.behavior={Start(){Game.scene.setEnvironment({enabled:true,sun_intensity:2});Game.scene.setSkyTexture('assets/night.hdr');if(Game.scene.getEnvironment().sun_intensity!==2)throw Error('stale lighting');}};</script></body></html>"#),
+            (ScriptLanguage::Python, "sky.py", br#"from rustic import Game,run
+def on_start():
+    Game.scene.setEnvironment({"enabled":True,"sun_intensity":2})
+    Game.scene.setSkyTexture("assets/night.hdr")
+    assert Game.scene.getEnvironment()["sky_image"]=="assets/night.hdr"
+run(globals())"#),
+            (ScriptLanguage::Luau, "sky.luau", br#"return {Start=function() Game.scene.setEnvironment({enabled=true,sun_intensity=2});Game.scene.setSkyTexture('assets/night.hdr');assert(Game.scene.getEnvironment().sun_intensity==2) end}"#),
+            (ScriptLanguage::Cpp, "sky.cpp", br#"#include "rustic.hpp"
+void start(){Game.scene.setEnvironment({{"enabled",true},{"sun_intensity",2.0}});Game.scene.setSkyTexture("assets/night.hdr");if(Game.scene.getEnvironment().at("sky_image").string()!="assets/night.hdr")throw std::runtime_error("stale sky");}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
+            (ScriptLanguage::C, "sky.c", br#"#include "rustic.h"
+void start(void){Game.scene.setEnvironment("enabled",(RusticValue){.type=RUSTIC_BOOL,.boolean=true});Game.scene.setEnvironment("sun_intensity",(RusticValue){.type=RUSTIC_NUMBER,.number=2});Game.scene.setSkyTexture("assets/night.hdr");if(strcmp(Game.scene.getEnvironment("sky_image").string,"assets/night.hdr"))r_fail("stale sky");}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
+            (ScriptLanguage::CSharp, "sky.cs", br#"using static Rustic;
+Run((callback,dt)=>{if(callback=="on_start"){Game.scene.setEnvironment(new {enabled=true,sun_intensity=2});Game.scene.setSkyTexture("assets/night.hdr");if(Game.scene.getEnvironment().GetProperty("sky_image").GetString()!="assets/night.hdr")throw new System.Exception("stale sky");}});"#),
+            (ScriptLanguage::Java, "RusticBehavior.java", br#"class RusticBehavior extends Rustic {
+public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){Game.scene.setEnvironment(java.util.Map.of("enabled",true,"sun_intensity",2));Game.scene.setSkyTexture("assets/night.hdr");if(!((java.util.Map<?,?>)Game.scene.getEnvironment()).get("sky_image").equals("assets/night.hdr"))throw new RuntimeException("stale sky");}});}}"#),
+            (ScriptLanguage::Php, "sky.php", br#"<?php
+require __DIR__."/rustic.php";
+function on_start():void{global $Game;$Game->scene->setEnvironment(["enabled"=>true,"sun_intensity"=>2]);$Game->scene->setSkyTexture("assets/night.hdr");if($Game->scene->getEnvironment()["sky_image"]!=="assets/night.hdr")throw new Exception("stale sky");}
+rustic_run(["on_start"=>"on_start"]);"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !engine_scripting::probe_language_toolchain(*language).available {
+                eprintln!("skipped {}: toolchain unavailable", language.display_name());
+                continue;
+            }
+            let world = Arc::new(Mutex::new(SceneWorld::new()));
+            let mut behavior = RuntimeBehavior::load(
+                *language,
+                ScriptId::new(),
+                source,
+                name,
+                Box::new(environment_host(&world)),
+            )
+            .unwrap();
+            behavior.on_start().unwrap();
+            let world = world.lock().unwrap();
+            assert!(world.environment().enabled, "{}", language.display_name());
+            assert_eq!(world.environment().sun_intensity, 2.0);
+            assert_eq!(world.environment().sky_image, "assets/night.hdr");
+            assert_eq!(world.environment().ambient_intensity, 0.12);
+            eprintln!("validated environment API: {}", language.display_name());
+        }
     }
 
     #[test]

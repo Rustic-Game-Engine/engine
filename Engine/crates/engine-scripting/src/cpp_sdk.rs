@@ -108,8 +108,15 @@ public:
     bool any_key_pressed()const{return state->at("any_key_pressed").boolean();} void log(const std::string& l,const std::string&m){commands->push_back(rustic_detail::object({{"op","log"},{"level",l},{"message",m}}));} void set_enabled(bool e){commands->push_back(rustic_detail::object({{"op","set_enabled"},{"enabled",e}}));}
 };
 class InstanceApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;void push(const char*op,const std::string&s,const std::optional<std::string>&p){commands->push_back(rustic_detail::object({{"op",op},{"source",s},{"parent",p?RusticValue(*p):RusticValue()}}));}public:void add(const std::string&s,std::optional<std::string>p={}){push("add_instance",s,p);}void clone(const std::string&s,std::optional<std::string>p={}){push("clone_instance",s,p);}};
-class SceneApi {friend int rustic_run(const struct RusticBehavior&);const RusticValue*state=nullptr;public:std::optional<std::string> Find(const std::string&p)const{auto&o=state->object();auto i=o.find(p);return i==o.end()?std::nullopt:std::optional(i->second.string());}std::vector<std::string> List(const std::string&p="Game.scene")const{std::vector<std::string>r;std::string prefix=p=="Game.scene"?"":p+".";for(auto&[n,v]:state->object())if(prefix.empty()||n.starts_with(prefix))r.push_back(v.string());return r;}};
+class SceneApi {public:
+    RusticValue getEnvironment() const;
+    RusticValue setEnvironment(RusticValue::Object settings) const;
+    RusticValue setSkyTexture(const std::string& path) const;
+private:friend int rustic_run(const struct RusticBehavior&);const RusticValue*state=nullptr;public:std::optional<std::string> Find(const std::string&p)const{auto&o=state->object();auto i=o.find(p);return i==o.end()?std::nullopt:std::optional(i->second.string());}std::vector<std::string> List(const std::string&p="Game.scene")const{std::vector<std::string>r;std::string prefix=p=="Game.scene"?"":p+".";for(auto&[n,v]:state->object())if(prefix.empty()||n.starts_with(prefix))r.push_back(v.string());return r;}};
 class GameApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;public:SceneApi scene;void setCurrentCamera(const std::string&source){commands->push_back(rustic_detail::object({{"op","set_current_camera"},{"source",source}}));}}; inline RusticApi rustic; inline InstanceApi instance; inline GameApi Game;
+inline RusticValue SceneApi::getEnvironment() const {return rustic.query(rustic_detail::object({{"op","scene_environment"}}));}
+inline RusticValue SceneApi::setEnvironment(RusticValue::Object settings) const {return rustic.query(rustic_detail::object({{"op","scene_environment"},{"settings",std::move(settings)}}));}
+inline RusticValue SceneApi::setSkyTexture(const std::string& path) const {return setEnvironment({{"sky_image",path}});}
 namespace Gameplay {
 struct Handle;
 inline std::map<std::string,std::shared_ptr<Handle>> handles;
