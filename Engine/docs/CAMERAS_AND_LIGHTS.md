@@ -32,6 +32,19 @@ Parent transforms move and rotate lights. Range and cone controls appear only fo
 
 Selecting a light displays an amber editor guide: an arrow for directional lights, the range sphere for point lights, or the complete range cone and center trajectory for spot lights. Guides are editor-only and do not appear in the game view.
 
+## Scene selection outline
+
+In the editor Scene viewport, select a mesh to display its orange outline, then
+orbit the camera around it. The outline should remain a narrow border when the
+camera lines up with any object axis. No material or script setup is required.
+
+The current renderer expands a back-face mesh shell using camera depth and viewport
+resolution, targeting roughly three pixels of padding along each object axis.
+Nonuniform object scale is accounted for in world space. This is an approximate
+outline: corners, perspective across large meshes, and irregular mesh shapes can
+vary in thickness. If a selection fills the viewport with orange at a particular
+orbit angle, that is a rendering fault; it is not an outline or material setting.
+
 ## Verification
 
 GPU tests compare actual rendered pixels for camera projection/clipping and light intensity, color, range, and direction. World tests cover component persistence, validation, and undo/redo. Runtime process tests transport the rendered scene through authenticated IPC in all three play modes and check pause, step, resume, and shutdown.
