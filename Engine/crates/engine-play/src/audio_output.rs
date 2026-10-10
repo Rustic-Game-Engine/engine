@@ -6,7 +6,10 @@ pub(crate) struct AudioOutput {
 }
 impl AudioOutput {
     pub fn new() -> Self {
-        #[cfg(windows)]
+        // Unit tests exercise the mixer without opening native audio devices.
+        // Hosted Windows runners have no reliable playback device, and parallel
+        // scene fixtures must not initialize device drivers for each test.
+        #[cfg(all(windows, not(test)))]
         {
             let (sender, receiver) = std::sync::mpsc::sync_channel::<Vec<f32>>(4);
             let _ = std::thread::Builder::new()
@@ -26,7 +29,7 @@ impl AudioOutput {
                 sender: Some(sender),
             }
         }
-        #[cfg(not(windows))]
+        #[cfg(any(not(windows), test))]
         {
             Self::default()
         }

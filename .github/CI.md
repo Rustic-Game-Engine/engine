@@ -12,6 +12,12 @@ Windows installer build, or review automation test fails or is skipped.
 The job summary links to the run; failed step logs contain diagnostic details.
 The fresh Windows installer is saved as a workflow artifact for seven days.
 
+Linux headless rendering uses Mesa's CPU Vulkan driver. Both engine and language
+adapter jobs initialize the installed .NET SDK before launching parallel tests,
+so C# fixtures do not race its first-run NuGet migrations. Windows gameplay unit
+tests exercise audio mixing without opening a physical playback device; packaged
+Windows applications continue to use the native audio output.
+
 Documentation site lint, type checking, static builds, dependency audits, and
 Cloudflare Pages deployment live in the [docs repository](https://github.com/Rustic-Game-Engine/docs).
 
