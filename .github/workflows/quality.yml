@@ -37,7 +37,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libegl1 libgl1-mesa-dri mesa-vulkan-drivers
           # Headless runtime tests still render frames; use Mesa's CPU Vulkan driver.
-          vulkan_driver="$(dpkg -L mesa-vulkan-drivers | rg '/lvp_icd.*\.json$')"
+          vulkan_driver="$(dpkg -L mesa-vulkan-drivers | grep -E '/lvp_icd.*\.json$')"
           test -f "$vulkan_driver"
           install -d -m 700 "$RUNNER_TEMP/xdg-runtime"
           echo "VK_DRIVER_FILES=$vulkan_driver" >> "$GITHUB_ENV"
@@ -56,6 +56,13 @@ jobs:
       - name: Build bundled Luau host
         if: ${{ !cancelled() }}
         run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
+      - name: Initialize .NET before parallel adapter tests
+        if: ${{ !cancelled() }}
+        run: |
+          if command -v dotnet >/dev/null 2>&1; then
+            dotnet new console --output "$RUNNER_TEMP/dotnet-warmup" --no-restore
+            dotnet build "$RUNNER_TEMP/dotnet-warmup" --nologo
+          fi
       - name: Unit, integration, and documentation tests
         if: ${{ !cancelled() }}
         run: |
@@ -130,6 +137,10 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
         with:
           dotnet-version: '10.0.x'
+      - name: Initialize .NET before parallel adapter tests
+        run: |
+          dotnet new console --output "$RUNNER_TEMP/dotnet-warmup" --no-restore
+          dotnet build "$RUNNER_TEMP/dotnet-warmup" --nologo
       - run: rustup show active-toolchain
       - run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
       - run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-scripting external_runtime -- --nocapture
