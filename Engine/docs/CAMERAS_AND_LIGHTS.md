@@ -24,9 +24,13 @@ Selecting a camera displays a cyan frustum and center trajectory in the editor v
 Scene lights illuminate primitives in both the editor and game view. A small ambient term keeps unlit surfaces visible by default. An enabled [scene environment](SCENE_ENVIRONMENT.md) replaces that term with configurable ambient light and adds sun lighting and haze. The renderer uses up to 32 lights in stable entity order.
 
 - Directional: shines along local +Z throughout the scene; rotate it to change illumination.
-- Point: emits from its world position, fading smoothly to zero at Range.
+- Point: emits from its world position with inverse-square distance falloff, fading smoothly to zero at Range.
 - Spot: combines point-light range with a cone along local +Z. Cone half-angle controls coverage, with a soft edge.
 - Light color and Intensity affect illumination. Intensity zero turns the light off.
+
+Point and spot Intensity is a relative source strength: away from the range boundary, doubling the source-to-surface distance gives approximately one quarter of the direct illumination. Range is a cutoff, not a brightness control; keep it well beyond the surfaces you want to illuminate. Falloff is capped within 0.1 world units to avoid a singularity at the source. Directional intensity is independent of distance. All lights use diffuse surface-angle shading; surfaces facing away receive no direct contribution. These are relative engine units, not calibrated lumens or lux.
+
+To check distance falloff, add a point light in front of a flat surface, set Range to `100` and Intensity to `0.5`, and compare distances of `1` and `2` world units from the surface. The direct contribution should fall to roughly one quarter; ambient light remains, so the displayed pixel will not become exactly four times darker. If a surface clips to white, lower Intensity. Older scenes may need higher point/spot intensity after this correction, especially for lights several world units away.
 
 Parent transforms move and rotate lights. Range and cone controls appear only for the light types that use them. Shadow casting is not implemented and has no editable control.
 

@@ -103,8 +103,12 @@ struct VertexOutput {
             let offset = light.position_kind.xyz - input.world_position;
             let distance = length(offset);
             direction = offset / max(distance, 0.0001);
-            let falloff = max(1.0 - distance / max(light.direction_range.w, 0.0001), 0.0);
-            attenuation = falloff * falloff;
+            // Inverse-square irradiance, with a smooth finite-range cutoff.
+            // Clamp only the near-field singularity (0.1 world units).
+            let relative_distance = distance / max(light.direction_range.w, 0.0001);
+            let relative_distance_squared = relative_distance * relative_distance;
+            let cutoff = max(1.0 - relative_distance_squared * relative_distance_squared, 0.0);
+            attenuation = cutoff * cutoff / max(dot(offset, offset), 0.01);
             if light.position_kind.w > 1.5 {
                 let cosine = dot(-direction, light.direction_range.xyz);
                 attenuation *= smoothstep(light.cone.x, light.cone.y, cosine);
@@ -2358,6 +2362,88 @@ pub fn update_surface_lifecycle(
 )]
 mod tests {
     use super::*;
+
+    #[test]
+    fn viewport_lighting_shader_is_valid() {
+        validate_and_reflect_wgsl(VIEWPORT_SHADER).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
+    fn local_lights_obey_inverse_square_falloff_and_range() {
+        use engine_world::{EntityId, LightKind, RenderLight};
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let mut scene = ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            view_projection: identity_matrix(),
+            meshes: vec![ViewportMesh {
+                instance_key: 1,
+                mesh_key: 1,
+                vertices: [[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]
+                    .map(|position| ViewportVertex {
+                        position,
+                        normal: [0.0, 0.0, -1.0],
+                    })
+                    .to_vec(),
+                indices: vec![0, 2, 1],
+                model: identity_matrix(),
+                color: [1.0; 4],
+                selected: false,
+            }],
+            lights: vec![RenderLight {
+                entity: EntityId::new(),
+                transform: identity_matrix(),
+                kind: LightKind::Point,
+                color: [1.0; 3],
+                intensity: 0.5,
+                range: 100.0,
+                spot_outer_angle_radians: 45.0_f32.to_radians(),
+                casts_shadows: false,
+            }],
+            guides: Vec::new(),
+            grid_vertices: Vec::new(),
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let mut sample = |kind, distance, range, intensity, rotation| {
+            scene.lights[0].kind = kind;
+            scene.lights[0].range = range;
+            scene.lights[0].intensity = intensity;
+            scene.lights[0].transform = glam::Mat4::from_rotation_translation(
+                rotation,
+                glam::Vec3::new(0.0, 0.0, 0.5 - distance),
+            )
+            .to_cols_array();
+            let frame = renderer.render(65, 65, &scene).unwrap().unwrap();
+            f32::from(frame.rgba8[(32 * 65 + 32) * 4])
+        };
+        let identity = glam::Quat::IDENTITY;
+        let ambient = sample(LightKind::Point, 1.0, 100.0, 0.0, identity);
+        for kind in [LightKind::Point, LightKind::Spot] {
+            let near = sample(kind, 1.0, 100.0, 0.5, identity) - ambient;
+            let far = sample(kind, 2.0, 100.0, 0.5, identity) - ambient;
+            assert!((near / far - 4.0).abs() < 0.15, "{kind:?}: {near}/{far}");
+            assert_eq!(sample(kind, 4.0, 4.0, 0.5, identity), ambient);
+            assert_eq!(sample(kind, 5.0, 4.0, 0.5, identity), ambient);
+            let inside = sample(kind, 3.9, 4.0, 0.5, identity);
+            assert!(inside <= ambient + 1.0, "cutoff should fade smoothly");
+            let capped = sample(kind, 0.1, 100.0, 0.001, identity);
+            assert!((sample(kind, 0.05, 100.0, 0.001, identity) - capped).abs() <= 1.0);
+        }
+        assert_eq!(
+            sample(LightKind::Directional, 1.0, 100.0, 0.5, identity),
+            sample(LightKind::Directional, 2.0, 100.0, 0.5, identity)
+        );
+        assert_eq!(
+            sample(
+                LightKind::Spot,
+                1.0,
+                100.0,
+                0.5,
+                glam::Quat::from_rotation_y(std::f32::consts::PI)
+            ),
+            ambient
+        );
+    }
 
     #[test]
     fn imported_skin_uses_live_joint_pose_and_preserves_bind_transform() {
