@@ -12,6 +12,32 @@ Windows installer build, or review automation test fails or is skipped.
 The job summary links to the run; failed step logs contain diagnostic details.
 The fresh Windows installer is saved as a workflow artifact for seven days.
 
+## Installer releases
+
+`installer-release.yml` publishes the installer artifact after a successful
+`Code quality and security` or manually started `Windows installer` run on
+`main` or `work`. It uses the completed run's exact commit and artifact; no
+installer rebuild is needed. Pull request, fork, merge-queue, and feature-branch
+builds keep their artifacts and do not publish releases.
+
+The build commit must be the merge commit of exactly one pull request into that
+branch. The release description copies that pull request's current description,
+including Markdown, verbatim (an empty description stays empty). Direct pushes
+without a matching merged PR fail the publication job with an explicit error.
+
+Release titles and tags start at `v0.2-Pre-Alpha` and increase by 0.1 from the
+highest existing pre-alpha release: `v0.3-Pre-Alpha`, through `v0.9-Pre-Alpha`,
+then `v1.0-Pre-Alpha`. The existing `v0.1-pre-alpha` is recognized. Releases are
+published as prereleases with the Windows `.exe` attached. Both build workflows
+share one publication concurrency group, and retrying a build or publication
+repairs the release for that commit rather than allocating another version.
+
+The publishing workflow must be merged into the default branch before GitHub
+can trigger it. To diagnose publication, open `Publish installer release` in
+Actions. Missing/expired artifacts, missing merged-PR metadata, or insufficient
+token permissions fail that job. After correcting the problem, rerun its failed
+job while the artifact is still available. A standalone manual installer build
+must select `main` or `work` at a merged PR commit.
 Linux headless rendering uses Mesa's CPU Vulkan driver. Both engine and language
 adapter jobs initialize the installed .NET SDK before launching parallel tests,
 so C# fixtures do not race its first-run NuGet migrations. Windows gameplay unit
