@@ -406,6 +406,7 @@ fn render_runtime(
     let game_ui = game_ui::GameUi::load(&config.snapshot_root)?;
     let mut renderer = renderer_wgpu::SceneViewportRenderer::new(BackendRequest::Auto)
         .map_err(|e| e.to_string())?;
+    renderer.set_environment_root(config.snapshot_root.clone());
     run_runtime_server_with_renderer(config, move |world, tick| {
         let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &models);
         let frame = renderer

@@ -96,6 +96,27 @@ impl AuthoringDocument {
         })
     }
 
+    /// Applies an undoable scene environment edit.
+    /// # Errors
+    /// Returns an error for read-only documents or invalid environment settings.
+    pub fn set_environment(
+        &mut self,
+        value: engine_world::SceneEnvironment,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.environment().clone();
+        if before != value {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::Environment {
+                    before,
+                    after: value,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     pub fn project(&self) -> &Project {
         &self.project
     }
@@ -869,6 +890,43 @@ mod tests {
         assert_eq!(document.world().local_transform(entity).unwrap(), transform);
         assert!(document.undo().unwrap());
         assert!(!document.world().contains(entity));
+    }
+
+    #[test]
+    fn scene_environment_is_dirty_undoable_saved_and_read_only_guarded() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("environment");
+        let project = Project::create(&root, "Environment", ProjectTemplate::Blank).unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let env = engine_world::SceneEnvironment {
+            enabled: true,
+            sky_image: "assets/sky.hdr".into(),
+            haze_density: 0.02,
+            ..engine_world::SceneEnvironment::default()
+        };
+        document.set_environment(env.clone()).unwrap();
+        assert!(document.is_modified());
+        assert_eq!(
+            engine_world::load_scene(&document.snapshot_bytes().unwrap())
+                .unwrap()
+                .document
+                .environment,
+            env
+        );
+        assert!(document.undo().unwrap());
+        assert!(!document.is_modified());
+        assert!(!document.world().environment().enabled);
+        assert!(document.redo().unwrap());
+        document.save().unwrap();
+        assert!(!document.is_modified());
+        let project = Project::open(&root).unwrap();
+        let mut reopened = AuthoringDocument::open(project, true).unwrap();
+        assert_eq!(reopened.world().environment(), &env);
+        assert!(matches!(
+            reopened.set_environment(engine_world::SceneEnvironment::default()),
+            Err(AuthoringError::ReadOnly)
+        ));
+        assert_eq!(reopened.world().environment(), &env);
     }
 
     #[test]

@@ -112,6 +112,7 @@ pub struct SceneInstance {
 /// Version-independent in-memory scene document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SceneDocument {
+    pub environment: crate::SceneEnvironment,
     pub id: SceneId,
     pub name: String,
     /// Scene-lifetime scripts, referenced exclusively by persistent asset ID.
@@ -123,6 +124,7 @@ pub struct SceneDocument {
 impl SceneDocument {
     pub fn new(name: impl Into<String>) -> Self {
         Self {
+            environment: crate::SceneEnvironment::default(),
             id: SceneId::new(),
             name: name.into(),
             startup_scripts: Vec::new(),
@@ -146,6 +148,7 @@ impl SceneDocument {
             .map(|entity| world.snapshot(entity))
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
+            environment: world.environment().clone(),
             id,
             name: name.into(),
             startup_scripts: Vec::new(),
@@ -167,6 +170,7 @@ impl SceneDocument {
             .cloned()
             .map(|snapshot| WorldCommand::Spawn(Box::new(snapshot)))
             .collect();
+        world.apply_commands(&[WorldCommand::SetEnvironment(self.environment.clone())])?;
         world.apply_commands(&commands)?;
         world.propagate_transforms();
         world.replace_instances(self.instances.clone());
@@ -265,6 +269,8 @@ pub enum SceneError {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct SceneWire {
+    #[serde(default, skip_serializing_if = "crate::SceneEnvironment::is_default")]
+    environment: crate::SceneEnvironment,
     resource_kind: String,
     schema_version: u32,
     resource_id: SceneId,
@@ -330,6 +336,9 @@ struct LightWire {
 
 impl SceneWire {
     fn from_document(document: &SceneDocument) -> Result<Self, SceneError> {
+        if !document.environment.is_valid() {
+            return Err(WorldError::InvalidEnvironment.into());
+        }
         let mut entities = document.entities.clone();
         entities.sort_by_key(|entity| entity.id);
         let entities = entities
@@ -339,6 +348,7 @@ impl SceneWire {
         let mut instances = document.instances.clone();
         instances.sort_by_key(|instance| instance.id);
         Ok(Self {
+            environment: document.environment.clone(),
             resource_kind: RESOURCE_KIND.to_owned(),
             schema_version: CURRENT_SCENE_VERSION,
             resource_id: document.id,
@@ -478,13 +488,14 @@ pub fn load_scene(bytes: &[u8]) -> Result<SceneLoad, SceneError> {
         return Err(SceneError::WrongResourceKind(probe.resource_kind));
     }
 
-    let (wire, migrated) = match probe.schema_version {
+    let (mut wire, migrated) = match probe.schema_version {
         0 => return Err(SceneError::UnsupportedOldVersion(0)),
         1 => {
             let old: SceneWireV1 =
                 ron::from_str(text).map_err(|error| SceneError::Parse(error.to_string()))?;
             (
                 SceneWire {
+                    environment: crate::SceneEnvironment::default(),
                     resource_kind: old.resource_kind,
                     schema_version: CURRENT_SCENE_VERSION,
                     resource_id: old.resource_id,
@@ -539,6 +550,16 @@ pub fn load_scene(bytes: &[u8]) -> Result<SceneLoad, SceneError> {
         }
     }
 
+    if !wire.environment.is_valid() {
+        corrupt = true;
+        diagnostics.push(SceneDiagnostic {
+            severity: SceneDiagnosticSeverity::Error,
+            entity: None,
+            component: None,
+            message: "Invalid scene environment; opened read-only".to_owned(),
+        });
+        wire.environment = crate::SceneEnvironment::default();
+    }
     let mut seen_entities = BTreeSet::new();
     let mut entities = Vec::with_capacity(wire.entities.len());
     for entity in wire.entities {
@@ -561,6 +582,7 @@ pub fn load_scene(bytes: &[u8]) -> Result<SceneLoad, SceneError> {
     }
     entities.sort_by_key(|entity| entity.id);
     let document = SceneDocument {
+        environment: wire.environment,
         id: wire.resource_id,
         name: wire.name,
         startup_scripts: wire.startup_scripts,
@@ -883,6 +905,7 @@ mod tests {
         let root = fixed_id(1);
         let child = fixed_id(2);
         SceneDocument {
+            environment: crate::SceneEnvironment::default(),
             id: SceneId::from(Uuid::from_u128(10)),
             name: "Golden".to_owned(),
             startup_scripts: Vec::new(),

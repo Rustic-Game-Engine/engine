@@ -14,6 +14,8 @@ use thiserror::Error;
 /// Errors from world mutation, reference validation, or schedule execution.
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum WorldError {
+    #[error("invalid scene environment settings")]
+    InvalidEnvironment,
     #[error("entity {0} does not exist")]
     EntityNotFound(EntityId),
     #[error("entity {0} already exists")]
@@ -43,6 +45,7 @@ pub enum WorldError {
 /// Structural/component mutations collected by systems and applied at a schedule barrier.
 #[derive(Clone, Debug, PartialEq)]
 pub enum WorldCommand {
+    SetEnvironment(crate::SceneEnvironment),
     Spawn(Box<EntitySnapshot>),
     Despawn(EntityId),
     SetParent {
@@ -156,6 +159,7 @@ struct Slot {
 
 /// Live ECS world with stable identities, generational references, and a scene graph.
 pub struct SceneWorld {
+    environment: crate::SceneEnvironment,
     id: WorldId,
     ecs: World,
     lookup: BTreeMap<EntityId, Entity>,
@@ -191,6 +195,7 @@ impl Default for SceneWorld {
 impl SceneWorld {
     pub fn new() -> Self {
         Self {
+            environment: crate::SceneEnvironment::default(),
             id: WorldId::new(),
             ecs: World::new(),
             lookup: BTreeMap::new(),
@@ -205,6 +210,10 @@ impl SceneWorld {
             transform_dirty: BTreeSet::new(),
             instances: Vec::new(),
         }
+    }
+
+    pub fn environment(&self) -> &crate::SceneEnvironment {
+        &self.environment
     }
 
     pub const fn id(&self) -> WorldId {
@@ -355,6 +364,13 @@ impl SceneWorld {
         if commands.is_empty() {
             return Ok(());
         }
+        for command in commands {
+            if let WorldCommand::SetEnvironment(value) = command
+                && !value.is_valid()
+            {
+                return Err(WorldError::InvalidEnvironment);
+            }
+        }
         let mut entities: BTreeSet<_> = self.lookup.keys().copied().collect();
         let mut parents = self.parent_map();
         let mut spawned = BTreeSet::new();
@@ -416,7 +432,7 @@ impl SceneWorld {
 
         for command in commands {
             let referenced = match command {
-                WorldCommand::Spawn(_) => None,
+                WorldCommand::Spawn(_) | WorldCommand::SetEnvironment(_) => None,
                 WorldCommand::Despawn(entity)
                 | WorldCommand::SetLocalTransform { entity, .. }
                 | WorldCommand::SetName { entity, .. }
@@ -464,6 +480,7 @@ impl SceneWorld {
                     self.insert_or_remove(*entity, Some(*value));
                     self.mark_subtree_dirty(*entity);
                 }
+                WorldCommand::SetEnvironment(value) => self.environment = value.clone(),
                 WorldCommand::SetName { entity, value } => {
                     self.insert_or_remove(*entity, value.clone().map(Name));
                 }

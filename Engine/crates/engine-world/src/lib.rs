@@ -3,6 +3,8 @@
 #![forbid(unsafe_code)]
 
 mod components;
+mod environment;
+pub use environment::SceneEnvironment;
 mod ids;
 mod primitive;
 mod render;

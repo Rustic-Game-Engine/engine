@@ -21,7 +21,7 @@ Selecting a camera displays a cyan frustum and center trajectory in the editor v
 
 ## Light
 
-Scene lights illuminate primitives in both the editor and game view. A small ambient term keeps unlit surfaces visible. The renderer uses up to 32 lights in stable entity order.
+Scene lights illuminate primitives in both the editor and game view. A small ambient term keeps unlit surfaces visible by default. An enabled [scene environment](SCENE_ENVIRONMENT.md) replaces that term with configurable ambient light and adds sun lighting and haze. The renderer uses up to 32 lights in stable entity order.
 
 - Directional: shines along local +Z throughout the scene; rotate it to change illumination.
 - Point: emits from its world position, fading smoothly to zero at Range.

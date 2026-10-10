@@ -106,6 +106,7 @@ pub(crate) fn materialize_template(
 
 fn empty_3d_scene(example_script: Option<ScriptId>) -> SceneDocument {
     let mut scene = SceneDocument {
+        environment: engine_world::SceneEnvironment::default(),
         id: SceneId::new(),
         name: "Main".to_owned(),
         startup_scripts: Vec::new(),
@@ -143,6 +144,7 @@ fn empty_3d_scene(example_script: Option<ScriptId>) -> SceneDocument {
 
 fn empty_2d_scene(example_script: Option<ScriptId>) -> SceneDocument {
     let mut scene = SceneDocument {
+        environment: engine_world::SceneEnvironment::default(),
         id: SceneId::new(),
         name: "Main".to_owned(),
         startup_scripts: Vec::new(),

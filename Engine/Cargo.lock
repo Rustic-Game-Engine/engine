@@ -3288,6 +3288,7 @@ dependencies = [
  "engine-rhi",
  "engine-world",
  "glam 0.33.6",
+ "image",
  "naga",
  "pollster 0.4.0",
  "sha2",
