@@ -1,0 +1,45 @@
+name: Publish installer release
+
+on:
+  workflow_run:
+    workflows: [Code quality and security, Windows installer]
+    types: [completed]
+
+permissions:
+  contents: write
+  actions: read
+  pull-requests: read
+
+# Both build workflows share one version sequence. Never cancel an asset upload.
+concurrency:
+  group: installer-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      contains(fromJSON('["push", "workflow_dispatch"]'), github.event.workflow_run.event) &&
+      contains(fromJSON('["main", "work"]'), github.event.workflow_run.head_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # workflow_run executes trusted default-branch tooling, never PR code.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github
+      - name: Download the completed build's installer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          BUILD_RUN_ID: ${{ github.event.workflow_run.id }}
+          ARTIFACT_NAME: ${{ github.event.workflow_run.name == 'Windows installer' && 'RusticGameEngine-Windows-Installer' || 'windows-installer' }}
+        run: gh run download "$BUILD_RUN_ID" --repo "$REPOSITORY" --name "$ARTIFACT_NAME" --dir "$RUNNER_TEMP/installer"
+      - name: Publish installer with the merged pull request description
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INSTALLER_DIRECTORY: ${{ runner.temp }}/installer
+        run: python3 .github/scripts/installer_release.py
