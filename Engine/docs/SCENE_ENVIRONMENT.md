@@ -7,7 +7,7 @@ Each scene can save its own sky image, ambient light, sun light and haze. The se
 1. Copy a **2:1 equirectangular panorama** into your project, for example `assets/sky/sunset.hdr`. Supported formats are Radiance HDR (`.hdr`), PNG, JPEG and TGA. A 4096 × 2048 image is a typical choice; each dimension must be at most 8192 pixels. Six separate cubemap faces, EXR and model files are not supported.
 2. Open the Inspector and expand **Scene sky & atmosphere**, above the selected entity's properties. You can also use it with nothing selected.
 3. Turn on **Enable scene environment** and click **Choose image…**. Select a file inside the project folder. The scene stores its project-relative path. Keep the file at that path when moving the project.
-4. Adjust **Sky rotation** to turn the panorama and **Sky exposure (stops)** to brighten or darken it. HDR images use simple Reinhard tone mapping after exposure. With no image selected, **Sky color** supplies a solid background.
+4. Adjust **Sky rotation** to turn the panorama and **Sky exposure (stops)** to brighten or darken it. HDR images use simple Reinhard tone mapping after exposure, then sRGB display encoding. PNG, JPEG and TGA colors are decoded before filtering and exposure, then encoded for display; at zero exposure their image colors are preserved. With no image selected, **Sky color** supplies a solid background.
 5. Save the scene. Undo and redo work for environment changes. The image is included in the immutable snapshot when starting Play, including unsaved environment changes.
 
 The panorama surrounds the camera at infinity: rotating the camera changes the view of the sky; moving it does not move the sky closer. **Clear image** switches to the solid color. **Reset environment** restores the disabled defaults. Disabling the environment restores the original background, ambient term and object lighting.
@@ -18,6 +18,8 @@ The panorama surrounds the camera at infinity: rotating the camera changes the v
 - **Sun color / intensity** add directional light independently of entity lights. The **Direction towards sun (X, Y, Z)** vector points from a surface towards the sun; it must be nonzero. For example, `(0.3, 0.8, 0.4)` lights upward-facing surfaces. Raising sun intensity from `0` to `1` makes it visible on geometry. Sky rotation does not rotate this direction.
 - **Haze color / density** blend distant geometry towards the haze color. **Haze starts at** sets the distance from the camera before that blend begins, in world units. Density zero disables haze. The factor is `1 - exp(-density * max(distance - start, 0))`.
 - Haze also tints the sky near the horizon. This horizon tint depends on density; the start distance controls geometry only.
+
+Inspector color values and imported material factors are linear. Lighting stays linear, lit highlights are compressed with Reinhard tone mapping, and the sky, lit surfaces and haze are encoded to sRGB for display. This preserves ambient detail and avoids immediate white clipping when ambient or sun intensity is high.
 
 For a simple daytime setup, choose a panorama, leave ambient intensity at `0.12`, set sun intensity to `1`, set haze density to `0.01` and haze start to `20`. Distant objects should gradually blend into the haze while close objects stay clear. Entity lights continue to contribute alongside the scene ambient and sun.
 
@@ -171,3 +173,4 @@ syntax; file existence, containment within the snapshot, supported format, 2:1
 aspect ratio and image limits are checked by the renderer on the next frame.
 Missing or invalid images show a renderer error. Clear `sky_image` or choose a
 valid snapshot image, and restart Play after adding or changing image files.
+If the sky is visible but objects are dark, increase ambient or sun intensity; the panorama itself does not illuminate objects. If haze is invisible, increase density or reduce the start distance. Scenes saved before environment settings were added open with the environment disabled. The corrected display encoding and highlight compression also apply to those scenes, so their lighting can look different from older builds. Damaged environment settings open read-only with a scene diagnostic.
