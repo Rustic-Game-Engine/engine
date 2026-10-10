@@ -91,9 +91,6 @@ struct VertexOutput {
     output.world_position = (uniforms.model * vec4<f32>(input.position, 1.0)).xyz;
     return output;
 }
-fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
-    return select(pow((color + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), color / 12.92, color <= vec3<f32>(0.04045));
-}
 fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), color * 12.92, color <= vec3<f32>(0.0031308));
 }
@@ -124,11 +121,11 @@ fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
     }
     let distance = max(length(input.world_position - uniforms.camera.xyz) - uniforms.camera.w, 0.0);
     let haze = 1.0 - exp(-uniforms.haze.w * distance);
-    // Inspector material colors and transported pixels are sRGB. Accumulate light
-    // in linear space, compress highlights, then encode once for the UI/runtime.
-    let radiance = srgb_to_linear(uniforms.color.rgb) * illumination;
+    // Inspector and imported material colors are already linear. Compress lit
+    // highlights, mix the linear haze color, then encode once for the UI/runtime.
+    let radiance = uniforms.color.rgb * illumination;
     let mapped = radiance / (vec3<f32>(1.0) + radiance);
-    return vec4<f32>(mix(linear_to_srgb(mapped), uniforms.haze.rgb, haze), uniforms.color.a);
+    return vec4<f32>(linear_to_srgb(mix(mapped, uniforms.haze.rgb, haze)), uniforms.color.a);
 }
 ";
 
@@ -2433,11 +2430,11 @@ mod tests {
                 assert_eq!(sample(&bright, x, y), sample(&bright, 32, 32));
             }
         }
-        // Material colors are authored as sRGB; do not apply light in that space.
+        // Inspector and imported colors are linear; do not decode them a second time.
         scene.meshes[0].color = [0.5, 0.5, 0.5, 1.0];
         scene.lights[0].intensity = 1.0;
         let gray = renderer.render(65, 65, &scene).unwrap().unwrap();
-        assert!((118..=125).contains(&sample(&gray, 32, 32)));
+        assert!((159..=165).contains(&sample(&gray, 32, 32)));
         // The environment sun uses the same display conversion as scene lights.
         scene.lights.clear();
         scene.meshes[0].color = [1.0; 4];
@@ -2447,6 +2444,14 @@ mod tests {
         scene.environment.sun_intensity = 2.0;
         let sun = renderer.render(65, 65, &scene).unwrap().unwrap();
         assert_eq!(sample(&sun, 32, 32), sample(&bright, 32, 32));
+        // A fully hazed surface displays the linear inspector haze color as sRGB.
+        scene.environment.haze_color = [0.25, 0.5, 0.75];
+        scene.environment.haze_density = 100.0;
+        let haze = renderer.render(65, 65, &scene).unwrap().unwrap();
+        let center = (32 * 65 + 32) * 4;
+        for (actual, expected) in haze.rgba8[center..center + 3].iter().zip([137, 188, 225]) {
+            assert!(actual.abs_diff(expected) <= 1);
+        }
     }
 
     #[test]
@@ -2820,9 +2825,9 @@ mod tests {
                     sky_image: "sky.hdr".into(),
                     rotation_degrees: 180.0,
                     exposure: 1.5,
-                    ambient_color: [0.5, 0.72, 0.93],
+                    ambient_color: [0.214, 0.477, 0.85],
                     ambient_intensity: 5.0,
-                    sun_color: [1.0, 0.85, 0.0],
+                    sun_color: [1.0, 0.7, 0.0],
                     sun_intensity: 10.0,
                     sun_direction: [0.3, 0.8, 0.4],
                     haze_density: 0.098,
