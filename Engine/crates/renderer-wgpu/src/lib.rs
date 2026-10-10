@@ -2405,7 +2405,7 @@ mod tests {
             grid_vertices: Vec::new(),
             clear_color: [0.0, 0.0, 0.0, 1.0],
         };
-        let mut sample = |kind, distance, range, intensity, rotation| {
+        let mut sample = |kind, distance: f32, range, intensity, rotation| {
             scene.lights[0].kind = kind;
             scene.lights[0].range = range;
             scene.lights[0].intensity = intensity;
