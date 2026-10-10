@@ -2790,6 +2790,12 @@ mod tests {
     fn environment_sun_shades_cube_faces_consistently_when_orbiting() {
         use glam::{Mat4, Vec3};
         let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let root = std::env::temp_dir().join(format!("rustic-lighting-hdr-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        image::codecs::hdr::HdrEncoder::new(std::fs::File::create(root.join("sky.hdr")).unwrap())
+            .encode(&[image::Rgb([4.0, 0.2, 0.1]); 8], 4, 2)
+            .unwrap();
+        renderer.set_environment_root(&root);
         let mut mesh = selected_cube(Mat4::IDENTITY);
         mesh.color = [1.0; 4];
         for eye in [Vec3::new(3.0, 2.0, 3.0), Vec3::new(-3.0, 2.0, -3.0)] {
@@ -2801,48 +2807,67 @@ mod tests {
                 10_000.0,
             );
             let view_projection = projection * view;
-            let scene = ViewportScene {
-                environment: engine_world::SceneEnvironment {
+            for environment in [
+                engine_world::SceneEnvironment {
                     enabled: true,
                     sun_intensity: 8.0,
                     sun_color: [1.0; 3],
                     sun_direction: eye.to_array(),
                     ..Default::default()
                 },
-                camera_position: eye.to_array(),
-                view_projection: view_projection.to_cols_array(),
-                meshes: vec![mesh.clone()],
-                lights: Vec::new(),
-                guides: Vec::new(),
-                grid_vertices: Vec::new(),
-                clear_color: [0.0, 0.0, 0.0, 1.0],
-            };
-            let frame = renderer.render(256, 256, &scene).unwrap().unwrap();
-            for axis in 0..3 {
-                let normal = Vec3::AXES[axis] * eye[axis].signum();
-                let mut face_value: Option<u8> = None;
-                for u in [-0.2, 0.0, 0.2] {
-                    for v in [-0.2, 0.0, 0.2] {
-                        let position = normal * 0.5
-                            + Vec3::AXES[(axis + 1) % 3] * u
-                            + Vec3::AXES[(axis + 2) % 3] * v;
-                        let clip = view_projection * position.extend(1.0);
-                        let ndc = clip.truncate() / clip.w;
-                        let x = ((ndc.x * 0.5 + 0.5) * 256.0) as usize;
-                        let y = ((0.5 - ndc.y * 0.5) * 256.0) as usize;
-                        let pixel = frame.rgba8[(y * 256 + x) * 4];
-                        assert!(pixel < 250, "sun-lit cube face clipped at {position}");
-                        if let Some(value) = face_value {
-                            assert!(
-                                pixel.abs_diff(value) <= 1,
-                                "flat face has a dark patch at {position}: {pixel} vs {value}"
-                            );
+                engine_world::SceneEnvironment {
+                    enabled: true,
+                    sky_image: "sky.hdr".into(),
+                    rotation_degrees: 180.0,
+                    exposure: 1.5,
+                    ambient_color: [0.5, 0.72, 0.93],
+                    ambient_intensity: 5.0,
+                    sun_color: [1.0, 0.85, 0.0],
+                    sun_intensity: 10.0,
+                    sun_direction: [0.3, 0.8, 0.4],
+                    haze_density: 0.098,
+                    haze_start: 100.0,
+                    ..Default::default()
+                },
+            ] {
+                let scene = ViewportScene {
+                    environment,
+                    camera_position: eye.to_array(),
+                    view_projection: view_projection.to_cols_array(),
+                    meshes: vec![mesh.clone()],
+                    lights: Vec::new(),
+                    guides: Vec::new(),
+                    grid_vertices: Vec::new(),
+                    clear_color: [0.0, 0.0, 0.0, 1.0],
+                };
+                let frame = renderer.render(256, 256, &scene).unwrap().unwrap();
+                for axis in 0..3 {
+                    let normal = Vec3::AXES[axis] * eye[axis].signum();
+                    let mut face_value: Option<u8> = None;
+                    for u in [-0.2, 0.0, 0.2] {
+                        for v in [-0.2, 0.0, 0.2] {
+                            let position = normal * 0.5
+                                + Vec3::AXES[(axis + 1) % 3] * u
+                                + Vec3::AXES[(axis + 2) % 3] * v;
+                            let clip = view_projection * position.extend(1.0);
+                            let ndc = clip.truncate() / clip.w;
+                            let x = ((ndc.x * 0.5 + 0.5) * 256.0) as usize;
+                            let y = ((0.5 - ndc.y * 0.5) * 256.0) as usize;
+                            let pixel = frame.rgba8[(y * 256 + x) * 4];
+                            assert!(pixel < 250, "sun-lit cube face clipped at {position}");
+                            if let Some(value) = face_value {
+                                assert!(
+                                    pixel.abs_diff(value) <= 1,
+                                    "flat face has a dark patch at {position}: {pixel} vs {value}"
+                                );
+                            }
+                            face_value = Some(pixel);
                         }
-                        face_value = Some(pixel);
                     }
                 }
             }
         }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
