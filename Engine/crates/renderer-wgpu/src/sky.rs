@@ -23,8 +23,17 @@ struct Output {
     output.position = vec4<f32>(output.clip, 1.0, 1.0);
     return output;
 }
+fn srgb_to_linear(color: vec3<f32>) -> vec3<f32> {
+    return select(pow((color + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)), color / 12.92, color <= vec3<f32>(0.04045));
+}
+fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), color * 12.92, color <= vec3<f32>(0.0031308));
+}
 fn texel(p: vec2<i32>, size: vec2<i32>) -> vec3<f32> {
-    return textureLoad(panorama, vec2<i32>(((p.x % size.x) + size.x) % size.x, clamp(p.y, 0, size.y - 1)), 0).rgb;
+    let color = textureLoad(panorama, vec2<i32>(((p.x % size.x) + size.x) % size.x, clamp(p.y, 0, size.y - 1)), 0).rgb;
+    // HDR pixels are linear; ordinary panorama pixels need decoding before filtering.
+    if uniforms.options.w > 0.5 { return color; }
+    return srgb_to_linear(color);
 }
 @fragment fn fs_main(input: Output) -> @location(0) vec4<f32> {
     let near = uniforms.inverse_view_projection * vec4<f32>(input.clip, 0.0, 1.0);
@@ -43,7 +52,7 @@ fn texel(p: vec2<i32>, size: vec2<i32>) -> vec3<f32> {
     }
     let horizon = exp(-abs(direction.y) * 8.0) * (1.0 - exp(-uniforms.haze.w * 100.0));
     color = mix(color, uniforms.haze.rgb, horizon);
-    return vec4<f32>(color, 1.0);
+    return vec4<f32>(linear_to_srgb(color), 1.0);
 }
 ";
 
@@ -417,9 +426,9 @@ mod tests {
                 .as_chunks::<4>()
                 .0
                 .iter()
-                .all(|p| p[0].abs_diff(51) <= 1
-                    && p[1].abs_diff(102) <= 1
-                    && p[2].abs_diff(153) <= 1)
+                .all(|p| p[0].abs_diff(124) <= 1
+                    && p[1].abs_diff(170) <= 1
+                    && p[2].abs_diff(203) <= 1)
         );
         let root = std::env::temp_dir().join(format!("rustic-sky-test-{}", std::process::id()));
         std::fs::create_dir_all(&root).unwrap();
@@ -435,6 +444,13 @@ mod tests {
         renderer.set_environment_root(&root);
         scene.environment.sky_image = "sky.png".into();
         let base = renderer.render(32, 32, &scene).unwrap().unwrap().rgba8;
+        assert!(
+            base.as_chunks::<4>()
+                .0
+                .iter()
+                .any(|p| p[0] == 180 || p[1] == 180),
+            "ordinary panorama colors must survive the linear round trip"
+        );
         scene.environment.rotation_degrees = 180.0;
         let rotated = renderer.render(32, 32, &scene).unwrap().unwrap().rgba8;
         assert_ne!(base, rotated);
@@ -454,6 +470,22 @@ mod tests {
         assert!(
             darker.iter().map(|v| u64::from(*v)).sum::<u64>()
                 < translated.iter().map(|v| u64::from(*v)).sum::<u64>()
+        );
+        image::codecs::hdr::HdrEncoder::new(std::fs::File::create(root.join("sky.hdr")).unwrap())
+            .encode(&[image::Rgb([4.0, 1.0, 0.25]); 8], 4, 2)
+            .unwrap();
+        scene.environment.sky_image = "sky.hdr".into();
+        scene.environment.exposure = 0.0;
+        let hdr = renderer.render(32, 32, &scene).unwrap().unwrap();
+        assert!(
+            hdr.rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|p| p[0].abs_diff(231) <= 1
+                    && p[1].abs_diff(188) <= 1
+                    && p[2].abs_diff(124) <= 1),
+            "HDR sky highlights must be compressed and display encoded"
         );
         scene.environment.sky_image = "missing.png".into();
         assert!(

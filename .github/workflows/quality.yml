@@ -68,6 +68,9 @@ jobs:
         run: |
           cargo test --locked --workspace
           cargo test --locked --manifest-path apps/luau-host/Cargo.toml
+      - name: Verify rendered lighting and viewport
+        if: ${{ !cancelled() }}
+        run: cargo test --locked -p renderer-wgpu -- --include-ignored
       - name: Check all targets
         if: ${{ !cancelled() }}
         run: cargo check --locked --workspace --all-targets

@@ -91,6 +91,9 @@ struct VertexOutput {
     output.world_position = (uniforms.model * vec4<f32>(input.position, 1.0)).xyz;
     return output;
 }
+fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
+    return select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), color * 12.92, color <= vec3<f32>(0.0031308));
+}
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     if uniforms.lighting.y > 0.5 { return uniforms.color; }
     var illumination = uniforms.ambient.rgb * uniforms.ambient.w;
@@ -103,8 +106,12 @@ struct VertexOutput {
             let offset = light.position_kind.xyz - input.world_position;
             let distance = length(offset);
             direction = offset / max(distance, 0.0001);
-            let falloff = max(1.0 - distance / max(light.direction_range.w, 0.0001), 0.0);
-            attenuation = falloff * falloff;
+            // Inverse-square irradiance, with a smooth finite-range cutoff.
+            // Clamp only the near-field singularity (0.1 world units).
+            let relative_distance = distance / max(light.direction_range.w, 0.0001);
+            let relative_distance_squared = relative_distance * relative_distance;
+            let cutoff = max(1.0 - relative_distance_squared * relative_distance_squared, 0.0);
+            attenuation = cutoff * cutoff / max(dot(offset, offset), 0.01);
             if light.position_kind.w > 1.5 {
                 let cosine = dot(-direction, light.direction_range.xyz);
                 attenuation *= smoothstep(light.cone.x, light.cone.y, cosine);
@@ -114,7 +121,11 @@ struct VertexOutput {
     }
     let distance = max(length(input.world_position - uniforms.camera.xyz) - uniforms.camera.w, 0.0);
     let haze = 1.0 - exp(-uniforms.haze.w * distance);
-    return vec4<f32>(mix(uniforms.color.rgb * illumination, uniforms.haze.rgb, haze), uniforms.color.a);
+    // Inspector and imported material colors are already linear. Compress lit
+    // highlights, mix the linear haze color, then encode once for the UI/runtime.
+    let radiance = uniforms.color.rgb * illumination;
+    let mapped = radiance / (vec3<f32>(1.0) + radiance);
+    return vec4<f32>(linear_to_srgb(mix(mapped, uniforms.haze.rgb, haze)), uniforms.color.a);
 }
 ";
 
@@ -2360,6 +2371,175 @@ mod tests {
     use super::*;
 
     #[test]
+    fn viewport_lighting_shader_is_valid() {
+        validate_and_reflect_wgsl(VIEWPORT_SHADER).unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
+    fn lighting_preserves_shadow_detail_and_highlight_gradation() {
+        use engine_world::{EntityId, LightKind, RenderLight};
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let mut scene = ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.0; 3],
+            view_projection: identity_matrix(),
+            meshes: vec![ViewportMesh {
+                instance_key: 1,
+                mesh_key: 1,
+                vertices: [[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]
+                    .map(|position| ViewportVertex {
+                        position,
+                        normal: [0.0, 0.0, -1.0],
+                    })
+                    .to_vec(),
+                indices: vec![0, 2, 1],
+                model: identity_matrix(),
+                color: [1.0; 4],
+                selected: false,
+            }],
+            lights: vec![RenderLight {
+                entity: EntityId::new(),
+                transform: identity_matrix(),
+                kind: LightKind::Directional,
+                color: [1.0; 3],
+                intensity: 0.0,
+                range: 10.0,
+                spot_outer_angle_radians: 45.0_f32.to_radians(),
+                casts_shadows: false,
+            }],
+            guides: Vec::new(),
+            grid_vertices: Vec::new(),
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let sample = |frame: &RenderedFrame, x: usize, y: usize| frame.rgba8[(y * 65 + x) * 4];
+        let ambient = renderer.render(65, 65, &scene).unwrap().unwrap();
+        assert!((85..=95).contains(&sample(&ambient, 32, 32)));
+        scene.lights[0].intensity = 2.0;
+        let bright = renderer.render(65, 65, &scene).unwrap().unwrap();
+        scene.lights[0].intensity = 4.0;
+        let brighter = renderer.render(65, 65, &scene).unwrap().unwrap();
+        assert!(sample(&brighter, 32, 32) > sample(&bright, 32, 32));
+        assert!(
+            sample(&brighter, 32, 32) < 250,
+            "highlights must not clip to white"
+        );
+        // Uniform lighting on one flat face must not produce dark pixel blocks.
+        for y in 24..40 {
+            for x in 24..40 {
+                assert_eq!(sample(&bright, x, y), sample(&bright, 32, 32));
+            }
+        }
+        // Inspector and imported colors are linear; do not decode them a second time.
+        scene.meshes[0].color = [0.5, 0.5, 0.5, 1.0];
+        scene.lights[0].intensity = 1.0;
+        let gray = renderer.render(65, 65, &scene).unwrap().unwrap();
+        assert!((159..=165).contains(&sample(&gray, 32, 32)));
+        // The environment sun uses the same display conversion as scene lights.
+        scene.lights.clear();
+        scene.meshes[0].color = [1.0; 4];
+        scene.environment.enabled = true;
+        scene.environment.sun_direction = [0.0, 0.0, -1.0];
+        scene.environment.sun_color = [1.0; 3];
+        scene.environment.sun_intensity = 2.0;
+        let sun = renderer.render(65, 65, &scene).unwrap().unwrap();
+        assert_eq!(sample(&sun, 32, 32), sample(&bright, 32, 32));
+        // A fully hazed surface displays the linear inspector haze color as sRGB.
+        scene.environment.haze_color = [0.25, 0.5, 0.75];
+        scene.environment.haze_density = 100.0;
+        let haze = renderer.render(65, 65, &scene).unwrap().unwrap();
+        let center = (32 * 65 + 32) * 4;
+        for (actual, expected) in haze.rgba8[center..center + 3].iter().zip([137, 188, 225]) {
+            assert!(actual.abs_diff(expected) <= 1);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
+    fn local_lights_obey_inverse_square_falloff_and_range() {
+        use engine_world::{EntityId, LightKind, RenderLight};
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let mut scene = ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.0; 3],
+            view_projection: identity_matrix(),
+            meshes: vec![ViewportMesh {
+                instance_key: 1,
+                mesh_key: 1,
+                vertices: [[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]
+                    .map(|position| ViewportVertex {
+                        position,
+                        normal: [0.0, 0.0, -1.0],
+                    })
+                    .to_vec(),
+                indices: vec![0, 2, 1],
+                model: identity_matrix(),
+                color: [1.0; 4],
+                selected: false,
+            }],
+            lights: vec![RenderLight {
+                entity: EntityId::new(),
+                transform: identity_matrix(),
+                kind: LightKind::Point,
+                color: [1.0; 3],
+                intensity: 0.5,
+                range: 100.0,
+                spot_outer_angle_radians: 45.0_f32.to_radians(),
+                casts_shadows: false,
+            }],
+            guides: Vec::new(),
+            grid_vertices: Vec::new(),
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let mut sample = |kind, distance: f32, range, intensity, rotation| {
+            scene.lights[0].kind = kind;
+            scene.lights[0].range = range;
+            scene.lights[0].intensity = intensity;
+            scene.lights[0].transform = glam::Mat4::from_rotation_translation(
+                rotation,
+                glam::Vec3::new(0.0, 0.0, 0.5 - distance),
+            )
+            .to_cols_array();
+            let frame = renderer.render(65, 65, &scene).unwrap().unwrap();
+            // Recover linear irradiance before comparing physical falloff.
+            let encoded = f32::from(frame.rgba8[(32 * 65 + 32) * 4]) / 255.0;
+            let mapped = if encoded <= 0.04045 {
+                encoded / 12.92
+            } else {
+                ((encoded + 0.055) / 1.055).powf(2.4)
+            };
+            255.0 * mapped / (1.0 - mapped)
+        };
+        let identity = glam::Quat::IDENTITY;
+        let ambient = sample(LightKind::Point, 1.0, 100.0, 0.0, identity);
+        for kind in [LightKind::Point, LightKind::Spot] {
+            let near = sample(kind, 1.0, 100.0, 0.5, identity) - ambient;
+            let far = sample(kind, 2.0, 100.0, 0.5, identity) - ambient;
+            assert!((near / far - 4.0).abs() < 0.25, "{kind:?}: {near}/{far}");
+            assert_eq!(sample(kind, 4.0, 4.0, 0.5, identity), ambient);
+            assert_eq!(sample(kind, 5.0, 4.0, 0.5, identity), ambient);
+            let inside = sample(kind, 3.9, 4.0, 0.5, identity);
+            assert!(inside <= ambient + 1.0, "cutoff should fade smoothly");
+            let capped = sample(kind, 0.1, 100.0, 0.001, identity);
+            assert!((sample(kind, 0.05, 100.0, 0.001, identity) - capped).abs() <= 1.0);
+        }
+        assert_eq!(
+            sample(LightKind::Directional, 1.0, 100.0, 0.5, identity),
+            sample(LightKind::Directional, 2.0, 100.0, 0.5, identity)
+        );
+        assert_eq!(
+            sample(
+                LightKind::Spot,
+                1.0,
+                100.0,
+                0.5,
+                glam::Quat::from_rotation_y(std::f32::consts::PI)
+            ),
+            ambient
+        );
+    }
+
+    #[test]
     fn imported_skin_uses_live_joint_pose_and_preserves_bind_transform() {
         let bytes =
             include_bytes!("../../engine-assets/tests/fixtures/skinned_animation.gltf").to_vec();
@@ -2603,6 +2783,96 @@ mod tests {
             color: [0.2, 0.35, 0.65, 1.0],
             selected: true,
         }
+    }
+
+    #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "projected fixture samples lie inside the 256-pixel render target"
+    )]
+    fn environment_sun_shades_cube_faces_consistently_when_orbiting() {
+        use glam::{Mat4, Vec3};
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let root = std::env::temp_dir().join(format!("rustic-lighting-hdr-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        image::codecs::hdr::HdrEncoder::new(std::fs::File::create(root.join("sky.hdr")).unwrap())
+            .encode(&[image::Rgb([4.0, 0.2, 0.1]); 8], 4, 2)
+            .unwrap();
+        renderer.set_environment_root(&root);
+        let mut mesh = selected_cube(Mat4::IDENTITY);
+        mesh.color = [1.0; 4];
+        for eye in [Vec3::new(3.0, 2.0, 3.0), Vec3::new(-3.0, 2.0, -3.0)] {
+            let view = glam::camera::rh::view::look_at_mat4(eye, Vec3::ZERO, Vec3::Y);
+            let projection = glam::camera::rh::proj::directx::perspective(
+                55.0_f32.to_radians(),
+                1.0,
+                0.05,
+                10_000.0,
+            );
+            let view_projection = projection * view;
+            for environment in [
+                engine_world::SceneEnvironment {
+                    enabled: true,
+                    sun_intensity: 8.0,
+                    sun_color: [1.0; 3],
+                    sun_direction: eye.to_array(),
+                    ..Default::default()
+                },
+                engine_world::SceneEnvironment {
+                    enabled: true,
+                    sky_image: "sky.hdr".into(),
+                    rotation_degrees: 180.0,
+                    exposure: 1.5,
+                    ambient_color: [0.214, 0.477, 0.85],
+                    ambient_intensity: 5.0,
+                    sun_color: [1.0, 0.7, 0.0],
+                    sun_intensity: 10.0,
+                    sun_direction: [0.3, 0.8, 0.4],
+                    haze_density: 0.098,
+                    haze_start: 100.0,
+                    ..Default::default()
+                },
+            ] {
+                let scene = ViewportScene {
+                    environment,
+                    camera_position: eye.to_array(),
+                    view_projection: view_projection.to_cols_array(),
+                    meshes: vec![mesh.clone()],
+                    lights: Vec::new(),
+                    guides: Vec::new(),
+                    grid_vertices: Vec::new(),
+                    clear_color: [0.0, 0.0, 0.0, 1.0],
+                };
+                let frame = renderer.render(256, 256, &scene).unwrap().unwrap();
+                for axis in 0..3 {
+                    let normal = Vec3::AXES[axis] * eye[axis].signum();
+                    let mut face_value: Option<u8> = None;
+                    for u in [-0.2, 0.0, 0.2] {
+                        for v in [-0.2, 0.0, 0.2] {
+                            let position = normal * 0.5
+                                + Vec3::AXES[(axis + 1) % 3] * u
+                                + Vec3::AXES[(axis + 2) % 3] * v;
+                            let clip = view_projection * position.extend(1.0);
+                            let ndc = clip.truncate() / clip.w;
+                            let x = ((ndc.x * 0.5 + 0.5) * 256.0) as usize;
+                            let y = ((0.5 - ndc.y * 0.5) * 256.0) as usize;
+                            let pixel = frame.rgba8[(y * 256 + x) * 4];
+                            assert!(pixel < 250, "sun-lit cube face clipped at {position}");
+                            if let Some(value) = face_value {
+                                assert!(
+                                    pixel.abs_diff(value) <= 1,
+                                    "flat face has a dark patch at {position}: {pixel} vs {value}"
+                                );
+                            }
+                            face_value = Some(pixel);
+                        }
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
