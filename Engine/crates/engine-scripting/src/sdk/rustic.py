@@ -312,6 +312,14 @@ class AudioVoice:
     def resume(self): return rustic.query(dict(op="audio_resume",entity=self.id))
 class Audio:
     @staticmethod
+    def get_output_devices(): return rustic.query(dict(op="audio_get_output_devices"))
+    @staticmethod
+    def get_input_devices(): return rustic.query(dict(op="audio_get_input_devices"))
+    @staticmethod
+    def set_output_device(device=None): return rustic.query(dict(op="audio_set_output_device",device=device))
+    @staticmethod
+    def set_input_device(device=None): return rustic.query(dict(op="audio_set_input_device",device=device))
+    @staticmethod
     def play(source,options=None): return AudioVoice(rustic.query(dict(options or {},op="audio_play",source=source)))
     @staticmethod
     def playAt(source,position,options=None): return Audio.play(source,dict(options or {},position=position))

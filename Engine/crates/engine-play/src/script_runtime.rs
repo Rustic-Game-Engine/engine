@@ -1096,6 +1096,27 @@ impl GameplayHost for RuntimeHost {
         }
         if op.starts_with("audio_") {
             let mut context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
+            match op {
+                "audio_get_output_devices" | "audio_get_input_devices" => {
+                    return context
+                        .audio_output
+                        .devices(op == "audio_get_input_devices");
+                }
+                "audio_set_output_device" | "audio_set_input_device" => {
+                    let device = query.get("device").filter(|v| !v.is_null());
+                    let id = device
+                        .map(|v| {
+                            v.as_str()
+                                .ok_or("audio device must be an ID string or null")
+                        })
+                        .transpose()?;
+                    context
+                        .audio_output
+                        .select(op == "audio_set_input_device", id)?;
+                    return Ok(serde_json::Value::Null);
+                }
+                _ => {}
+            }
             let owner = Owner {
                 entity_bound: self.entity_bound,
                 scene: context.scene,
@@ -2525,6 +2546,33 @@ mod tests {
             logs: Arc::new(Mutex::new(VecDeque::new())),
             dropped_logs: Arc::new(Mutex::new(0)),
             enabled: true,
+        }
+    }
+
+    #[test]
+    fn audio_device_queries_validate_ids_and_report_headless_hosts() {
+        let world = Arc::new(Mutex::new(SceneWorld::new()));
+        let mut host = environment_host(&world);
+        for direction in ["input", "output"] {
+            assert_eq!(
+                host.gameplay_query(
+                    serde_json::json!({"op":format!("audio_get_{direction}_devices")})
+                )
+                .unwrap(),
+                serde_json::json!([])
+            );
+            for invalid in [
+                serde_json::json!(42),
+                serde_json::json!({"id":"device"}),
+                serde_json::json!([]),
+            ] {
+                let error = host.gameplay_query(serde_json::json!({"op":format!("audio_set_{direction}_device"),"device":invalid})).unwrap_err();
+                assert!(error.contains("ID string or null"), "{error}");
+            }
+            for id in [serde_json::Value::Null, serde_json::json!("missing")] {
+                let error = host.gameplay_query(serde_json::json!({"op":format!("audio_set_{direction}_device"),"device":id})).unwrap_err();
+                assert!(error.contains("unavailable"), "{error}");
+            }
         }
     }
 

@@ -100,6 +100,10 @@
   Animation.ik=(root,middle,tip,target,opts={})=>start(rustic.query({op:'animation_ik',root:entity(root),middle:entity(middle),tip:entity(tip),target,pole:opts.pole,duration:opts.duration||0,weight:opts.weight==null?1:opts.weight,easing:opts.easing||'Linear'}));
   Animation.footPlacement=Animation.ik;Animation.lookAt=Movement.lookAt;Animation.headTracking=Movement.lookAt;Animation.recoil=(o,r,t,e)=>start(tween(o,'Rotation',r,t,e),{repeats:1,pingPong:true});
   const Audio={play:(source,opts={})=>{const id=rustic.query({...opts,op:'audio_play',source});return {id,stop:()=>rustic.query({op:'audio_stop',entity:id}),pause:()=>rustic.query({op:'audio_pause',entity:id}),resume:()=>rustic.query({op:'audio_resume',entity:id})};},
+    get_output_devices:()=>rustic.query({op:'audio_get_output_devices'}),
+    get_input_devices:()=>rustic.query({op:'audio_get_input_devices'}),
+    set_output_device:(device=null)=>rustic.query({op:'audio_set_output_device',device}),
+    set_input_device:(device=null)=>rustic.query({op:'audio_set_input_device',device}),
     playAt:(source,position,opts={})=>Audio.play(source,{...opts,position}),volume:(v,value)=>rustic.query({op:'audio_volume',entity:entity(v),value}),pitch:(v,value)=>rustic.query({op:'audio_pitch',entity:entity(v),value}),
     fadeIn:(v,t,e,volume=1)=>start(tween(v,'Volume',volume,t,e,0)),fadeOut:(v,t,e)=>Tween.to(v,'Volume',0,t,e),
     crossfade:(a,b,t,e)=>start({kind:'parallel',actions:[tween(a,'Volume',0,t,e),tween(b,'Volume',1,t,e,0)]})};globalThis.Audio=Audio;

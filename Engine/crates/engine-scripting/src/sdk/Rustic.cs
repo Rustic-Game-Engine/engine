@@ -213,6 +213,10 @@ static class Rustic {
         public static Gameplay.Handle recoil(string e,double[] rotation,double duration,string easing="Linear")=>Gameplay.Start(Tween.Action(e,"Rotation",rotation,duration,easing),false,1,true);
     }
     public static class Audio{
+        public static JsonElement get_output_devices()=>Query(new{op="audio_get_output_devices"});
+        public static JsonElement get_input_devices()=>Query(new{op="audio_get_input_devices"});
+        public static void set_output_device(string? device=null)=>Query(new{op="audio_set_output_device",device});
+        public static void set_input_device(string? device=null)=>Query(new{op="audio_set_input_device",device});
         public sealed record Voice(string Id){public void stop()=>Query(new{op="audio_stop",entity=Id});public void pause()=>Query(new{op="audio_pause",entity=Id});public void resume()=>Query(new{op="audio_resume",entity=Id});}
         public static Voice play(string source,double volume=1,double pitch=1,bool loop=false)=>new(Query(new{op="audio_play",source,volume,pitch,loop}).GetString()!);
         public static Voice playAt(string source,double[] position,double volume=1,double pitch=1,bool loop=false)=>new(Query(new{op="audio_play",source,position,volume,pitch,loop}).GetString()!);

@@ -219,6 +219,10 @@ class Rustic {
         static Gameplay.Handle recoil(String e,double[] rotation,double duration,String ease){return Gameplay.start(Tween.action(e,"Rotation",rotation,duration,ease),false,1,true);}
     }
     static class Audio{
+        static Object get_output_devices(){return query(args("audio_get_output_devices"));}
+        static Object get_input_devices(){return query(args("audio_get_input_devices"));}
+        static void set_output_device(String device){query(args("audio_set_output_device","device",device));}
+        static void set_input_device(String device){query(args("audio_set_input_device","device",device));}
         record Voice(String id){void stop(){query(args("audio_stop","entity",id));}void pause(){query(args("audio_pause","entity",id));}void resume(){query(args("audio_resume","entity",id));}}
         static Voice play(String source,double volume,double pitch,boolean loop){return new Voice((String)query(args("audio_play","source",source,"volume",volume,"pitch",pitch,"loop",loop)));}
         static Voice playAt(String source,double[] position,double volume,double pitch,boolean loop){return new Voice((String)query(args("audio_play","source",source,"position",position,"volume",volume,"pitch",pitch,"loop",loop)));}
