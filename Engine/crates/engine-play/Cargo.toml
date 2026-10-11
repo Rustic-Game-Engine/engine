@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 serde_json.workspace = true
+hound.workspace = true
 engine-assets = { path = "../engine-assets", version = "0.1.0" }
 engine-core = { path = "../engine-core", version = "0.1.0" }
 engine-scripting = { path = "../engine-scripting", version = "0.1.0" }
@@ -27,4 +28,5 @@ tempfile.workspace = true
 workspace = true
 
 [target.'cfg(windows)'.dependencies]
+cpal = "0.16"
 rodio = { version = "0.21", default-features = false, features = ["playback"] }

@@ -198,3 +198,105 @@ globalThis.behavior = {
 - Voices are owner-bound, with at most 1024 retained voices.
 - Check script attachment, enabled state and the Console when an operation fails. Asynchronous errors also appear in operation state. Callback exceptions disable the owner and clean up its actions.
 - Owner destruction, disable, successful reload or Stop cleans up owned actions and subscriptions. Failed reload retains the previous behavior's operations. See [Operation handles](/docs/api/operation-handles) for controls and lifetime details.
+
+## Record audio and read a hot microphone (Lua and Luau)
+
+Create a Lua or Luau Object Component script in `scripts/`, attach it to an
+**enabled** scene object, and press **Play**. Start capture inside `Start` or
+another callback. Capture methods use camel case and colon syntax:
+
+```lua
+local rec
+return {
+  Start = function()
+    rec = rustic.game:startRecording()
+  end,
+  Stop = function()
+    rec:stopRecording()
+    local packet = rec:read()
+    -- packet.samples contains interleaved floating-point PCM.
+    -- Keep reading until #packet.samples == 0 to consume the recording.
+    print(packet.sampleRate, packet.channels, #packet.samples)
+    rec:unload()
+  end
+}
+```
+
+`rustic.game:startRecording(path?, options?)` returns a script-owned recording
+handle. With no path it retains audio in memory, so the variable remains usable
+after `:stopRecording()`. The default source is game mixer output: 48,000 Hz,
+stereo, interleaved float PCM. This records audio, not video. Scene clock scaling
+and paused playback affect the game audio being recorded.
+
+To write a WAV file as well, pass a new `.wav` filename:
+
+```lua
+local rec = rustic.game:startRecording("C:/Users/YourName/Recordings/session.wav")
+-- Later, inside a callback:
+rec:stopRecording() -- finalizes the WAV header; returns rec
+```
+
+Use an absolute path to keep the file outside the temporary play snapshot.
+Relative paths resolve inside the runtime snapshot directory. Parent directories
+must already exist. Capture creates a new file and refuses to overwrite an
+existing file. The output is a 32-bit floating-point WAV, retaining the same PCM
+in the handle. A missing directory, invalid extension or unwritable destination
+raises a script error at start; catch expected failures with `pcall`.
+
+On Windows, microphone recording uses the default input device:
+
+```lua
+local rec = rustic.game:startRecording(nil, {source = "microphone"})
+-- Or pass a .wav path as the first argument to also write it to disk.
+rec:stopRecording()
+```
+
+Hot mic capture exposes local input immediately, without retaining a full recording:
+
+```lua
+local mic
+return {
+  Start = function()
+    mic = rustic.game:startHotMic()
+  end,
+  Update = function()
+    local packet = mic:read()
+    local peak = 0
+    for _, sample in ipairs(packet.samples) do
+      peak = math.max(peak, math.abs(sample))
+    end
+    -- Feed packet.samples, packet.sampleRate and packet.channels to your
+    -- audio processing or relay code. peak can drive a microphone meter.
+  end,
+  Stop = function()
+    mic:stopHotMic()
+    mic:unload()
+  end
+}
+```
+
+- `rec:read()` and `mic:read()` return `{samples, sampleRate, channels, active,
+  droppedSamples}`. Each call consumes at most 4,096 samples, preserving complete
+  channel frames. An empty sample list means no queued data is available.
+- Samples are interleaved by channel. Microphone rate/channel count come from the
+  default device; input is converted to finite float samples in `[-1, 1]`.
+- Hot mic queues at most two seconds of input. Read regularly, using multiple
+  reads if needed. `droppedSamples` reports input discarded since the preceding
+  read. Stopping hot mic closes the device and discards unread input.
+- `rustic.game:stopRecording(rec)` and `rustic.game:stopHotMic(mic)` stop one
+  handle. Omit the handle to stop all matching captures owned by the script.
+  Handles also support `:stop()`; stopping repeatedly is safe.
+- Recordings retain at most 64 MiB of PCM per handle (about 175 seconds of game
+  audio), including recordings written to files. Exceeding the limit stops
+  capture; `read`/`stopRecording` report the error. Split long recordings into
+  separate handles and call `:unload()` after consuming them. A script may retain
+  at most four capture handles at once.
+- Destroying an owner, ending Play or successful reload closes its microphone,
+  finalizes its WAV files and releases its capture handles. Other scripts cannot
+  use those handles. Explicit stop callbacks let you read samples before cleanup.
+- Microphone capture currently requires Windows, an available default microphone,
+  and OS microphone access. Default F32, I16 and U16 device formats are supported.
+  Missing devices, permission failures, unsupported formats, startup timeouts and
+  device disconnection raise errors. Game mixer recording works headlessly too.
+- These convenience bindings are available in Lua 5.4 and Luau. Hot mic supplies
+  local PCM; automatic network transport and speaker monitoring are not provided.
