@@ -1184,11 +1184,13 @@ dependencies = [
 name = "engine-play"
 version = "0.1.0"
 dependencies = [
+ "cpal",
  "engine-assets",
  "engine-core",
  "engine-scripting",
  "engine-world",
  "glam 0.33.6",
+ "hound",
  "interprocess",
  "rodio",
  "ron",

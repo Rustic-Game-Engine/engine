@@ -300,3 +300,42 @@ Camera.fov=Camera.zoom
 function Animation.value(keys,fn) return start(rustic.query({op="keyframes",keys=keys,token=callback(fn,true)})) end
 
 function Animation.addMarker(o,clip,time,name) return rustic.query({op="animation_marker",entity=entity(o),clip=clip,time=time,name=name}) end
+
+-- Capture handles retain recorded PCM until unload or owner cleanup.
+local function captureHandle(id, recording)
+    local handle={id=id}
+    function handle:read() return rustic.query({op='capture_read',id=id}) end
+    function handle:unload() rustic.query({op='capture_unload',id=id}) end
+    local function stop()
+        rustic.query({op=recording and 'capture_recording_stop' or 'capture_mic_stop',id=id})
+        return handle
+    end
+    handle.stop=stop
+    if recording then
+        handle.stopRecording=stop; handle.stop_recording=stop
+    else
+        handle.stopHotMic=stop; handle.stop_hot_mic=stop
+    end
+    return handle
+end
+function rustic.game:startRecording(path, options)
+    assert(path==nil or type(path)=='string','recording path must be a string or nil')
+    options=options or {}
+    assert(type(options)=='table','recording options must be a table')
+    return captureHandle(rustic.query({op='capture_recording_start',path=path,source=options.source or 'game'}),true)
+end
+function rustic.game:stopRecording(recording)
+    rustic.query({op='capture_recording_stop',id=recording and recording.id})
+    return recording
+end
+function rustic.game:startHotMic()
+    return captureHandle(rustic.query({op='capture_mic_start'}),false)
+end
+function rustic.game:stopHotMic(mic)
+    rustic.query({op='capture_mic_stop',id=mic and mic.id})
+    return mic
+end
+rustic.game.start_recording=rustic.game.startRecording
+rustic.game.stop_recording=rustic.game.stopRecording
+rustic.game.start_hot_mic=rustic.game.startHotMic
+rustic.game.stop_hot_mic=rustic.game.stopHotMic

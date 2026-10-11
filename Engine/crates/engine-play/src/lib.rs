@@ -43,3 +43,6 @@ pub use supervisor::{RuntimeLaunch, SupervisedRuntime, SupervisorError, Supervis
 
 mod audio_output;
 mod gameplay_world;
+
+mod audio_capture;
+mod audio_input;

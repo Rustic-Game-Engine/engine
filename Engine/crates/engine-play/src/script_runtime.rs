@@ -220,6 +220,7 @@ struct GameplayContext {
     physics: crate::physics::PhysicsWorld,
     audio: engine_core::gameplay::audio::Mixer,
     audio_output: crate::audio_output::AudioOutput,
+    audio_capture: crate::audio_capture::AudioCapture,
     clips: BTreeMap<(EntityId, String), engine_core::gameplay::animation::Clip>,
     frame_delta: f64,
     fixed_delta: f64,
@@ -233,6 +234,7 @@ impl Default for GameplayContext {
             physics: crate::physics::PhysicsWorld::default(),
             audio: engine_core::gameplay::audio::Mixer::default(),
             audio_output: crate::audio_output::AudioOutput::new(),
+            audio_capture: crate::audio_capture::AudioCapture::default(),
             clips: BTreeMap::new(),
             frame_delta: 1.0 / 60.0,
             fixed_delta: 1.0 / 60.0,
@@ -510,6 +512,9 @@ impl RuntimeScripts {
                 .audio
                 .cleanup(|owner| owner.entity_bound && !world.contains(owner.entity));
             gameplay
+                .audio_capture
+                .cleanup(|owner| owner.entity_bound && !world.contains(owner.entity));
+            gameplay
                 .clips
                 .retain(|(entity, _), _| world.contains(*entity));
             world.propagate_transforms();
@@ -536,7 +541,10 @@ impl RuntimeScripts {
                 context.runtime.time_scale()
             };
             match context.audio.mix_scaled(delta, scale) {
-                Ok(samples) => context.audio_output.submit(samples),
+                Ok(samples) => {
+                    context.audio_capture.submit(&samples);
+                    context.audio_output.submit(samples);
+                }
                 Err(error) => push_log(&self.logs, &self.dropped_logs, "error", &error),
             }
         }
@@ -1094,6 +1102,73 @@ impl GameplayHost for RuntimeHost {
             action.validate()?;
             return serde_json::to_value(action).map_err(|e| e.to_string());
         }
+        if op.starts_with("capture_") {
+            let mut context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
+            let owner = Owner {
+                entity_bound: self.entity_bound,
+                scene: context.scene,
+                entity: self.entity,
+                script: self.owner_script,
+            };
+            let id = query
+                .get("id")
+                .filter(|v| !v.is_null())
+                .map(|v| v.as_str().ok_or("capture id must be a string"))
+                .transpose()?;
+            match op {
+                "capture_recording_start" | "capture_mic_start" => {
+                    let recording = op == "capture_recording_start";
+                    let source = query
+                        .get("source")
+                        .map(|v| v.as_str().ok_or("recording source must be a string"))
+                        .transpose()?
+                        .unwrap_or("game");
+                    if source != "game" && source != "microphone" {
+                        return Err("recording source must be game or microphone".into());
+                    }
+                    let path = match query.get("path").filter(|v| !v.is_null()) {
+                        Some(value) => {
+                            let path = value
+                                .as_str()
+                                .filter(|s| !s.is_empty())
+                                .ok_or("recording path must be a nonempty string")?;
+                            if !path.to_ascii_lowercase().ends_with(".wav") {
+                                return Err("recording path must end in .wav".into());
+                            }
+                            let path = PathBuf::from(path);
+                            Some(if path.is_absolute() {
+                                path
+                            } else {
+                                self.snapshot_root.join(path)
+                            })
+                        }
+                        None => None,
+                    };
+                    let id = context.audio_capture.start(
+                        owner,
+                        recording,
+                        !recording || source == "microphone",
+                        path.as_deref(),
+                    )?;
+                    return Ok(serde_json::json!(id));
+                }
+                "capture_recording_stop" | "capture_mic_stop" => {
+                    context
+                        .audio_capture
+                        .stop(owner, id, op == "capture_recording_stop")?;
+                }
+                "capture_read" => {
+                    return context
+                        .audio_capture
+                        .read(owner, id.ok_or("capture id is required")?);
+                }
+                "capture_unload" => context
+                    .audio_capture
+                    .unload(owner, id.ok_or("capture id is required")?)?,
+                _ => return Err("unknown capture operation".into()),
+            }
+            return Ok(serde_json::Value::Null);
+        }
         if op.starts_with("audio_") {
             let mut context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
             let owner = Owner {
@@ -1446,6 +1521,9 @@ impl GameplayHost for RuntimeHost {
                 .cleanup(|owner| owner.script == self.owner_script);
             context
                 .audio
+                .cleanup(|owner| owner.script == self.owner_script);
+            context
+                .audio_capture
                 .cleanup(|owner| owner.script == self.owner_script);
         }
     }
@@ -2024,6 +2102,52 @@ mod tests {
         save_manifest_atomic,
     };
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
+
+    #[test]
+    fn lua_and_luau_recording_handles_retain_samples_and_save_wav() {
+        for language in [ScriptLanguage::Lua54, ScriptLanguage::Luau] {
+            let temp = tempfile::tempdir().unwrap();
+            let world = Arc::new(Mutex::new(SceneWorld::new()));
+            let mut host = environment_host(&world);
+            host.snapshot_root = temp.path().into();
+            let context = Arc::clone(&host.gameplay);
+            let mut behavior = RuntimeBehavior::load(language, ScriptId::new(), br"
+                local rec, file
+                return {
+                    Start=function()
+                        assert(not pcall(function() rustic.game:startRecording('bad.mp3') end))
+                        assert(not pcall(function() rustic.game:startRecording(nil, {source='bad'}) end))
+                        rec=rustic.game:startRecording()
+                        file=rustic.game:startRecording('capture.wav')
+                    end,
+                    Update=function()
+                        assert(rec:stopRecording()==rec)
+                        rustic.game:stopRecording(file)
+                        local packet=rec:read()
+                        assert(packet.sampleRate==48000 and packet.channels==2 and not packet.active)
+                        assert(#packet.samples==4 and packet.samples[1]==0.25 and packet.samples[4]==-0.5)
+                        assert(#rec:read().samples==0)
+                        rec:stopRecording()
+                        rec:unload()
+                        assert(not pcall(function() rec:read() end))
+                        file:unload()
+                    end
+                }
+            ", "capture.lua", Box::new(host)).unwrap();
+            behavior.on_start().unwrap();
+            context
+                .lock()
+                .unwrap()
+                .audio_capture
+                .submit(&[0.25, -0.25, 0.5, -0.5]);
+            behavior.update(0.01).unwrap();
+            let mut wav = hound::WavReader::open(temp.path().join("capture.wav")).unwrap();
+            assert_eq!(
+                wav.samples::<f32>().collect::<Result<Vec<_>, _>>().unwrap(),
+                vec![0.25, -0.25, 0.5, -0.5]
+            );
+        }
+    }
 
     #[test]
     fn compressed_audio_formats_load_play_and_release_from_lua() {
