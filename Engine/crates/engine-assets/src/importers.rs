@@ -119,11 +119,13 @@ impl ImporterRegistry {
                 version: 1,
                 kind: AssetKind::Texture,
             }),
-            "wav" | "ogg" => Ok(ImporterContract {
-                id: "rustic.audio",
-                version: 1,
-                kind: AssetKind::Audio,
-            }),
+            "wav" | "ogg" | "oga" | "opus" | "mp3" | "aac" | "m4a" | "flac" => {
+                Ok(ImporterContract {
+                    id: "rustic.audio",
+                    version: 2,
+                    kind: AssetKind::Audio,
+                })
+            }
             "ttf" | "otf" => Ok(ImporterContract {
                 id: "rustic.font",
                 version: 1,
@@ -681,9 +683,148 @@ const fn default_material() -> PbrMaterialArtifact {
 fn import_audio(request: &ImportRequest) -> Result<AudioArtifact, AssetError> {
     match extension(&request.source_path).as_str() {
         "wav" => import_wav(&request.source_bytes),
-        "ogg" => import_ogg(&request.source_bytes),
+        "ogg" | "oga" => {
+            let first = ogg::PacketReader::new(Cursor::new(&request.source_bytes))
+                .read_packet()
+                .map_err(|error| AssetError::Decode(error.to_string()))?
+                .ok_or_else(|| AssetError::Decode("OGG contains no packets".into()))?;
+            if first.data.starts_with(b"OpusHead") {
+                import_opus(&request.source_bytes, MAX_AUDIO_SAMPLES)
+            } else {
+                import_ogg(&request.source_bytes)
+            }
+        }
+        "opus" => import_opus(&request.source_bytes, MAX_AUDIO_SAMPLES),
+        "mp3" | "aac" | "m4a" | "flac" => import_compressed_audio(request, MAX_AUDIO_SAMPLES),
         extension => Err(AssetError::UnsupportedFormat(extension.to_owned())),
     }
+}
+
+fn import_compressed_audio(
+    request: &ImportRequest,
+    sample_limit: usize,
+) -> Result<AudioArtifact, AssetError> {
+    use symphonia::core::{
+        codecs::audio::AudioDecoderOptions,
+        formats::{FormatOptions, TrackType, probe::Hint},
+        io::{MediaSourceStream, MediaSourceStreamOptions},
+        meta::MetadataOptions,
+    };
+    let source = MediaSourceStream::new(
+        Box::new(Cursor::new(request.source_bytes.as_slice())),
+        MediaSourceStreamOptions::default(),
+    );
+    let mut hint = Hint::new();
+    hint.with_extension(&extension(&request.source_path));
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            source,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .map_err(|error| AssetError::Decode(error.to_string()))?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or_else(|| AssetError::Decode("source contains no audio track".into()))?;
+    let track_id = track.id;
+    let parameters = track
+        .codec_params
+        .as_ref()
+        .and_then(|params| params.audio())
+        .ok_or_else(|| AssetError::Decode("missing audio codec parameters".into()))?;
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(parameters, &AudioDecoderOptions::default())
+        .map_err(|error| AssetError::Decode(error.to_string()))?;
+    let mut audio = AudioArtifact {
+        channels: 0,
+        sample_rate: 0,
+        samples: Vec::new(),
+    };
+    while let Some(packet) = format
+        .next_packet()
+        .map_err(|error| AssetError::Decode(error.to_string()))?
+    {
+        if packet.track_id != track_id {
+            continue;
+        }
+        let buffer = decoder
+            .decode(&packet)
+            .map_err(|error| AssetError::Decode(error.to_string()))?;
+        let channels = u16::try_from(buffer.spec().channels().count())
+            .map_err(|_| AssetError::Decode("too many audio channels".into()))?;
+        let rate = buffer.spec().rate();
+        if channels == 0 || channels > 8 || rate == 0 {
+            return Err(AssetError::Decode(
+                "invalid audio channel count or sample rate".into(),
+            ));
+        }
+        if audio.channels == 0 {
+            audio.channels = channels;
+            audio.sample_rate = rate;
+        } else if audio.channels != channels || audio.sample_rate != rate {
+            return Err(AssetError::Decode(
+                "audio stream changes channel count or sample rate".into(),
+            ));
+        }
+        let start = audio.samples.len();
+        let end = start.saturating_add(buffer.samples_interleaved());
+        check_audio_sample_limit(end, sample_limit)?;
+        audio.samples.resize(end, 0.0);
+        buffer.copy_to_slice_interleaved(&mut audio.samples[start..]);
+    }
+    normalize_decoded_audio(&mut audio.samples)?;
+    Ok(audio)
+}
+
+fn import_opus(bytes: &[u8], sample_limit: usize) -> Result<AudioArtifact, AssetError> {
+    use opus_pure::{MAX_PACKET_SAMPLES, OggOpusReader, Trim};
+    let mut reader = OggOpusReader::new(Cursor::new(bytes))
+        .map_err(|error| AssetError::Decode(error.to_string()))?;
+    let channels = usize::from(reader.head().channel_count);
+    // Mapping family 0 is mono/stereo. The header decoder rejects surround mappings.
+    let mut decoder = reader
+        .head()
+        .decoder(48_000)
+        .map_err(|error| AssetError::Decode(error.to_string()))?;
+    let mut trim = Trim::new(reader.head(), 48_000, channels)
+        .map_err(|error| AssetError::Decode(error.to_string()))?;
+    let mut block = vec![0.0; MAX_PACKET_SAMPLES * channels];
+    let mut samples = Vec::new();
+    for packet in reader.packets() {
+        let packet = packet.map_err(|error| AssetError::Decode(error.to_string()))?;
+        let frames = decoder
+            .decode(&packet.data, MAX_PACKET_SAMPLES, &mut block)
+            .map_err(|error| AssetError::Decode(error.to_string()))?;
+        let kept = trim.keep(&packet, &block[..frames * channels]);
+        check_audio_sample_limit(samples.len().saturating_add(kept.len()), sample_limit)?;
+        samples.extend_from_slice(kept);
+    }
+    normalize_decoded_audio(&mut samples)?;
+    Ok(AudioArtifact {
+        channels: u16::try_from(channels)
+            .map_err(|_| AssetError::Decode("too many Opus channels".into()))?,
+        sample_rate: 48_000,
+        samples,
+    })
+}
+
+fn check_audio_sample_limit(count: usize, limit: usize) -> Result<(), AssetError> {
+    if count > limit {
+        return Err(AssetError::Limit(format!(
+            "decoded audio exceeds {limit} samples"
+        )));
+    }
+    Ok(())
+}
+
+fn normalize_decoded_audio(samples: &mut [f32]) -> Result<(), AssetError> {
+    validate_audio_samples(samples)?;
+    // Lossy codecs and Opus header gain can exceed full scale; the mixer accepts [-1, 1].
+    for sample in samples {
+        *sample = sample.clamp(-1.0, 1.0);
+    }
+    Ok(())
 }
 
 fn import_wav(bytes: &[u8]) -> Result<AudioArtifact, AssetError> {
@@ -1215,9 +1356,108 @@ mod tests {
     }
 
     #[test]
+    fn compressed_audio_formats_decode_to_playable_pcm() {
+        let fixtures: &[(&str, &[u8])] = &[
+            (
+                "tone.mp3",
+                include_bytes!("../tests/fixtures/audio/tone.mp3"),
+            ),
+            (
+                "tone.aac",
+                include_bytes!("../tests/fixtures/audio/tone.aac"),
+            ),
+            (
+                "tone.m4a",
+                include_bytes!("../tests/fixtures/audio/tone.m4a"),
+            ),
+            (
+                "tone.flac",
+                include_bytes!("../tests/fixtures/audio/tone.flac"),
+            ),
+            (
+                "vorbis.ogg",
+                include_bytes!("../tests/fixtures/audio/vorbis.ogg"),
+            ),
+            (
+                "vorbis.oga",
+                include_bytes!("../tests/fixtures/audio/vorbis.ogg"),
+            ),
+            (
+                "opus.ogg",
+                include_bytes!("../tests/fixtures/audio/opus.ogg"),
+            ),
+            (
+                "opus.opus",
+                include_bytes!("../tests/fixtures/audio/opus.ogg"),
+            ),
+            (
+                "tone.FLAC",
+                include_bytes!("../tests/fixtures/audio/tone.flac"),
+            ),
+        ];
+        for &(name, bytes) in fixtures {
+            let contract = ImporterRegistry::contract(Path::new(name)).unwrap();
+            assert_eq!(contract.kind, AssetKind::Audio);
+            assert_eq!(contract.version, 2);
+            let result = ImporterRegistry::import(&ImportRequest::new(name, bytes.to_vec()))
+                .unwrap_or_else(|error| panic!("{name}: {error}"));
+            let DerivedArtifact::Audio(audio) = result else {
+                panic!("expected audio for {name}")
+            };
+            assert_eq!(audio.channels, 2, "{name}");
+            assert_eq!(audio.sample_rate, 48_000, "{name}");
+            assert!(audio.samples.len() >= 11_000, "{name}");
+            assert!(
+                audio
+                    .samples
+                    .iter()
+                    .all(|v| v.is_finite() && v.abs() <= 1.0),
+                "{name}"
+            );
+            assert!(audio.samples.iter().any(|v| v.abs() > 0.01), "{name}");
+            // FLAC is lossless; Opus pre-skip/end-trim must preserve the fixture duration.
+            if name == "tone.flac" || name.starts_with("opus.") {
+                assert_eq!(audio.samples.len(), 11_520, "{name}");
+            }
+            engine_core::gameplay::audio::AudioClip {
+                channels: audio.channels,
+                sample_rate: audio.sample_rate,
+                samples: audio.samples,
+            }
+            .validate()
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn compressed_audio_rejects_corruption_and_bounds_pcm() {
+        let mut corrupt = include_bytes!("../tests/fixtures/audio/opus.ogg").to_vec();
+        let last = corrupt.len() - 1;
+        corrupt[last] ^= 0xff;
+        assert!(ImporterRegistry::import(&ImportRequest::new("corrupt.ogg", corrupt)).is_err());
+        let flac = ImportRequest::new(
+            "tone.flac",
+            include_bytes!("../tests/fixtures/audio/tone.flac").to_vec(),
+        );
+        assert!(matches!(
+            import_compressed_audio(&flac, 8),
+            Err(AssetError::Limit(_))
+        ));
+        assert!(matches!(
+            import_opus(include_bytes!("../tests/fixtures/audio/opus.ogg"), 8),
+            Err(AssetError::Limit(_))
+        ));
+        let mut samples = [1.2, -1.2, 0.5];
+        normalize_decoded_audio(&mut samples).unwrap();
+        assert_eq!(samples, [1.0, -1.0, 0.5]);
+        assert!(normalize_decoded_audio(&mut [f32::NAN]).is_err());
+    }
+
+    #[test]
     fn malformed_corpus_never_panics() {
         let extensions = [
-            "png", "jpg", "tga", "hdr", "gltf", "glb", "fbx", "obj", "wav", "ogg", "ttf", "otf",
+            "png", "jpg", "tga", "hdr", "gltf", "glb", "fbx", "obj", "wav", "ogg", "oga", "opus",
+            "mp3", "aac", "m4a", "flac", "ttf", "otf",
         ];
         for extension in extensions {
             for bytes in [vec![0], vec![0xff; 31], b"../ malformed".to_vec()] {

@@ -20,6 +20,8 @@ license policy on the complete transitive graph.
 | `bevy_ecs` / `glam` | World storage/schedules and engine math values | MIT OR Apache-2.0 | Stable IDs and serialized engine components remain independent of ECS runtime handles |
 | `rusqlite` | Disposable asset index | MIT | `.rmeta` files remain authoritative and index corruption triggers rebuild/quarantine |
 | `image`, `gltf`, `tobj`, `hound`, `lewton`, `skrifa` | Bounded baseline asset decoders behind engine-owned artifacts | MIT OR Apache-2.0 compatible | Validation, limits, placeholders, corpus tests, and the isolated worker contain decoder failures |
+| `symphonia` | Bundled pure Rust MP3, AAC-LC (ADTS/M4A), and FLAC decoding | MPL-2.0 | Asset source limits, incremental PCM limits, validated mixer samples, corpus tests, and the isolated worker contain decoder failures |
+| `ogg`, `opus-pure` | Ogg codec detection and bundled pure Rust mono/stereo Opus decoding with encoder-delay and end-padding trimming | BSD-3-Clause | Validated container packets, bounded decoded PCM, corpus tests, and the isolated worker contain decoder failures |
 | `interprocess` | Local authenticated editor/runtime IPC transport | MIT OR Apache-2.0 | Versioned framing, one-use secrets, payload limits, deadlines, and process supervision wrap it |
 | `egui_tiles` | Dockable native editor layout | MIT OR Apache-2.0 | Only editor UI state depends on it; authoring state remains in testable engine models |
 | Material Design Icons (Pictogrammers) | Embedded upstream SVG file-type, language, and transform-tool icons | Apache-2.0 | Icons are compiled into the editor, so rendering never depends on network availability |

@@ -66,6 +66,11 @@ Name: "addtopath"; Description: "Add the installation folder to PATH"; GroupDesc
 
 [Files]
 Source: "..\licenses\Luau-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\Symphonia-MPL-2.0.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\ogg-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\opus-pure-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\opus-pure-ATTRIBUTION.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\licenses\Audio-Decoders-NOTICE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-luau-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-agent-backend.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-project-manager.exe"; DestDir: "{app}"; Flags: ignoreversion

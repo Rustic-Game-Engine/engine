@@ -99,7 +99,7 @@ blocking the editor/render thread.
 - Implement `.rmeta`, importer/version contracts, content hashes, dependency graph,
   SQLite cache index, derived-data cache, async handles, placeholder/error assets, and
   file-watch debounce.
-- First importers: glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/OGG, and TTF/OTF. FBX geometry, skeletons and named animation takes now use the bounded ufbx importer;
+- First importers: glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/MP3/AAC/FLAC/OGG, and TTF/OTF. FBX geometry, skeletons and named animation takes now use the bounded ufbx importer;
   EXR remains deferred.
 - Implement textures, static meshes, basic PBR materials, asset moves, reimport,
   duplicate-ID quarantine, and missing-reference reports.
@@ -180,7 +180,7 @@ loop is timed out/restarted without editor failure; no project-language setting 
   Basic Play gravity and enclosing-box primitive collision are already implemented
   in `engine-play`; see `PHYSICS.md`. Full rigid-body rotation, triggers, queries,
   collision callbacks, and imported-mesh physics remain future work.
-- Implement WAV/OGG 2D/3D playback, source/listener, attenuation, loop, bus, volume,
+- Implement WAV/MP3/AAC/FLAC/OGG 2D/3D playback, source/listener, attenuation, loop, bus, volume,
   pitch, and streaming music behind `audio-api`.
 - Implement native runtime labels, buttons, images, panels, text input, basic flex/grid
   containers, anchors, and responsive scale.
@@ -303,7 +303,7 @@ M8 gate, with the conservative portion of renderer selection brought forward fro
 - DX12 preferred with Vulkan and GL fallback; PBR mesh, texture, camera, directional/
   point/spot lights, depth, basic shadows, tone mapping, frustum culling, and five
   conservative quality profiles. Unsupported features degrade cleanly.
-- glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/OGG, and TTF/OTF import with stable asset IDs,
+- glTF/GLB, OBJ, PNG/JPEG/TGA/HDR, WAV/MP3/AAC/FLAC/OGG, and TTF/OTF import with stable asset IDs,
   asynchronous derived-data cache, reimport, and missing/error placeholders.
 - Play dropdown with Play, New Window, Standalone plus Stop, Pause, Resume, and exact
   Frame Advance in an isolated child runtime. Authoring scenes cannot change silently.

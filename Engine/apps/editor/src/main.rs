@@ -4218,7 +4218,7 @@ fn project_file_icon(path: &Path) -> egui::ImageSource<'static> {
         Some("glb" | "gltf" | "obj") => {
             egui::include_image!("../../../assets/icons/material-design/cube-outline.svg")
         }
-        Some("wav" | "ogg" | "mp3") => {
+        Some("wav" | "ogg" | "oga" | "opus" | "mp3" | "aac" | "m4a" | "flac") => {
             egui::include_image!("../../../assets/icons/material-design/music-note-outline.svg")
         }
         Some("ron" | "toml" | "json") => {
