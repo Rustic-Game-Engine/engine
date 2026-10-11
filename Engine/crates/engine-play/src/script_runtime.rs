@@ -2026,6 +2026,65 @@ mod tests {
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
 
     #[test]
+    fn compressed_audio_formats_load_play_and_release_from_lua() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("assets")).unwrap();
+        let fixtures: &[(&str, &[u8])] = &[
+            (
+                "tone.mp3",
+                include_bytes!("../../engine-assets/tests/fixtures/audio/tone.mp3"),
+            ),
+            (
+                "tone.aac",
+                include_bytes!("../../engine-assets/tests/fixtures/audio/tone.aac"),
+            ),
+            (
+                "tone.m4a",
+                include_bytes!("../../engine-assets/tests/fixtures/audio/tone.m4a"),
+            ),
+            (
+                "tone.flac",
+                include_bytes!("../../engine-assets/tests/fixtures/audio/tone.flac"),
+            ),
+            (
+                "vorbis.ogg",
+                include_bytes!("../../engine-assets/tests/fixtures/audio/vorbis.ogg"),
+            ),
+            (
+                "opus.ogg",
+                include_bytes!("../../engine-assets/tests/fixtures/audio/opus.ogg"),
+            ),
+        ];
+        for &(name, bytes) in fixtures {
+            std::fs::write(temp.path().join("assets").join(name), bytes).unwrap();
+        }
+        let world = Arc::new(Mutex::new(SceneWorld::new()));
+        let mut host = environment_host(&world);
+        host.snapshot_root = temp.path().into();
+        let context = Arc::clone(&host.gameplay);
+        let mut behavior = LuaBehavior::load(ScriptId::new(), br"
+            local tracks={}
+            return {Start=function()
+                for _,name in ipairs({'tone.mp3','tone.aac','tone.m4a','tone.flac','vorbis.ogg','opus.ogg'}) do
+                    local audio=rustic.game.assets[name]:load()
+                    audio:play({volume=0.1})
+                    tracks[#tracks+1]=audio
+                end
+            end,Update=function()
+                for _,audio in ipairs(tracks) do audio:Unload() end
+            end}
+        ", "formats.lua", Box::new(host), 100_000).unwrap();
+        behavior.on_start().unwrap();
+        let mut gameplay = context.lock().unwrap();
+        assert_eq!(gameplay.audio.voices.len(), fixtures.len());
+        let pcm = gameplay.audio.mix(0.05).unwrap();
+        assert!(pcm.iter().any(|sample| sample.abs() > 0.01));
+        drop(gameplay);
+        behavior.update(0.01).unwrap();
+        assert!(context.lock().unwrap().audio.voices.is_empty());
+    }
+
+    #[test]
     fn lua_audio_objects_require_load_and_reuse_decoded_audio() {
         audio_objects_require_load_and_reuse_decoded_audio(ScriptLanguage::Lua54);
     }

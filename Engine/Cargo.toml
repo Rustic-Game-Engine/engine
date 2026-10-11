@@ -39,6 +39,9 @@ image = { version = "0.25.8", default-features = false, features = ["hdr", "jpeg
 interprocess = "2.4.0"
 mlua = { version = "0.11.4", features = ["lua54", "vendored", "send", "serialize"] }
 lewton = "0.10.2"
+ogg = "0.8.0"
+opus-pure = "0.2.2"
+symphonia = { version = "0.6.1", default-features = false, features = ["aac", "flac", "mp3", "isomp4", "id3v2"] }
 naga = { version = "30.0.1", features = ["wgsl-in"] }
 num-traits = "0.2"
 parking_lot = "0.12.5"

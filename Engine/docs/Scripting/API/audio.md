@@ -1,6 +1,6 @@
 # Audio API
 
-Play engine-decoded WAV/OGG voices, adjust parameters and schedule fades.
+Play engine-decoded WAV, MP3, AAC, FLAC, and OGG voices, adjust parameters and schedule fades.
 
 ## Setup and language support
 
@@ -8,10 +8,39 @@ These engine-owned services work in Lua 5.4, Luau, JavaScript, Python, C, C++, C
 
 The signatures and complete example below use JavaScript. Attach a JavaScript Object Component script to the specified target and press **Play**. Globals are supplied by the engine. Schedule actions from `Start` or a callback, rather than at script top level. Native languages use typed options and their own builder conventions; see the guide's language bindings.
 
+## Supported audio files
+
+| Format | Extensions | Supported encoding |
+| --- | --- | --- |
+| WAV | `.wav` | Integer PCM or floating-point PCM |
+| MP3 | `.mp3` | MPEG Layer III |
+| AAC | `.aac`, `.m4a` | AAC-LC in ADTS (`.aac`) or MP4 (`.m4a`) |
+| FLAC | `.flac` | Native FLAC |
+| OGG Vorbis | `.ogg`, `.oga` | Vorbis |
+| OGG Opus | `.ogg`, `.oga`, `.opus` | Mono or stereo Opus (mapping family 0) |
+
+Put the file inside your project's `assets/` folder. Extensions are case
+insensitive. The same formats work with loaded Lua/Luau audio handles and
+`Audio.play` / `Audio.playAt` in every supported script language. For example,
+`rustic.game.assets.music["theme.mp3"]:load()` or
+`Audio.play("assets/music/theme.flac")` uses the usual audio controls.
+
+Decoding is built into the engine; players do not need FFmpeg or external codec
+libraries. AAC support is AAC-LC; HE-AAC and encrypted M4A are unsupported. Opus
+surround mappings and OGG codecs other than Vorbis/Opus are unsupported. A file's
+container and encoding must match these supported combinations; renaming a file
+does not convert it. Malformed files fail at import/load and report decoder
+errors in the Console.
+
+Compressed files decode fully into PCM at load/play time, so file size does not
+represent playback memory use. The importer accepts at most 256 MiB of source
+bytes and 200 million decoded samples per clip. Opus decodes at 48 kHz and
+respects header gain, encoder delay, and end padding; other formats preserve the
+decoded sample rate. Lossy decoder peaks are clamped to the mixer's [-1, 1] range.
+
 ## Load and control audio objects (Lua and Luau)
 
-Create `assets/sounds/` in your project and place `crash.wav` there (WAV and OGG
-are supported). Create a Lua or Luau Object Component script, attach it to an
+Create `assets/sounds/` in your project and place `crash.wav` there (WAV, MP3, AAC, FLAC, and OGG are supported). Create a Lua or Luau Object Component script, attach it to an
 enabled scene object, and press **Play**. Use `Start` to load audio before playing:
 
 ```lua
@@ -76,7 +105,7 @@ and play immediately; their voice controls continue to work.
 
 ## Parameters
 
-Source is a project-relative WAV/OGG asset path. JavaScript options include loop, volume and pitch. Position is a world vector for distance attenuation. Volume is finite non-negative within f32 range; pitch is finite positive. Durations are scene-clock seconds.
+Source is a project-relative WAV, MP3, AAC, FLAC, and OGG asset path. JavaScript options include loop, volume and pitch. Position is a world vector for distance attenuation. Volume is finite non-negative within f32 range; pitch is finite positive. Durations are scene-clock seconds.
 
 ## Return and timing
 

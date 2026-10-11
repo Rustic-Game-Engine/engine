@@ -22,7 +22,7 @@ physics queries, audio voices, and synchronous interpolation use engine services
 - [Camera actions](/docs/api/camera-actions) — Move, aim, zoom, follow and shake a game camera using shared actions.
 - [Physics queries and forces](/docs/api/physics-actions) — Query live primitive colliders and change simulated body velocity.
 - [Effects](/docs/api/effects) — Fade, flash, shake and pulse entity properties with shared easing.
-- [Audio](/docs/api/audio) — Play engine-decoded WAV/OGG voices, adjust parameters and schedule fades.
+- [Audio](/docs/api/audio) — Play engine-decoded WAV, MP3, AAC, FLAC, and OGG voices, adjust parameters and schedule fades.
 - [Events and signals](/docs/api/events) — Communicate through queued global events and object-scoped signals across scripting languages.
 - [Clock](/docs/api/clock) — Scale or pause the shared scene clock for actions, animation, physics and audio.
 - [Operation handles](/docs/api/operation-handles) — Inspect, pause, resume, cancel and observe engine-scheduled actions.
@@ -408,7 +408,7 @@ return { Start = function()
 end }
 ```
 
-`play` decodes WAV/OGG into a retained PCM voice; `playAt(source, position, options?)`
+`play` decodes WAV, MP3, AAC, FLAC, and OGG into a retained PCM voice; `playAt(source, position, options?)`
 adds distance attenuation relative to the active camera. A voice has an ID and
 `pause`, `resume`, `stop` controls. `volume(voice, value)` and `pitch(voice, value)`
 change playback parameters; fades and crossfades are scheduler actions with easing.
