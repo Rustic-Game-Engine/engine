@@ -55,7 +55,13 @@ jobs:
           cargo clippy --locked --manifest-path apps/luau-host/Cargo.toml --all-targets -- -D warnings
       - name: Build bundled Luau host
         if: ${{ !cancelled() }}
-        run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
+        run: |
+          cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            cygpath -w "$PWD/target/debug" >> "$GITHUB_PATH"
+          else
+            echo "$PWD/target/debug" >> "$GITHUB_PATH"
+          fi
       - name: Initialize .NET before parallel adapter tests
         if: ${{ !cancelled() }}
         run: |
@@ -66,6 +72,7 @@ jobs:
       - name: Unit, integration, and documentation tests
         if: ${{ !cancelled() }}
         run: |
+          rustic-luau-host --version
           cargo test --locked --workspace
           cargo test --locked --manifest-path apps/luau-host/Cargo.toml
       - name: Verify rendered lighting and viewport
