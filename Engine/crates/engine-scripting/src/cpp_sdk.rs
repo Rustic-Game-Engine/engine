@@ -271,6 +271,10 @@ inline auto followSpeed(const std::string&e,const Curve&path,double speed,const 
 }
 namespace Timer{inline auto every(double interval,std::function<void()> fn,std::optional<int> count={}){if(interval<=0||(count&&*count<1))throw std::invalid_argument("positive interval/count required");auto token=Gameplay::callback([fn=std::move(fn)](auto&){fn();});return Gameplay::start(rustic_detail::object({{"kind","sequence"},{"actions",RusticValue::Array{rustic_detail::object({{"kind","wait"},{"duration",interval}}),rustic_detail::object({{"kind","callback"},{"token",token}})}}}),!count,count?*count-1:0);}}
 namespace Audio{
+inline RusticValue get_output_devices(){return rustic.query(rustic_detail::object({{"op","audio_get_output_devices"}}));}
+inline RusticValue get_input_devices(){return rustic.query(rustic_detail::object({{"op","audio_get_input_devices"}}));}
+inline void set_output_device(const RusticValue& device=nullptr){rustic.query(rustic_detail::object({{"op","audio_set_output_device"},{"device",device}}));}
+inline void set_input_device(const RusticValue& device=nullptr){rustic.query(rustic_detail::object({{"op","audio_set_input_device"},{"device",device}}));}
 struct Voice{std::string id;void stop(){rustic.query(rustic_detail::object({{"op","audio_stop"},{"entity",id}}));}void pause(){rustic.query(rustic_detail::object({{"op","audio_pause"},{"entity",id}}));}void resume(){rustic.query(rustic_detail::object({{"op","audio_resume"},{"entity",id}}));}};
 inline Voice play(const std::string&source,double volume=1,double pitch=1,bool loop=false){return {rustic.query(rustic_detail::object({{"op","audio_play"},{"source",source},{"volume",volume},{"pitch",pitch},{"loop",loop}})).string()};}
 inline Voice playAt(const std::string&source,RusticVector3 position,double volume=1,double pitch=1,bool loop=false){return {rustic.query(rustic_detail::object({{"op","audio_play"},{"source",source},{"position",Physics::vec(position)},{"volume",volume},{"pitch",pitch},{"loop",loop}})).string()};}

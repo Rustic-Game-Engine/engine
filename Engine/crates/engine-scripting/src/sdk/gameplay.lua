@@ -266,6 +266,10 @@ function __rustic_audio_object(source)
     object.unload=object.Unload
     return object
 end
+function Audio.get_output_devices() return rustic.query({op='audio_get_output_devices'}) end
+function Audio.get_input_devices() return rustic.query({op='audio_get_input_devices'}) end
+function Audio.set_output_device(device) return rustic.query({op='audio_set_output_device',device=device}) end
+function Audio.set_input_device(device) return rustic.query({op='audio_set_input_device',device=device}) end
 function Audio.load(source) return __rustic_audio_object(source):load() end
 function Audio.play(source,opts)
     opts=opts or {};opts.op='audio_play';opts.source=source;local id=rustic.query(opts)

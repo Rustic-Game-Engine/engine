@@ -91,8 +91,70 @@ The object methods and `Audio.load` are available in Lua 5.4 and Luau. Existing
 `Audio.play(source, options?)` and `Audio.playAt` in all languages still decode
 and play immediately; their voice controls continue to work.
 
+## Choose audio devices
+
+The four device methods are available on `Audio` in every supported script
+language (including HTML inline JavaScript). Native enumeration and output
+selection currently work in the Windows player. Other platforms return an empty
+list and report an unavailable-backend error when selecting a device.
+
+- `Audio.get_output_devices()` lists playback devices.
+- `Audio.get_input_devices()` lists microphone/input devices.
+- Each entry contains an opaque string `id` and a display `name`. Names can be
+  duplicated; use the ID to select a device.
+- `Audio.set_output_device(id)` switches this scene's mixed audio to that output.
+- `Audio.set_input_device(id)` validates and retains the scene's selected input
+  device. **Microphone recording/capture is not implemented**, so this call does
+  not produce microphone samples or route microphone sound to playback.
+- Pass `null` (Lua/Luau `nil`, Python `None`, C `NULL`) to either setter to select
+  the current system default. Java requires an explicit `null` argument; other
+  bindings except C also allow omitting the argument. Setters return no value.
+- Lists are snapshots. IDs belong to the current Play scene and the latest list
+  for that direction; listing that direction again invalidates older IDs. Do
+  not save IDs in project settings. Selection is shared by scripts in the scene
+  and resets on Stop/new Play. Output and input IDs are not interchangeable.
+- Output switching retains mixer voices and their cursors but discards samples
+  queued on the previous device; a brief interruption is possible. A failed
+  switch keeps the previous output. Device removal is not automatically recovered;
+  list again and choose another device or the default.
+
+Create and attach a JavaScript Object Component script to an enabled scene
+object as described above. Press **Play** on Windows:
+
+```javascript
+globalThis.behavior = {
+  Start() {
+    const outputs = Audio.get_output_devices();
+    if (outputs.length > 0) {
+      Audio.set_output_device(outputs[0].id);
+    }
+    const inputs = Audio.get_input_devices();
+    if (inputs.length > 0) {
+      Audio.set_input_device(inputs[0].id);
+    }
+  }
+};
+```
+
+The scene uses the first listed output, and retains the first input when one is
+available. Play an existing audio asset to hear the selected output. To restore
+system output, call `Audio.set_output_device(null)` from a callback.
+
+Dynamic bindings return arrays/lists/tables of device records. C returns
+`RusticAudioDevices` with `count` and `items[i].id` / `items[i].name`; these values
+last until the next callback. C++ returns a `RusticValue` array (`.array()`);
+C# returns a `JsonElement` array (`EnumerateArray()`); Java returns a JSON list
+of maps; PHP returns an array of associative arrays.
+
+Unknown/stale IDs, IDs from the other direction, unavailable devices, missing
+system defaults and native driver failures raise a script error. A non-string
+argument also raises an error. Check the Console; list devices again after
+plugging/unplugging hardware. Empty lists are valid on hosts without devices.
+
 ## Calls
 
+- `Audio.get_output_devices() / get_input_devices()`
+- `Audio.set_output_device(id = null) / set_input_device(id = null)`
 - `Audio.load(source)` (Lua/Luau; returns a reusable audio handle)
 - `Audio.play(source, options?)`
 - `Audio.playAt(source, position, options?)`
@@ -129,7 +191,7 @@ globalThis.behavior = {
 ## Behavior and limitations
 
 - Provide assets/music.ogg before Play. The voice fades in over two seconds, starts fading out at five seconds and stops at six.
-- Windows player output uses the default audio device. Other platforms currently mix PCM headlessly, so successful playback may produce no device sound.
+- Windows player output starts on the default audio device; `Audio.set_output_device` can change it. Other platforms currently mix PCM headlessly, so successful playback may produce no device sound.
 - FadeOut reaches zero volume but does not stop the voice; stop explicitly or allow natural completion. Crossfade fades the old voice to zero and the new voice from zero to one.
 - PlayAt attenuates distance relative to the active camera. The mixer renders 48 kHz stereo PCM with linear resampling for pitch.
 - Clock scaling changes source playback rate; Clock.pause and voice.pause retain their source cursors. Natural completion releases non-looping voice PCM; loaded audio handles retain PCM until unload or owner cleanup. Stopping cancels voice-targeting actions on the next scheduler tick.

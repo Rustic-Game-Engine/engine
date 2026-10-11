@@ -245,6 +245,10 @@ final class AudioVoice{
     function __construct(public string $id){}function stop():void{global $rustic;$rustic->query(["op"=>"audio_stop","entity"=>$this->id]);}function pause():void{global $rustic;$rustic->query(["op"=>"audio_pause","entity"=>$this->id]);}function resume():void{global $rustic;$rustic->query(["op"=>"audio_resume","entity"=>$this->id]);}
 }
 final class Audio{
+    static function get_output_devices():array{global $rustic;return $rustic->query(["op"=>"audio_get_output_devices"]);}
+    static function get_input_devices():array{global $rustic;return $rustic->query(["op"=>"audio_get_input_devices"]);}
+    static function set_output_device(?string $device=null):void{global $rustic;$rustic->query(["op"=>"audio_set_output_device","device"=>$device]);}
+    static function set_input_device(?string $device=null):void{global $rustic;$rustic->query(["op"=>"audio_set_input_device","device"=>$device]);}
     static function play(string $source,array $opts=[]):AudioVoice{global $rustic;return new AudioVoice($rustic->query(["op"=>"audio_play","source"=>$source]+$opts));}
     static function playAt(string $source,array $position,array $opts=[]):AudioVoice{return self::play($source,["position"=>$position]+$opts);}
     static function volume(AudioVoice $v,float $value):void{global $rustic;$rustic->query(["op"=>"audio_volume","entity"=>$v->id,"value"=>$value]);}static function pitch(AudioVoice $v,float $value):void{global $rustic;$rustic->query(["op"=>"audio_pitch","entity"=>$v->id,"value"=>$value]);}

@@ -1208,6 +1208,90 @@ mod tests {
             Err("not declared".into())
         }
         fn set_enabled(&mut self, _enabled: bool) {}
+        fn gameplay_query(&mut self, query: Value) -> Result<Value, String> {
+            match query["op"].as_str().unwrap_or("") {
+                "audio_get_output_devices" => Ok(json!([
+                    {"id":"output:1","name":"USB \"speaker\" \\ 雪"},
+                    {"id":"output:2","name":"USB \"speaker\" \\ 雪"}
+                ])),
+                "audio_get_input_devices" => Ok(json!([])),
+                "audio_set_output_device" => {
+                    if !query["device"].is_null() && query["device"] != "output:1" {
+                        return Err("unknown output device".into());
+                    }
+                    self.translation[0] += 1.0;
+                    Ok(Value::Null)
+                }
+                "audio_set_input_device" => {
+                    if !query["device"].is_null() {
+                        return Err("unknown input device".into());
+                    }
+                    self.translation[0] += 1.0;
+                    Ok(Value::Null)
+                }
+                _ => Err("unsupported gameplay query".into()),
+            }
+        }
+    }
+
+    #[test]
+    fn audio_device_sdks_preserve_records_across_queries_and_select_defaults() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Python, "devices.py", br"from rustic import Audio, run
+def on_start():
+    outputs = Audio.get_output_devices()
+    assert len(outputs) == 2 and outputs[0]['name'] == outputs[1]['name']
+    assert Audio.get_input_devices() == []
+    Audio.set_output_device(outputs[0]['id'])
+    Audio.set_output_device(None)
+    Audio.set_input_device(None)
+run(globals())
+"),
+            (ScriptLanguage::C, "devices.c", br#"#include "rustic.h"
+#include <assert.h>
+void start(void){
+    RusticAudioDevices outputs=Audio.get_output_devices();
+    assert(outputs.count==2 && strcmp(outputs.items[0].name,outputs.items[1].name)==0);
+    assert(Audio.get_input_devices().count==0);
+    assert(strcmp(outputs.items[0].name,"USB \"speaker\" \\ \xe9\x9b\xaa")==0);
+    Audio.set_output_device(outputs.items[0].id);
+    Audio.set_output_device(NULL);
+    Audio.set_input_device(NULL);
+}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
+            (ScriptLanguage::Cpp, "devices.cpp", br#"#include "rustic.hpp"
+#include <cassert>
+void start(){
+    auto outputs=Audio::get_output_devices();
+    assert(outputs.array().size()==2 && outputs.array()[0].at("name").string()==outputs.array()[1].at("name").string());
+    assert(Audio::get_input_devices().array().empty());
+    Audio::set_output_device(outputs.array()[0].at("id"));
+    Audio::set_output_device();
+    Audio::set_input_device();
+}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !probe_language_toolchain(*language).available {
+                continue;
+            }
+            let mut behavior = ExternalBehavior::load(
+                ScriptId::new(),
+                *language,
+                source,
+                name,
+                Box::new(Host {
+                    entity: EntityId::new(),
+                    translation: [0.0; 3],
+                }),
+            )
+            .unwrap();
+            behavior.on_start().unwrap();
+            assert_eq!(
+                behavior.host().lock().unwrap().translation(),
+                [3.0, 0.0, 0.0]
+            );
+        }
     }
 
     #[test]
