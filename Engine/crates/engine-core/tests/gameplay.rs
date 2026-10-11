@@ -891,3 +891,87 @@ fn audio_long_frames_preserve_source_clock_with_bounded_output() {
     );
     assert_eq!(mixer.voices.len(), 1);
 }
+
+#[test]
+fn loaded_audio_retains_pcm_replays_and_unloads_with_its_owner() {
+    use engine_core::gameplay::audio::{AudioClip, Mixer};
+    use std::sync::Arc;
+    let (_, owner, _) = fixture();
+    let mut mixer = Mixer::default();
+    let clip = Arc::new(AudioClip {
+        channels: 1,
+        sample_rate: 48000,
+        samples: vec![0.5; 480],
+    });
+    let weak = Arc::downgrade(&clip);
+    let loaded = mixer.load(owner, clip).unwrap();
+    assert!(mixer.voices.is_empty());
+    let first = mixer
+        .play_loaded(owner, loaded, 1.0, 1.0, false, None)
+        .unwrap();
+    mixer.control_loaded(owner, loaded, "pause").unwrap();
+    assert!(mixer.mix(0.02).unwrap().iter().all(|v| *v == 0.0));
+    assert!(mixer.voices.contains_key(&first));
+    mixer.control_loaded(owner, loaded, "resume").unwrap();
+    assert!(mixer.mix(0.02).unwrap().iter().any(|v| *v > 0.0));
+    assert!(mixer.voices.is_empty());
+    assert!(weak.upgrade().is_some());
+    let second = mixer
+        .play_loaded(owner, loaded, 1.0, 1.0, false, None)
+        .unwrap();
+    let third = mixer
+        .play_loaded(owner, loaded, 1.0, 1.0, false, None)
+        .unwrap();
+    assert!(
+        mixer
+            .play_loaded(owner, loaded, -1.0, 1.0, false, None)
+            .is_err()
+    );
+    assert!(mixer.voices.contains_key(&third));
+    assert!(!mixer.voices.contains_key(&second));
+    assert!(mixer.voices.contains_key(&third));
+    let foreign = Owner {
+        script: engine_core::ScriptId::new(),
+        ..owner
+    };
+    assert!(
+        mixer
+            .play_loaded(foreign, loaded, 1.0, 1.0, false, None)
+            .is_err()
+    );
+    assert!(mixer.control_loaded(foreign, loaded, "stop").is_err());
+    assert!(mixer.unload(foreign, loaded).is_err());
+    mixer.control_loaded(owner, loaded, "stop").unwrap();
+    assert!(mixer.voices.is_empty());
+    assert!(weak.upgrade().is_some());
+    mixer
+        .play_loaded(owner, loaded, 1.0, 1.0, false, None)
+        .unwrap();
+    mixer.unload(owner, loaded).unwrap();
+    mixer.unload(owner, loaded).unwrap();
+    assert!(mixer.voices.is_empty());
+    assert!(weak.upgrade().is_none());
+    assert!(
+        mixer
+            .play_loaded(owner, loaded, 1.0, 1.0, false, None)
+            .is_err()
+    );
+    let clip = Arc::new(AudioClip {
+        channels: 1,
+        sample_rate: 48000,
+        samples: vec![0.5; 480],
+    });
+    let weak = Arc::downgrade(&clip);
+    let loaded = mixer.load(owner, clip).unwrap();
+    mixer
+        .play_loaded(owner, loaded, 1.0, 1.0, true, None)
+        .unwrap();
+    mixer.cleanup(|o| o == owner);
+    assert!(mixer.voices.is_empty());
+    assert!(weak.upgrade().is_none());
+    assert!(
+        mixer
+            .play_loaded(owner, loaded, 1.0, 1.0, false, None)
+            .is_err()
+    );
+}
