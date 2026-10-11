@@ -1102,38 +1102,68 @@ impl GameplayHost for RuntimeHost {
                 entity: self.entity,
                 script: self.owner_script,
             };
-            if op == "audio_play" {
-                let source = query["source"]
-                    .as_str()
-                    .ok_or("audio source must be an assets-relative file path")?;
-                let clip = match self.import_source(source)? {
-                    engine_assets::DerivedArtifact::Audio(a) => {
-                        engine_core::gameplay::audio::AudioClip {
-                            channels: a.channels,
-                            sample_rate: a.sample_rate,
-                            samples: a.samples,
+            if op == "audio_play" || op == "audio_load" || op == "audio_loaded_play" {
+                let clip = if op == "audio_loaded_play" {
+                    None
+                } else {
+                    let source = query["source"]
+                        .as_str()
+                        .ok_or("audio source must be an assets-relative file path")?;
+                    let clip = match self.import_source(source)? {
+                        engine_assets::DerivedArtifact::Audio(a) => {
+                            engine_core::gameplay::audio::AudioClip {
+                                channels: a.channels,
+                                sample_rate: a.sample_rate,
+                                samples: a.samples,
+                            }
                         }
-                    }
-                    _ => return Err("source is not an audio clip".into()),
+                        _ => return Err("source is not an audio clip".into()),
+                    };
+                    Some(Arc::new(clip))
                 };
+                if op == "audio_load" {
+                    let id = context
+                        .audio
+                        .load(owner, clip.expect("load imports a clip"))?;
+                    return Ok(serde_json::json!(id));
+                }
                 let position = query
                     .get("position")
                     .filter(|v| !v.is_null())
                     .map(|v| serde_json::from_value(v.clone()))
                     .transpose()
                     .map_err(|e| e.to_string())?;
-                let id = context.audio.play(
-                    owner,
-                    Arc::new(clip),
-                    query["volume"].as_f64().unwrap_or(1.0),
-                    query["pitch"].as_f64().unwrap_or(1.0),
-                    query["loop"].as_bool().unwrap_or(false),
-                    position,
-                )?;
+                let volume = query["volume"].as_f64().unwrap_or(1.0);
+                let pitch = query["pitch"].as_f64().unwrap_or(1.0);
+                let looping = query["loop"].as_bool().unwrap_or(false);
+                let id = if op == "audio_loaded_play" {
+                    let id = serde_json::from_value(query["entity"].clone())
+                        .map_err(|e| e.to_string())?;
+                    context
+                        .audio
+                        .play_loaded(owner, id, volume, pitch, looping, position)?
+                } else {
+                    context.audio.play(
+                        owner,
+                        clip.expect("play imports a clip"),
+                        volume,
+                        pitch,
+                        looping,
+                        position,
+                    )?
+                };
                 return Ok(serde_json::json!(id));
             }
             let id: EntityId =
                 serde_json::from_value(query["entity"].clone()).map_err(|e| e.to_string())?;
+            if op == "audio_unload" {
+                context.audio.unload(owner, id)?;
+                return Ok(serde_json::Value::Null);
+            }
+            if let Some(operation) = op.strip_prefix("audio_loaded_") {
+                context.audio.control_loaded(owner, id, operation)?;
+                return Ok(serde_json::Value::Null);
+            }
             if op == "audio_stop" {
                 context.audio.voices.remove(&id);
                 return Ok(serde_json::Value::Null);
@@ -1994,6 +2024,96 @@ mod tests {
         save_manifest_atomic,
     };
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
+
+    #[test]
+    fn lua_audio_objects_require_load_and_reuse_decoded_audio() {
+        audio_objects_require_load_and_reuse_decoded_audio(ScriptLanguage::Lua54);
+    }
+
+    #[test]
+    fn luau_audio_objects_require_load_and_reuse_decoded_audio() {
+        if !engine_scripting::probe_language_toolchain(ScriptLanguage::Luau).available {
+            return;
+        }
+        audio_objects_require_load_and_reuse_decoded_audio(ScriptLanguage::Luau);
+    }
+
+    fn audio_objects_require_load_and_reuse_decoded_audio(language: ScriptLanguage) {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("assets/sounds")).unwrap();
+        let mut wav = Vec::new();
+        wav.extend_from_slice(b"RIFF");
+        wav.extend_from_slice(&38u32.to_le_bytes());
+        wav.extend_from_slice(b"WAVEfmt ");
+        wav.extend_from_slice(&16u32.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&1u16.to_le_bytes());
+        wav.extend_from_slice(&8000u32.to_le_bytes());
+        wav.extend_from_slice(&16000u32.to_le_bytes());
+        wav.extend_from_slice(&2u16.to_le_bytes());
+        wav.extend_from_slice(&16u16.to_le_bytes());
+        wav.extend_from_slice(b"data");
+        wav.extend_from_slice(&2u32.to_le_bytes());
+        wav.extend_from_slice(&1000i16.to_le_bytes());
+        let path = temp.path().join("assets/sounds/crash.wav");
+        std::fs::write(&path, wav).unwrap();
+        let world = Arc::new(Mutex::new(SceneWorld::new()));
+        let mut host = environment_host(&world);
+        host.snapshot_root = temp.path().into();
+        let context = Arc::clone(&host.gameplay);
+        let mut behavior = RuntimeBehavior::load(
+            language,
+            ScriptId::new(),
+            br#"
+            local crash
+            return {Start=function()
+                local ok,err=pcall(function() rustic.game.assets.sounds["crash.wav"]:play() end)
+                assert(not ok and string.find(err,'load',1,true))
+                assert(not pcall(function() Audio.load('assets/missing.wav') end))
+                assert(not pcall(function() rustic.game.assets["../outside.wav"]:load() end))
+                local asset=rustic.game.assets.sounds["crash.wav"]
+                crash=asset:load()
+                assert(crash:load()==crash)
+                asset:play({loop=true})
+                crash:Unload()
+                assert(not pcall(function() crash:play() end))
+                assert(crash:load()==crash)
+                local other=Audio.load('assets/sounds/crash.wav')
+                other:unload()
+                crash:play({loop=true})
+                crash:pause()
+            end,Update=function()
+                crash:resume()
+                crash:stop()
+                crash:play()
+                crash:Unload()
+                crash:Unload()
+                assert(not pcall(function() crash:play() end))
+                assert(not pcall(function() crash:load() end))
+            end}
+        "#,
+            "audio.lua",
+            Box::new(host),
+        )
+        .unwrap();
+        behavior.on_start().unwrap();
+        assert_eq!(context.lock().unwrap().audio.voices.len(), 1);
+        assert!(
+            context
+                .lock()
+                .unwrap()
+                .audio
+                .voices
+                .values()
+                .next()
+                .unwrap()
+                .paused
+        );
+        // Replaying must use retained PCM even if the source file disappears.
+        std::fs::remove_file(path).unwrap();
+        behavior.update(0.01).unwrap();
+        assert!(context.lock().unwrap().audio.voices.is_empty());
+    }
 
     #[test]
     #[allow(

@@ -393,16 +393,27 @@ fn object_proxy(
     lua: &Lua,
     host: Arc<Mutex<Box<dyn GameplayHost>>>,
     path: String,
+    asset_path: String,
 ) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     table.raw_set("__source", path.clone())?;
     let meta = lua.create_table()?;
     meta.set(
         "__index",
-        lua.create_function(move |lua, (_table, key): (Table, String)| {
+        lua.create_function(move |lua, (proxy, key): (Table, String)| {
             let h = Arc::clone(&host);
             let source = path.clone();
             match key.as_str() {
+                "load" | "play" | "stop" | "pause" | "resume" | "Unload" | "unload" => {
+                    let audio: Function = lua.globals().get("__rustic_audio_object")?;
+                    let object: Table = audio.call(asset_path.clone())?;
+                    for method in [
+                        "load", "play", "stop", "pause", "resume", "Unload", "unload",
+                    ] {
+                        proxy.raw_set(method, object.get::<Function>(method)?)?;
+                    }
+                    Ok(Value::Function(object.get(key)?))
+                }
                 "EditAttribute" | "edit_attribute" => Ok(Value::Function(lua.create_function(
                     move |_, (_self, name, value): (Table, String, Value)| {
                         let mut host = lock_host(&h)?;
@@ -429,6 +440,11 @@ fn object_proxy(
                     lua,
                     h,
                     format!("{source}.{key}"),
+                    if asset_path.is_empty() {
+                        key
+                    } else {
+                        format!("{asset_path}/{key}")
+                    },
                 )?)),
             }
         })?,
@@ -548,7 +564,7 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
     api.set("EditAttribute", edit_attribute)?;
     api.set(
         "game",
-        object_proxy(lua, Arc::clone(&host), "rustic.game".into())?,
+        object_proxy(lua, Arc::clone(&host), "rustic.game".into(), String::new())?,
     )?;
     let h = Arc::clone(&host);
     api.set(

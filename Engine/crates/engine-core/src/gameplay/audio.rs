@@ -39,13 +39,121 @@ pub struct Voice {
     clip: Arc<AudioClip>,
     cursor: f64,
 }
+struct LoadedAudio {
+    owner: Owner,
+    clip: Arc<AudioClip>,
+    voice: Option<EntityId>,
+}
 #[derive(Default)]
 pub struct Mixer {
     pub voices: BTreeMap<EntityId, Voice>,
+    loaded: BTreeMap<EntityId, LoadedAudio>,
     pub listener: [f64; 3],
     fraction: f64,
 }
 impl Mixer {
+    /// Decode-independent storage for audio that can be replayed until explicitly unloaded.
+    /// # Errors
+    /// Rejects invalid PCM or exhausted loaded-audio capacity.
+    pub fn load(&mut self, owner: Owner, clip: Arc<AudioClip>) -> Result<EntityId, String> {
+        clip.validate()?;
+        if self.loaded.len() >= 1024 {
+            return Err("loaded audio limit exceeded".into());
+        }
+        let id = EntityId::new();
+        self.loaded.insert(
+            id,
+            LoadedAudio {
+                owner,
+                clip,
+                voice: None,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Start a loaded clip from the beginning, replacing its previous playback.
+    /// # Errors
+    /// Rejects unloaded/foreign handles or invalid playback options.
+    pub fn play_loaded(
+        &mut self,
+        owner: Owner,
+        id: EntityId,
+        volume: f64,
+        pitch: f64,
+        looping: bool,
+        position: Option<[f64; 3]>,
+    ) -> Result<EntityId, String> {
+        let loaded = self
+            .loaded
+            .get(&id)
+            .filter(|a| a.owner == owner)
+            .ok_or("audio is not loaded; call :load() before :play()")?;
+        let old = loaded.voice;
+        let clip = Arc::clone(&loaded.clip);
+        let previous = old.and_then(|id| self.voices.remove(&id));
+        let voice = match self.play(owner, clip, volume, pitch, looping, position) {
+            Ok(voice) => voice,
+            Err(error) => {
+                if let Some(previous) = previous
+                    && let Some(old) = old
+                {
+                    self.voices.insert(old, previous);
+                }
+                return Err(error);
+            }
+        };
+        self.loaded
+            .get_mut(&id)
+            .ok_or("audio is no longer loaded")?
+            .voice = Some(voice);
+        Ok(voice)
+    }
+
+    /// Control a loaded clip's current playback, retaining PCM for replay.
+    /// # Errors
+    /// Rejects unloaded/foreign handles or unknown operations.
+    pub fn control_loaded(
+        &mut self,
+        owner: Owner,
+        id: EntityId,
+        operation: &str,
+    ) -> Result<(), String> {
+        let loaded = self
+            .loaded
+            .get_mut(&id)
+            .filter(|a| a.owner == owner)
+            .ok_or("audio is not loaded; call :load() first")?;
+        match operation {
+            "stop" => {
+                if let Some(voice) = loaded.voice.take() {
+                    self.voices.remove(&voice);
+                }
+            }
+            "pause" | "resume" => {
+                if let Some(voice) = loaded.voice.and_then(|id| self.voices.get_mut(&id)) {
+                    voice.paused = operation == "pause";
+                }
+            }
+            _ => return Err("unknown loaded audio operation".into()),
+        }
+        Ok(())
+    }
+
+    /// Stop playback and release retained PCM. Repeated unloads are harmless.
+    /// # Errors
+    /// Rejects another owner's handle.
+    pub fn unload(&mut self, owner: Owner, id: EntityId) -> Result<(), String> {
+        if self.loaded.get(&id).is_some_and(|a| a.owner != owner) {
+            return Err("audio handle belongs to another owner".into());
+        }
+        if let Some(loaded) = self.loaded.remove(&id)
+            && let Some(voice) = loaded.voice
+        {
+            self.voices.remove(&voice);
+        }
+        Ok(())
+    }
     /// # Errors
     /// Rejects invalid PCM, volume/pitch/position, or exhausted voice capacity.
     pub fn play(
@@ -88,6 +196,7 @@ impl Mixer {
     }
     pub fn cleanup(&mut self, predicate: impl Fn(Owner) -> bool) {
         self.voices.retain(|_, v| !predicate(v.owner));
+        self.loaded.retain(|_, a| !predicate(a.owner));
     }
     /// # Errors
     /// Rejects invalid frame deltas or overflowing playback steps.

@@ -237,6 +237,36 @@ function Animation.blend(o,from,to,opts) opts=opts or {};opts.blendIn=opts.durat
 Animation.transition=Animation.blend
 
 Audio={}
+-- Audio objects retain one decoded clip and one current playback per load.
+function __rustic_audio_object(source)
+    local object = {}
+    local loaded
+    function object:load()
+        if not loaded then loaded=rustic.query({op='audio_load',source=source}) end
+        return object
+    end
+    local function requireLoaded()
+        assert(loaded, 'audio is not loaded; call :load() before :play()')
+        return loaded
+    end
+    function object:play(opts)
+        local query={op='audio_loaded_play',entity=requireLoaded()}
+        for k,v in pairs(opts or {}) do
+            if k=='volume' or k=='pitch' or k=='loop' or k=='position' then query[k]=v end
+        end
+        local id=rustic.query(query)
+        return {id=id,stop=function() rustic.query({op='audio_stop',entity=id}) end,pause=function() rustic.query({op='audio_pause',entity=id}) end,resume=function() rustic.query({op='audio_resume',entity=id}) end}
+    end
+    function object:stop() rustic.query({op='audio_loaded_stop',entity=requireLoaded()}) end
+    function object:pause() rustic.query({op='audio_loaded_pause',entity=requireLoaded()}) end
+    function object:resume() rustic.query({op='audio_loaded_resume',entity=requireLoaded()}) end
+    function object:Unload()
+        if loaded then rustic.query({op='audio_unload',entity=loaded});loaded=nil end
+    end
+    object.unload=object.Unload
+    return object
+end
+function Audio.load(source) return __rustic_audio_object(source):load() end
 function Audio.play(source,opts)
     opts=opts or {};opts.op='audio_play';opts.source=source;local id=rustic.query(opts)
     return {id=id,stop=function() rustic.query({op='audio_stop',entity=id}) end,pause=function() rustic.query({op='audio_pause',entity=id}) end,resume=function() rustic.query({op='audio_resume',entity=id}) end}

@@ -6,12 +6,18 @@ local function push(op, fields)
     table.insert(commands, fields)
 end
 local function inactive() return {pressed=false,released=false,held=false,axis=0} end
-local function objectPath(source)
+local function objectPath(source, assetPath)
+    assetPath = assetPath or ''
     return setmetatable({__source=source}, {__index=function(_, name)
         if name=='EditAttribute' or name=='edit_attribute' then
             return function(_, attribute, value) push('edit_attribute',{source=source,name=attribute,value=value}) end
         end
-        return objectPath(source .. '.' .. name)
+        if name=='load' or name=='play' or name=='stop' or name=='pause' or name=='resume' or name=='Unload' or name=='unload' then
+            local audio=__rustic_audio_object(assetPath)
+            for key,value in pairs(audio) do rawset(_,key,value) end
+            return audio[name]
+        end
+        return objectPath(source .. '.' .. name, assetPath=='' and name or assetPath .. '/' .. name)
     end})
 end
 rustic = {game=objectPath('rustic.game')}
