@@ -1339,8 +1339,10 @@ impl eframe::App for EditorApp {
                 self.attach_project_script(&path, scope);
             }
             Some(ProjectFileAction::Refresh) => {
+                self.model_assets = load_project_model_assets(&project_root);
                 self.project_scan = Some(spawn_project_scan(project_root));
                 self.last_project_scan = Instant::now();
+                self.refresh_preview();
             }
             _ => {}
         }
@@ -3729,9 +3731,7 @@ fn load_project_model_assets(root: &Path) -> BTreeMap<AssetId, ModelArtifact> {
                 continue;
             }
             if file_type.is_dir() {
-                if !is_hidden_project_directory(&entry.file_name())
-                    && path != root.join(".rustic/trash")
-                {
+                if !is_hidden_project_directory(&entry.file_name()) {
                     visit(root, &path, output);
                 }
                 continue;
@@ -4584,17 +4584,11 @@ fn project_path_occupied(path: &Path) -> Result<bool, String> {
 }
 
 fn relocate_project_entry(source: &Path, destination: &Path) -> Result<(), String> {
-    if destination
-        .try_exists()
-        .map_err(|error| error.to_string())?
-    {
+    if project_path_occupied(destination)? {
         return Err("An entry with that name already exists".into());
     }
     let metadata = source.is_file().then(|| sidecar_path(source));
-    if let Some(metadata) = &metadata
-        && metadata.exists()
-        && sidecar_path(destination).exists()
-    {
+    if metadata.is_some() && project_path_occupied(&sidecar_path(destination))? {
         return Err("Asset metadata already exists at the destination".into());
     }
     std::fs::rename(source, destination).map_err(|error| error.to_string())?;
@@ -4795,9 +4789,7 @@ fn scan_project_directory(root: &Path, directory: &Path) -> ProjectDirectory {
             }
             let path = entry.path();
             if file_type.is_dir() {
-                if !is_hidden_project_directory(&entry.file_name())
-                    && path != root.join(".rustic/trash")
-                {
+                if !is_hidden_project_directory(&entry.file_name()) {
                     node.directories.push(scan_project_directory(root, &path));
                 }
             } else if file_type.is_file()
@@ -4821,7 +4813,7 @@ fn scan_project_directory(root: &Path, directory: &Path) -> ProjectDirectory {
 fn is_hidden_project_directory(name: &std::ffi::OsStr) -> bool {
     matches!(
         name.to_string_lossy().to_ascii_lowercase().as_str(),
-        ".git" | ".tools" | "target" | "cache" | "temp" | "builds" | "logs"
+        ".git" | ".tools" | ".rustic" | "target" | "cache" | "temp" | "builds" | "logs"
     )
 }
 
@@ -5220,6 +5212,97 @@ mod explorer_tests {
             "original"
         );
         assert!(trash.join("renamed.lua.rmeta").exists());
+    }
+
+    #[test]
+    fn file_moves_reject_orphaned_destination_metadata() {
+        let project = TestProject::new();
+        let root = &project.0;
+        std::fs::write(root.join("a.obj"), "source").unwrap();
+        std::fs::create_dir(root.join("models")).unwrap();
+        for target in [root.join("b.obj"), root.join("models/a.obj")] {
+            std::fs::write(sidecar_path(&target), "orphan identity").unwrap();
+        }
+        assert!(rename_project_entry(root, Path::new("a.obj"), "b.obj").is_err());
+        assert!(move_project_entry(root, Path::new("a.obj"), Path::new("models")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.obj")).unwrap(),
+            "source"
+        );
+        for target in [root.join("b.obj"), root.join("models/a.obj")] {
+            assert!(!target.exists());
+            assert_eq!(
+                std::fs::read_to_string(sidecar_path(&target)).unwrap(),
+                "orphan identity"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_moves_reject_dangling_destination_links_and_sidecars() {
+        let project = TestProject::new();
+        let root = &project.0;
+        std::fs::write(root.join("a.obj"), "source").unwrap();
+        std::fs::create_dir(root.join("models")).unwrap();
+        let missing = root.join("missing");
+        for target in [root.join("b.obj"), root.join("models/a.obj")] {
+            std::os::unix::fs::symlink(&missing, &target).unwrap();
+        }
+        assert!(rename_project_entry(root, Path::new("a.obj"), "b.obj").is_err());
+        assert!(move_project_entry(root, Path::new("a.obj"), Path::new("models")).is_err());
+        for target in [root.join("b.obj"), root.join("models/a.obj")] {
+            assert_eq!(std::fs::read_link(&target).unwrap(), missing);
+            std::fs::remove_file(&target).unwrap();
+            std::os::unix::fs::symlink(&missing, sidecar_path(&target)).unwrap();
+        }
+        assert!(rename_project_entry(root, Path::new("a.obj"), "b.obj").is_err());
+        assert!(move_project_entry(root, Path::new("a.obj"), Path::new("models")).is_err());
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.obj")).unwrap(),
+            "source"
+        );
+        for target in [root.join("b.obj"), root.join("models/a.obj")] {
+            assert!(!target.exists());
+            assert_eq!(std::fs::read_link(sidecar_path(&target)).unwrap(), missing);
+        }
+    }
+
+    #[test]
+    fn model_reload_reconciles_moves_unsupported_renames_and_deletion() {
+        let project = TestProject::new();
+        let root = &project.0;
+        std::fs::write(
+            root.join("triangle.obj"),
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        )
+        .unwrap();
+        let (id, _) = import_model_asset(root, Path::new("triangle.obj")).unwrap();
+        assert!(load_project_model_assets(root).contains_key(&id));
+        std::fs::create_dir(root.join("models")).unwrap();
+        move_project_entry(root, Path::new("triangle.obj"), Path::new("models")).unwrap();
+        assert!(load_project_model_assets(root).contains_key(&id));
+        rename_project_entry(root, Path::new("models/triangle.obj"), "triangle.txt").unwrap();
+        assert!(load_project_model_assets(root).is_empty());
+        rename_project_entry(root, Path::new("models/triangle.txt"), "triangle.obj").unwrap();
+        assert!(load_project_model_assets(root).contains_key(&id));
+        delete_project_entry(root, Path::new("models/triangle.obj")).unwrap();
+        assert!(load_project_model_assets(root).is_empty());
+        assert!(
+            scan_project_directory(root, root)
+                .directories
+                .iter()
+                .all(|entry| entry.name != ".rustic")
+        );
+        // Generated assets must be excluded too, not only the trash child.
+        std::fs::create_dir_all(root.join(".rustic/generated")).unwrap();
+        std::fs::write(
+            root.join(".rustic/generated/triangle.obj"),
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n",
+        )
+        .unwrap();
+        import_model_asset(root, Path::new(".rustic/generated/triangle.obj")).unwrap();
+        assert!(load_project_model_assets(root).is_empty());
     }
 
     #[test]
