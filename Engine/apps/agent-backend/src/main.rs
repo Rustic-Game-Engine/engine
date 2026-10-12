@@ -24,20 +24,59 @@ fn main() {
             std::process::exit(2);
         }
     };
-    let Some(root) = find_project_root(&project_root) else {
-        eprintln!("The supplied folder is not a readable Rustic project");
-        std::process::exit(2);
-    };
+    // Global MCP registrations have no --project argument, and desktop clients
+    // may launch us outside a game. Project discovery must not gate the handshake.
+    let mut session = WorkspaceSession::new(project_root);
     let stdin = io::stdin();
     let mut stdout = io::stdout().lock();
     for line in stdin.lock().lines().map_while(Result::ok) {
         let Ok(request) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(response) = handle(&root, &request) {
+        if let Some(response) = handle(&mut session, &request) {
             let _ = writeln!(stdout, "{response}");
             let _ = stdout.flush();
         }
+    }
+}
+
+struct WorkspaceSession {
+    start: PathBuf,
+    root: Option<PathBuf>,
+}
+
+impl WorkspaceSession {
+    fn new(start: PathBuf) -> Self {
+        Self {
+            root: find_project_root(&start),
+            start,
+        }
+    }
+
+    fn project_for_tool(&mut self, name: &str, args: &Value) -> Result<&Path, String> {
+        if name == "workspace_info" && args.get("project_root").is_some() {
+            let supplied = Path::new(required_arg(args, "project_root")?);
+            if !supplied.is_absolute() {
+                return Err("project_root must be an absolute directory path".into());
+            }
+            if !supplied.is_dir() {
+                return Err("project_root must name a readable game directory".into());
+            }
+            // Keep an existing selection if a replacement is invalid.
+            let root = find_project_root(supplied).ok_or_else(|| {
+                format!(
+                    "No readable Rustic project was found at {}. Select a game directory containing project.engine.",
+                    supplied.display()
+                )
+            })?;
+            self.root = Some(root);
+        }
+        if self.root.is_none() {
+            self.root = find_project_root(&self.start);
+        }
+        self.root.as_deref().ok_or_else(|| {
+            "No Rustic project is selected. Call workspace_info with project_root set to an absolute game directory containing project.engine, or configure the MCP server with --project <game-directory>.".into()
+        })
     }
 }
 
@@ -49,7 +88,7 @@ fn find_project_root(start: &Path) -> Option<PathBuf> {
         .map(Path::to_path_buf)
 }
 
-fn handle(root: &Path, request: &Value) -> Option<Value> {
+fn handle(session: &mut WorkspaceSession, request: &Value) -> Option<Value> {
     let id = request.get("id")?.clone();
     let method = request
         .get("method")
@@ -59,7 +98,8 @@ fn handle(root: &Path, request: &Value) -> Option<Value> {
         "initialize" => json!({
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": false}},
-            "serverInfo": {"name": "rustic-workspace", "version": env!("CARGO_PKG_VERSION")}
+            "serverInfo": {"name": "rustic-workspace", "version": env!("CARGO_PKG_VERSION")},
+            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file before editing game content."
         }),
         "tools/list" => json!({"tools": tools()}),
         "tools/call" => {
@@ -72,7 +112,10 @@ fn handle(root: &Path, request: &Value) -> Option<Value> {
                 .get("arguments")
                 .cloned()
                 .unwrap_or_else(|| json!({}));
-            match call_tool(root, name, &args) {
+            match session
+                .project_for_tool(name, &args)
+                .and_then(|root| call_tool(root, name, &args))
+            {
                 Ok(value) => json!({"content": [{"type": "text", "text": value.to_string()}]}),
                 Err(error) => {
                     json!({"isError": true, "content": [{"type": "text", "text": error}]})
@@ -91,7 +134,7 @@ fn handle(root: &Path, request: &Value) -> Option<Value> {
 
 fn tools() -> Value {
     json!([
-        {"name":"workspace_info","description":"Return the canonical Rustic project root, project metadata, and repository guidance.","inputSchema":{"type":"object","properties":{}}},
+        {"name":"workspace_info","description":"Return the canonical Rustic project root, project metadata, and repository guidance. Supply project_root to select a game when the MCP client starts outside a project; selection persists for this connection.","inputSchema":{"type":"object","properties":{"project_root":{"type":"string","description":"Absolute game directory containing project.engine, or a directory below it."}}}},
         {"name":"list_agent_files","description":"List agent information in Rustic editor app data. Scope defaults to project; user selects shared integrations.","inputSchema":{"type":"object","properties":{"scope":{"type":"string","enum":["project","user"]}}}},
         {"name":"read_agent_file","description":"Read a UTF-8 agent file relative to the app-data agent directory (maximum 2 MiB). Scope defaults to project.","inputSchema":{"type":"object","required":["path"],"properties":{"path":{"type":"string"},"scope":{"type":"string","enum":["project","user"]}}}},
         {"name":"write_agent_file","description":"Atomically edit app-data agent information; edits persist across editor restarts. Scope defaults to project.","inputSchema":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"},"scope":{"type":"string","enum":["project","user"]}}}},
@@ -351,6 +394,93 @@ fn required_arg<'a>(args: &'a Value, name: &str) -> Result<&'a str, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handshake_and_tool_discovery_do_not_require_a_project() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut session = WorkspaceSession::new(temp.path().to_path_buf());
+        for method in ["initialize", "tools/list", "ping"] {
+            let response = handle(
+                &mut session,
+                &json!({"jsonrpc":"2.0","id":1,"method":method}),
+            )
+            .unwrap();
+            assert!(response.get("result").is_some(), "{response}");
+        }
+        assert!(session.root.is_none());
+        let response = handle(
+            &mut session,
+            &json!({"id":2,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"project.engine"}}}),
+        )
+        .unwrap();
+        assert_eq!(response["result"]["isError"], true);
+        assert!(
+            response["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains("workspace_info")
+        );
+        assert!(handle(&mut session, &json!({"method":"notifications/initialized"})).is_none());
+    }
+
+    #[test]
+    fn project_selection_persists_and_invalid_selection_keeps_the_previous_game() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temp.path().join("game"),
+            "Selected game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let root = project.root().canonicalize().unwrap();
+        let mut session = WorkspaceSession::new(temp.path().to_path_buf());
+        assert_eq!(
+            session
+                .project_for_tool("workspace_info", &json!({"project_root": root}))
+                .unwrap(),
+            root
+        );
+        assert_eq!(
+            session.project_for_tool("read_file", &json!({})).unwrap(),
+            root
+        );
+        for supplied in [
+            json!(temp.path()),
+            json!(temp.path().join("missing")),
+            json!(root.join("project.engine")),
+            json!("relative/game"),
+            json!(null),
+            json!(42),
+        ] {
+            assert!(
+                session
+                    .project_for_tool("workspace_info", &json!({"project_root": supplied}))
+                    .is_err()
+            );
+            assert_eq!(session.root.as_ref(), Some(&root));
+        }
+        let response = handle(
+            &mut session,
+            &json!({"id":3,"method":"tools/call","params":{"name":"read_file","arguments":{"path":"project.engine"}}}),
+        )
+        .unwrap();
+        assert_eq!(response["result"]["content"][0]["type"], "text");
+        assert!(response["result"].get("isError").is_none());
+    }
+
+    #[test]
+    fn discovery_from_a_game_subdirectory_still_selects_that_game() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temp.path().join("game"),
+            "Discovered game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let session = WorkspaceSession::new(project.root().join("scripts"));
+        assert_eq!(session.root, Some(project.root().canonicalize().unwrap()));
+    }
+
     #[test]
     fn agent_tools_read_write_list_and_reject_escapes() {
         let temp = tempfile::tempdir().unwrap();
