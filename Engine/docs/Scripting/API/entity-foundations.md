@@ -88,6 +88,14 @@ across callbacks. An empty query returns an empty list, never a fake entity.
   scale combined with rotation can require shear; the current TRS representation
   cannot preserve that pose, and the call errors without mutation. Pass false
   only if keeping the local transform is intended.
+- Stop/change review exports only local translation changes. Destroyed authored
+  entities are skipped, so destroying an object or its subtree does not prevent
+  Play from stopping normally. Deletions and hierarchy edits are runtime-only;
+  applying reviewed changes does not delete objects or change their authored
+  parents. Entities whose parent differs from the original scene are excluded
+  from translation review, including after detach, because their local coordinates
+  belong to a different parent. Other surviving entities still contribute edits.
+  If the original parent is restored before Stop, translation review resumes.
 - Components queries report the existing authored built-ins: rustic.transform,
   rustic.part_attributes, rustic.name, rustic.folder, rustic.parent, rustic.mesh,
   rustic.material, rustic.camera, rustic.light, rustic.primitive, rustic.scripts;

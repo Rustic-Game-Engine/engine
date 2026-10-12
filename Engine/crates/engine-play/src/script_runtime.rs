@@ -668,7 +668,10 @@ impl RuntimeScripts {
             .map(|entity| {
                 (
                     entity.id,
-                    entity.local_transform.translation.to_array().map(f64::from),
+                    (
+                        entity.parent,
+                        entity.local_transform.translation.to_array().map(f64::from),
+                    ),
                 )
             })
             .collect();
@@ -677,7 +680,16 @@ impl RuntimeScripts {
             .lock()
             .map_err(|_| "runtime world lock poisoned")?;
         let mut changes = Vec::new();
-        for (entity, original) in before {
+        for (entity, (original_parent, original)) in before {
+            // Structural edits are runtime-only: the review/apply format can
+            // represent translations, but not deletions or changed parents.
+            // Never dereference a deleted original, or apply a rewritten local
+            // translation while the editor retains the authored parent.
+            if !world.contains(entity)
+                || world.parent(entity).map_err(|error| error.to_string())? != original_parent
+            {
+                continue;
+            }
             let current = world
                 .local_transform(entity)
                 .map_err(|error| error.to_string())?
@@ -3339,6 +3351,122 @@ rustic_run(["on_start"=>"on_start"]);"#),
                 .unwrap()
                 .order,
             100
+        );
+    }
+
+    #[test]
+    fn runtime_changes_skip_destroyed_originals_and_keep_survivor_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut scene = SceneDocument::new("Review");
+        let root = EntitySnapshot::default();
+        let child = EntitySnapshot {
+            parent: Some(root.id),
+            ..EntitySnapshot::default()
+        };
+        let survivor = EntitySnapshot::default();
+        let (root_id, survivor_id) = (root.id, survivor.id);
+        scene.entities = vec![root, child, survivor];
+        let scene_bytes = scene.to_bytes().unwrap();
+        let mut runtime = RuntimeScripts::load(temp.path(), &scene_bytes).unwrap();
+        let mut host = environment_host(&runtime.world);
+        host.gameplay_query(serde_json::json!({"op":"entity_destroy","entity":root_id}))
+            .unwrap();
+        {
+            let mut world = runtime.world.lock().unwrap();
+            world
+                .apply_commands(&[WorldCommand::SetLocalTransform {
+                    entity: survivor_id,
+                    value: engine_world::LocalTransform {
+                        translation: glam::Vec3::X,
+                        ..engine_world::LocalTransform::IDENTITY
+                    },
+                }])
+                .unwrap();
+        }
+        runtime.stop();
+        let changes = runtime.runtime_changes("base", &scene_bytes).unwrap();
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].target.entity_id, survivor_id.to_string());
+        assert_eq!(
+            changes.changes[0].after,
+            RuntimeValue::Vector3([1., 0., 0.])
+        );
+        assert_eq!(scene.to_bytes().unwrap(), scene_bytes);
+    }
+
+    #[test]
+    fn runtime_changes_suppress_reparented_translations_until_parent_is_restored() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut scene = SceneDocument::new("Review");
+        let parent = EntitySnapshot {
+            local_transform: engine_world::LocalTransform {
+                translation: glam::Vec3::new(10., 0., 0.),
+                ..engine_world::LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let other_parent = EntitySnapshot {
+            local_transform: engine_world::LocalTransform {
+                translation: glam::Vec3::new(20., 0., 0.),
+                ..engine_world::LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let child = EntitySnapshot {
+            parent: Some(parent.id),
+            local_transform: engine_world::LocalTransform {
+                translation: glam::Vec3::X,
+                ..engine_world::LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let (parent_id, other_id, child_id) = (parent.id, other_parent.id, child.id);
+        scene.entities = vec![parent, other_parent, child];
+        let scene_bytes = scene.to_bytes().unwrap();
+        let mut runtime = RuntimeScripts::load(temp.path(), &scene_bytes).unwrap();
+        for keep_world in [true, false] {
+            let mut host = environment_host(&runtime.world);
+            host.gameplay_query(serde_json::json!({"op":"hierarchy_set_parent","entity":child_id,"parent":other_id,"keep_world":keep_world})).unwrap();
+            assert!(
+                runtime
+                    .runtime_changes("base", &scene_bytes)
+                    .unwrap()
+                    .changes
+                    .is_empty()
+            );
+            host.gameplay_query(serde_json::json!({"op":"hierarchy_detach","entity":child_id,"keep_world":keep_world})).unwrap();
+            assert!(
+                runtime
+                    .runtime_changes("base", &scene_bytes)
+                    .unwrap()
+                    .changes
+                    .is_empty()
+            );
+            // A restored parent makes local translation edits meaningful again.
+            host.gameplay_query(serde_json::json!({"op":"hierarchy_set_parent","entity":child_id,"parent":parent_id,"keep_world":true})).unwrap();
+        }
+        {
+            let mut world = runtime.world.lock().unwrap();
+            let mut value = world.local_transform(child_id).unwrap();
+            value.translation = glam::Vec3::new(2., 0., 0.);
+            world
+                .apply_commands(&[WorldCommand::SetLocalTransform {
+                    entity: child_id,
+                    value,
+                }])
+                .unwrap();
+        }
+        runtime.stop();
+        let changes = runtime.runtime_changes("base", &scene_bytes).unwrap();
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].target.entity_id, child_id.to_string());
+        assert_eq!(
+            changes.changes[0].before,
+            RuntimeValue::Vector3([1., 0., 0.])
+        );
+        assert_eq!(
+            changes.changes[0].after,
+            RuntimeValue::Vector3([2., 0., 0.])
         );
     }
 
