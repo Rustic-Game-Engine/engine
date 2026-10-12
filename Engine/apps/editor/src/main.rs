@@ -1,3 +1,4 @@
+mod explorer_selection;
 mod play_session;
 mod ui_theme;
 
@@ -28,6 +29,7 @@ use engine_scripting::{
 };
 use engine_world::ScriptComponent;
 use engine_world::{EntityId, LocalTransform, Primitive, RenderWorldBuffer};
+use explorer_selection::{ExplorerSelection, selection_roots};
 use glam::{EulerRot, Mat4, Quat, Vec2, Vec3};
 use num_traits::ToPrimitive as _;
 use play_session::EditorPlaySession;
@@ -1380,8 +1382,18 @@ struct EditorViewer<'a> {
 
 #[derive(Clone, Debug)]
 enum ViewportDrop {
-    ProjectFile(PathBuf),
-    ProjectDirectory(PathBuf),
+    File(PathBuf),
+    Directory(PathBuf),
+    Entries(Vec<PathBuf>),
+}
+
+impl ViewportDrop {
+    fn project_paths(&self) -> Vec<PathBuf> {
+        match self {
+            Self::File(path) | Self::Directory(path) => vec![path.clone()],
+            Self::Entries(paths) => paths.clone(),
+        }
+    }
 }
 
 impl Behavior<EditorTab> for EditorViewer<'_> {
@@ -1511,7 +1523,7 @@ impl EditorViewer<'_> {
             self.viewport_input(ui, &response);
             self.gizmo_overlay(ui, response.rect);
         }
-        if let Some(ViewportDrop::ProjectFile(path)) = dropped.as_deref() {
+        if let Some(ViewportDrop::File(path)) = dropped.as_deref() {
             if path.extension().is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("scene") || extension.eq_ignore_ascii_case("rscene")
             }) {
@@ -1613,11 +1625,18 @@ impl EditorViewer<'_> {
             }
         }
         // Directories organize project assets and have no viewport representation.
-        if matches!(dropped.as_deref(), Some(ViewportDrop::ProjectDirectory(_))) {
+        if matches!(dropped.as_deref(), Some(ViewportDrop::Directory(_))) {
             self.console.push(simple_console(
                 Severity::Info,
                 "explorer",
                 "Folders can only be moved inside the Explorer",
+            ));
+        }
+        if matches!(dropped.as_deref(), Some(ViewportDrop::Entries(_))) {
+            self.console.push(simple_console(
+                Severity::Info,
+                "explorer",
+                "Drop one model or script at a time into the viewport",
             ));
         }
         ui.small(self.preview_status);
@@ -2304,6 +2323,7 @@ impl EditorViewer<'_> {
     }
 
     fn file_explorer(&mut self, ui: &mut egui::Ui) {
+        begin_explorer_selection(ui);
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Filter").color(ui_theme::MUTED));
             ui.add(
@@ -2351,6 +2371,9 @@ impl EditorViewer<'_> {
                             )
                         });
                     action = root.inner;
+                    if background.clicked() {
+                        clear_explorer_selection(ui);
+                    }
                     let dropped =
                         dropped.or_else(|| background.dnd_release_payload::<ViewportDrop>());
                     background.context_menu(|ui| {
@@ -2364,17 +2387,14 @@ impl EditorViewer<'_> {
                             .add_enabled(enabled, egui::Button::new("Paste at Project Root"))
                             .clicked()
                         {
-                            action = Some(ProjectFileAction::Paste(PathBuf::new()));
+                            action = Some(ProjectFileAction::Paste(vec![PathBuf::new()]));
                             ui.close();
                         }
                     });
                     if action.is_none() {
-                        action = dropped.as_deref().map(|payload| match payload {
-                            ViewportDrop::ProjectFile(path)
-                            | ViewportDrop::ProjectDirectory(path) => ProjectFileAction::Move {
-                                source: path.clone(),
-                                destination: PathBuf::new(),
-                            },
+                        action = dropped.as_deref().map(|payload| ProjectFileAction::Move {
+                            sources: payload.project_paths(),
+                            destination: PathBuf::new(),
                         });
                     }
                     if !filter.is_empty() && !project_directory_matches(tree, &filter) {
@@ -2391,6 +2411,13 @@ impl EditorViewer<'_> {
                 ui.weak("Scanning project files…");
             });
         }
+        if let Some(shortcut) = explorer_keyboard_action(
+            ui,
+            self.project_root,
+            !self.document.is_read_only() && !self.playing,
+        ) {
+            action = Some(shortcut);
+        }
         self.apply_project_file_action(ui, action);
     }
 
@@ -2405,63 +2432,76 @@ impl EditorViewer<'_> {
                 if can_edit =>
             {
                 let cut = matches!(entry_action, ProjectFileAction::Cut(_));
-                let (ProjectFileAction::Copy(source) | ProjectFileAction::Cut(source)) =
+                let (ProjectFileAction::Copy(sources) | ProjectFileAction::Cut(sources)) =
                     entry_action
                 else {
                     unreachable!()
                 };
-                ui.ctx().data_mut(|data| {
-                    data.insert_temp(project_clipboard_id(), ProjectClipboard { source, cut })
-                });
+                if !sources.is_empty() {
+                    ui.ctx().data_mut(|data| {
+                        data.insert_temp(
+                            project_clipboard_id(),
+                            ProjectClipboard {
+                                sources: selection_roots(sources),
+                                cut,
+                            },
+                        )
+                    });
+                }
             }
             Some(action) if can_edit => {
-                let result = match action {
-                    ProjectFileAction::Move {
-                        source,
-                        destination,
-                    } => move_project_entry(self.project_root, &source, &destination),
+                let renamed = match &action {
                     ProjectFileAction::Rename(source, name) => {
-                        rename_project_entry(self.project_root, &source, &name)
+                        Some((source.clone(), source.with_file_name(name)))
                     }
-                    ProjectFileAction::Delete(source) => {
-                        delete_project_entry(self.project_root, &source)
+                    _ => None,
+                };
+                let results = match action {
+                    ProjectFileAction::Move {
+                        sources,
+                        destination,
+                    } => selection_roots(sources)
+                        .iter()
+                        .map(|source| move_project_entry(self.project_root, source, &destination))
+                        .collect::<Vec<_>>(),
+                    ProjectFileAction::Rename(source, name) => {
+                        vec![rename_project_entry(self.project_root, &source, &name)]
                     }
-                    ProjectFileAction::Paste(destination) => {
-                        let clipboard = ui.ctx().data_mut(|data| {
+                    ProjectFileAction::Delete(sources) => selection_roots(sources)
+                        .iter()
+                        .map(|source| delete_project_entry(self.project_root, source))
+                        .collect(),
+                    ProjectFileAction::Paste(destinations) => {
+                        if let Some(mut clipboard) = ui.ctx().data_mut(|data| {
                             data.get_temp::<ProjectClipboard>(project_clipboard_id())
-                        });
-                        if let Some(clipboard) = clipboard {
-                            let result = if clipboard.cut {
-                                move_project_entry(
-                                    self.project_root,
-                                    &clipboard.source,
-                                    &destination,
-                                )
-                            } else {
-                                copy_project_entry(
-                                    self.project_root,
-                                    &clipboard.source,
-                                    &destination,
-                                )
-                            };
-                            if result.is_ok() && clipboard.cut {
-                                ui.ctx().data_mut(|data| {
+                        }) {
+                            let results = paste_project_entries(
+                                self.project_root,
+                                &mut clipboard,
+                                &destinations,
+                            );
+                            ui.ctx().data_mut(|data| {
+                                if clipboard.sources.is_empty() {
                                     data.remove::<ProjectClipboard>(project_clipboard_id());
-                                });
-                            }
-                            result
+                                } else {
+                                    data.insert_temp(project_clipboard_id(), clipboard);
+                                }
+                            });
+                            results
                         } else {
-                            Ok(())
+                            vec![]
                         }
                     }
-                    _ => Ok(()),
+                    _ => vec![],
                 };
-                if let Err(error) = result {
+                let succeeded = results.iter().all(Result::is_ok);
+                for error in results.into_iter().filter_map(Result::err) {
                     self.console
                         .push(simple_console(Severity::Error, "explorer", error));
-                } else {
-                    *self.project_file_action = Some(ProjectFileAction::Refresh);
                 }
+                update_explorer_selection(ui, self.project_root, renamed.filter(|_| succeeded));
+                // Rescan after partial batches too, so completed operations are visible.
+                *self.project_file_action = Some(ProjectFileAction::Refresh);
             }
             _ => {}
         }
@@ -4189,12 +4229,12 @@ enum ProjectFileAction {
     Open(PathBuf),
     Attach(PathBuf, ScriptScope),
     Rename(PathBuf, String),
-    Copy(PathBuf),
-    Cut(PathBuf),
-    Paste(PathBuf),
-    Delete(PathBuf),
+    Copy(Vec<PathBuf>),
+    Cut(Vec<PathBuf>),
+    Paste(Vec<PathBuf>),
+    Delete(Vec<PathBuf>),
     Move {
-        source: PathBuf,
+        sources: Vec<PathBuf>,
         destination: PathBuf,
     },
 }
@@ -4299,14 +4339,14 @@ fn render_project_directory(
     });
     let (_, header_response, _) = drop.inner;
     if let Some(payload) = dropped.as_deref() {
-        let source = match payload {
-            ViewportDrop::ProjectFile(path) | ViewportDrop::ProjectDirectory(path) => Some(path),
-        };
-        if let Some(source) = source
-            && source != &directory.relative_path
-        {
+        let sources: Vec<_> = payload
+            .project_paths()
+            .into_iter()
+            .filter(|source| source != &directory.relative_path)
+            .collect();
+        if !sources.is_empty() {
             action = Some(ProjectFileAction::Move {
-                source: source.clone(),
+                sources,
                 destination: directory.relative_path.clone(),
             });
         }
@@ -4348,7 +4388,7 @@ fn render_project_file(
 
 #[derive(Clone)]
 struct ProjectClipboard {
-    source: PathBuf,
+    sources: Vec<PathBuf>,
     cut: bool,
 }
 
@@ -4369,6 +4409,14 @@ fn project_entry_row(
     let rename_id = ui.make_persistent_id(("project-rename", path));
     let editing = ui.ctx().data_mut(|data| data.get_temp::<String>(rename_id));
     if let Some(mut text) = editing {
+        ui.ctx().data_mut(|data| {
+            let mut selection = data
+                .get_temp::<ExplorerSelection>(explorer_selection_id())
+                .unwrap_or_default();
+            selection.rendered.push(path.to_path_buf());
+            selection.renaming = true;
+            data.insert_temp(explorer_selection_id(), selection);
+        });
         let response = ui.add(egui::TextEdit::singleline(&mut text).id(rename_id));
         let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
         let enter = ui.input(|input| input.key_pressed(egui::Key::Enter));
@@ -4380,45 +4428,243 @@ fn project_entry_row(
         ui.ctx().data_mut(|data| data.insert_temp(rename_id, text));
         return None;
     }
-    let response = ui.add(
-        egui::Label::new(egui::RichText::new(name).color(color))
-            .sense(egui::Sense::click_and_drag()),
-    );
-    if can_edit && response.drag_started_by(egui::PointerButton::Primary) {
-        response.dnd_set_drag_payload(if directory {
-            ViewportDrop::ProjectDirectory(path.to_path_buf())
-        } else {
-            ViewportDrop::ProjectFile(path.to_path_buf())
-        });
+    let state_id = explorer_selection_id();
+    let mut selection = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<ExplorerSelection>(state_id))
+        .unwrap_or_default();
+    selection.rendered.push(path.to_path_buf());
+    let highlighted = selection.highlighted.contains(path);
+    let response = ui
+        .selectable_label(highlighted, egui::RichText::new(name).color(color))
+        .interact(egui::Sense::click_and_drag());
+    let (pressed, modifiers) = ui.input(|input| {
+        (
+            input.pointer.button_pressed(egui::PointerButton::Primary),
+            input.modifiers,
+        )
+    });
+    if pressed && response.is_pointer_button_down_on() {
+        selection.press(path, modifiers.shift, modifiers.ctrl || modifiers.command);
     }
-    let pending_id = rename_id.with("pending-click");
-    let now = ui.input(|input| input.time);
-    let pending = ui.ctx().data_mut(|data| data.get_temp::<f64>(pending_id));
-    let mut action = None;
-    if response.double_clicked() && !directory {
-        ui.ctx().data_mut(|data| data.remove::<f64>(pending_id));
-        action = Some(ProjectFileAction::Open(path.to_path_buf()));
-    } else if response.clicked() && can_edit {
-        ui.ctx().data_mut(|data| data.insert_temp(pending_id, now));
-        ui.ctx().request_repaint_after(Duration::from_millis(310));
-    } else if can_edit
-        && pending.is_some_and(|time| now - time > 0.3)
-        && !ui.input(|input| input.pointer.any_down())
+    if selection.brushing
+        && modifiers.shift
+        && !modifiers.ctrl
+        && !modifiers.command
+        && ui.input(|input| input.pointer.primary_down())
+        && response.contains_pointer()
     {
-        ui.ctx().data_mut(|data| {
-            data.remove::<f64>(pending_id);
-            data.insert_temp(rename_id, name.to_owned());
-        });
+        selection.select(path, true, false);
+        selection.press = None;
+    }
+    if can_edit
+        && response.drag_started_by(egui::PointerButton::Primary)
+        && selection.can_drag(path)
+        && !modifiers.shift
+        && !modifiers.ctrl
+        && !modifiers.command
+    {
+        let sources = selection_roots(selection.highlighted.iter().cloned());
+        response.dnd_set_drag_payload(
+            if sources.len() > 1 || sources.first().is_some_and(|source| source != path) {
+                ViewportDrop::Entries(sources)
+            } else if directory {
+                ViewportDrop::Directory(path.to_path_buf())
+            } else {
+                ViewportDrop::File(path.to_path_buf())
+            },
+        );
+    }
+    if response.clicked() && !modifiers.shift && !modifiers.ctrl && !modifiers.command {
+        selection.select(path, false, false);
+    }
+    if response.secondary_clicked() {
+        if !selection.highlighted.contains(path) {
+            selection.select(path, false, false);
+        }
+        selection.focused = true;
+    }
+    if response.double_clicked()
+        && can_edit
+        && !modifiers.shift
+        && !modifiers.ctrl
+        && !modifiers.command
+    {
+        ui.ctx()
+            .data_mut(|data| data.insert_temp(rename_id, name.to_owned()));
         ui.memory_mut(|memory| memory.request_focus(rename_id));
+        selection.renaming = true;
         ui.ctx().request_repaint();
     }
-    if response.secondary_clicked() || response.drag_started() {
-        ui.ctx().data_mut(|data| data.remove::<f64>(pending_id));
-    }
-    action =
-        project_entry_menu(&response, path, directory, can_edit, has_selected_object).or(action);
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(state_id, selection));
+    let action = project_entry_menu(&response, path, directory, can_edit, has_selected_object);
     response.on_hover_text(path.display().to_string());
     action
+}
+
+fn begin_explorer_selection(ui: &egui::Ui) {
+    let outside_press = ui.input(|input| {
+        input.pointer.any_pressed()
+            && !input
+                .pointer
+                .latest_pos()
+                .is_some_and(|pos| ui.max_rect().contains(pos))
+    });
+    let released = ui.input(|input| !input.pointer.primary_down());
+    ui.ctx().data_mut(|data| {
+        let mut selection = data
+            .get_temp::<ExplorerSelection>(explorer_selection_id())
+            .unwrap_or_default();
+        selection.begin_frame();
+        if released || outside_press {
+            selection.press = None;
+            selection.brushing = false;
+        }
+        if outside_press {
+            selection.focused = false;
+        }
+        data.insert_temp(explorer_selection_id(), selection);
+    });
+}
+
+fn clear_explorer_selection(ui: &egui::Ui) {
+    ui.ctx().data_mut(|data| {
+        let mut selection = data
+            .get_temp::<ExplorerSelection>(explorer_selection_id())
+            .unwrap_or_default();
+        selection.highlighted.clear();
+        selection.anchor = None;
+        selection.focused = true;
+        data.insert_temp(explorer_selection_id(), selection);
+    });
+}
+
+fn update_explorer_selection(ui: &egui::Ui, root: &Path, renamed: Option<(PathBuf, PathBuf)>) {
+    ui.ctx().data_mut(|data| {
+        let mut selection = data
+            .get_temp::<ExplorerSelection>(explorer_selection_id())
+            .unwrap_or_default();
+        if let Some((source, destination)) = renamed {
+            selection.relocate(&source, &destination);
+        }
+        selection
+            .highlighted
+            .retain(|path| root.join(path).exists());
+        if selection
+            .anchor
+            .as_ref()
+            .is_some_and(|path| !selection.highlighted.contains(path))
+        {
+            selection.anchor = None;
+        }
+        selection.press = None;
+        data.insert_temp(explorer_selection_id(), selection);
+    });
+}
+
+fn explorer_selection_id() -> egui::Id {
+    egui::Id::new("project-explorer-selection")
+}
+
+fn selected_project_entries(context: &egui::Context, fallback: &Path) -> Vec<PathBuf> {
+    let selection = context
+        .data_mut(|data| data.get_temp::<ExplorerSelection>(explorer_selection_id()))
+        .unwrap_or_default();
+    if selection.highlighted.contains(fallback) {
+        selection_roots(selection.highlighted)
+    } else {
+        vec![fallback.to_path_buf()]
+    }
+}
+
+fn explorer_keyboard_action(
+    ui: &egui::Ui,
+    root: &Path,
+    can_edit: bool,
+) -> Option<ProjectFileAction> {
+    let selection = ui
+        .ctx()
+        .data_mut(|data| data.get_temp::<ExplorerSelection>(explorer_selection_id()))
+        .unwrap_or_default();
+    if !can_edit || !selection.focused || selection.renaming || ui.ctx().text_edit_focused() {
+        return None;
+    }
+    let (copy, paste) = ui.input_mut(|input| {
+        let copy = input.consume_key(egui::Modifiers::CTRL, egui::Key::C)
+            || input.consume_key(egui::Modifiers::COMMAND, egui::Key::C)
+            || input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Copy));
+        let paste = input.consume_key(egui::Modifiers::CTRL, egui::Key::V)
+            || input.consume_key(egui::Modifiers::COMMAND, egui::Key::V)
+            || input
+                .events
+                .iter()
+                .any(|event| matches!(event, egui::Event::Paste(_)));
+        if copy || paste {
+            input
+                .events
+                .retain(|event| !matches!(event, egui::Event::Copy | egui::Event::Paste(_)));
+        }
+        (copy, paste)
+    });
+    if copy {
+        return Some(ProjectFileAction::Copy(selection_roots(
+            selection.highlighted,
+        )));
+    }
+    if paste {
+        let mut destinations: Vec<_> = selection
+            .highlighted
+            .iter()
+            .filter(|path| root.join(path).is_dir())
+            .cloned()
+            .collect();
+        if destinations.is_empty() {
+            destinations.push(
+                selection
+                    .anchor
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .unwrap_or(Path::new(""))
+                    .to_path_buf(),
+            );
+        }
+        return Some(ProjectFileAction::Paste(destinations));
+    }
+    None
+}
+
+fn paste_project_entries(
+    root: &Path,
+    clipboard: &mut ProjectClipboard,
+    destinations: &[PathBuf],
+) -> Vec<Result<(), String>> {
+    let destinations: BTreeSet<_> = destinations.iter().collect();
+    if clipboard.cut && destinations.len() > 1 {
+        return vec![Err("Cut entries can only be pasted into one folder; use Copy to paste into multiple folders".into())];
+    }
+    let mut results = Vec::new();
+    let mut moved = BTreeSet::new();
+    for destination in destinations {
+        for source in &clipboard.sources {
+            let result = if clipboard.cut {
+                move_project_entry(root, source, destination)
+            } else {
+                copy_project_entry(root, source, destination)
+            };
+            if result.is_ok() && clipboard.cut {
+                moved.insert(source.clone());
+            }
+            results.push(result.map_err(|error| {
+                format!("{} → {}: {error}", source.display(), destination.display())
+            }));
+        }
+    }
+    clipboard.sources.retain(|source| !moved.contains(source));
+    results
 }
 
 fn project_entry_menu(
@@ -4431,9 +4677,18 @@ fn project_entry_menu(
     let mut action = None;
     response.context_menu(|ui| {
         for (label, entry_action) in [
-            ("Copy", ProjectFileAction::Copy(path.to_path_buf())),
-            ("Cut", ProjectFileAction::Cut(path.to_path_buf())),
-            ("Delete", ProjectFileAction::Delete(path.to_path_buf())),
+            (
+                "Copy",
+                ProjectFileAction::Copy(selected_project_entries(&response.ctx, path)),
+            ),
+            (
+                "Cut",
+                ProjectFileAction::Cut(selected_project_entries(&response.ctx, path)),
+            ),
+            (
+                "Delete",
+                ProjectFileAction::Delete(selected_project_entries(&response.ctx, path)),
+            ),
         ] {
             if ui.add_enabled(can_edit, egui::Button::new(label)).clicked() {
                 action = Some(entry_action);
@@ -4448,11 +4703,15 @@ fn project_entry_menu(
             .add_enabled(can_edit && has_clipboard, egui::Button::new("Paste"))
             .clicked()
         {
-            action = Some(ProjectFileAction::Paste(if directory {
+            action = Some(ProjectFileAction::Paste(vec![if directory {
                 path.to_path_buf()
             } else {
                 path.parent().unwrap_or(Path::new("")).to_path_buf()
-            }));
+            }]));
+            ui.close();
+        }
+        if !directory && ui.button("Open").clicked() {
+            action = Some(ProjectFileAction::Open(path.to_path_buf()));
             ui.close();
         }
         if !directory && ScriptLanguage::from_path(path).is_some() {
@@ -5399,13 +5658,36 @@ mod explorer_tests {
             0.3,
             vec![egui::Event::PointerMoved(position + egui::vec2(20.0, 0.0))],
         );
+        assert!(!egui::DragAndDrop::has_any_payload(&context));
+        row_frame(
+            &context,
+            0.4,
+            vec![pointer(
+                position + egui::vec2(20.0, 0.0),
+                egui::PointerButton::Primary,
+                false,
+            )],
+        );
+        row_frame(
+            &context,
+            0.8,
+            vec![
+                egui::Event::PointerMoved(position),
+                pointer(position, egui::PointerButton::Primary, true),
+            ],
+        );
+        row_frame(
+            &context,
+            0.9,
+            vec![egui::Event::PointerMoved(position + egui::vec2(20.0, 0.0))],
+        );
         assert!(egui::DragAndDrop::has_payload_of_type::<ViewportDrop>(
             &context
         ));
     }
 
     #[test]
-    fn explorer_click_renames_and_double_click_still_opens() {
+    fn explorer_single_click_highlights_and_double_click_renames() {
         let context = egui::Context::default();
         let (_, rect, _) = row_frame(&context, 0.0, vec![]);
         let position = rect.center();
@@ -5422,6 +5704,11 @@ mod explorer_tests {
             0.15,
             vec![pointer(position, egui::PointerButton::Primary, false)],
         );
+        let selection = context
+            .data_mut(|data| data.get_temp::<ExplorerSelection>(explorer_selection_id()))
+            .unwrap();
+        assert!(selection.highlighted.contains(Path::new("script.lua")));
+        assert!(!selection.renaming);
         row_frame(
             &context,
             0.2,
@@ -5432,35 +5719,25 @@ mod explorer_tests {
             0.25,
             vec![pointer(position, egui::PointerButton::Primary, false)],
         );
-        assert!(matches!(action, Some(ProjectFileAction::Open(_))));
-        row_frame(
+        assert!(action.is_none(), "double click must not open the file");
+        assert!(
+            context
+                .data_mut(|data| data.get_temp::<ExplorerSelection>(explorer_selection_id()))
+                .unwrap()
+                .renaming
+        );
+        let (_, _, action) = row_frame(
             &context,
-            1.0,
-            vec![pointer(position, egui::PointerButton::Primary, true)],
+            0.3,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
         );
-        row_frame(
-            &context,
-            1.05,
-            vec![pointer(position, egui::PointerButton::Primary, false)],
-        );
-        row_frame(&context, 1.4, vec![]);
-        let mut editing = false;
-        let mut output = context.run_ui(
-            egui::RawInput {
-                time: Some(1.5),
-                ..Default::default()
-            },
-            |ui| {
-                editing = ui.ctx().data_mut(|data| {
-                    data.get_temp::<String>(
-                        ui.make_persistent_id(("project-rename", Path::new("script.lua"))),
-                    )
-                    .is_some()
-                });
-            },
-        );
-        output.textures_delta.clear();
-        assert!(editing);
+        assert!(action.is_none(), "Escape cancels rename");
     }
     fn collect_text(shape: &egui::epaint::Shape, text: &mut String) {
         match shape {
@@ -5557,6 +5834,13 @@ mod explorer_tests {
         assert_ne!(output.platform_output.cursor_icon, egui::CursorIcon::Move);
         assert_ne!(output.platform_output.cursor_icon, egui::CursorIcon::Grab);
         assert!(!egui::DragAndDrop::has_any_payload(&context));
+        context.data_mut(|data| {
+            let mut selection = data
+                .get_temp::<ExplorerSelection>(explorer_selection_id())
+                .unwrap_or_default();
+            selection.select(Path::new("scripts/child.lua"), false, false);
+            data.insert_temp(explorer_selection_id(), selection);
+        });
         frame(
             0.2,
             vec![pointer(position, egui::PointerButton::Primary, true)],
@@ -5568,7 +5852,7 @@ mod explorer_tests {
         let payload =
             egui::DragAndDrop::payload::<ViewportDrop>(&context).expect("child starts dragging");
         assert!(
-            matches!(payload.as_ref(), ViewportDrop::ProjectFile(path) if path == Path::new("scripts/child.lua"))
+            matches!(payload.as_ref(), ViewportDrop::File(path) if path == Path::new("scripts/child.lua"))
         );
     }
     #[test]
@@ -5639,6 +5923,416 @@ mod explorer_tests {
         assert!(
             text.contains("Paste at Project Root"),
             "Missing root paste menu: {text}"
+        );
+    }
+    fn selection_frame(
+        context: &egui::Context,
+        root: &Path,
+        time: f64,
+        mut events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, Option<ProjectFileAction>) {
+        let modifiers = events
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                egui::Event::PointerButton { modifiers, .. }
+                | egui::Event::Key { modifiers, .. } => Some(*modifiers),
+                _ => None,
+            })
+            .unwrap_or_else(|| context.input(|input| input.modifiers));
+        events.insert(0, egui::Event::ModifiersChanged(modifiers));
+        let mut action = None;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                begin_explorer_selection(ui);
+                for (name, directory) in [
+                    ("a.lua", false),
+                    ("b.lua", false),
+                    ("c.lua", false),
+                    ("one", true),
+                    ("two", true),
+                ] {
+                    if let Some(row_action) = project_entry_row(
+                        ui,
+                        name,
+                        Path::new(name),
+                        egui::Color32::WHITE,
+                        directory,
+                        true,
+                        true,
+                    ) {
+                        action = Some(row_action);
+                    }
+                }
+                if let Some(shortcut) = explorer_keyboard_action(ui, root, true) {
+                    action = Some(shortcut);
+                }
+            },
+        );
+        output.textures_delta.clear();
+        (output, action)
+    }
+
+    fn text_position(output: &egui::FullOutput, label: &str) -> egui::Pos2 {
+        output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::epaint::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == label
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .unwrap()
+    }
+
+    fn modifier_pointer(
+        position: egui::Pos2,
+        pressed: bool,
+        modifiers: egui::Modifiers,
+    ) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers,
+        }
+    }
+
+    fn ctrl_key(key: egui::Key) -> egui::Event {
+        egui::Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::CTRL | egui::Modifiers::COMMAND,
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "verify keyboard selection, copy and fan-out paste as a single user flow"
+    )]
+    fn explorer_ctrl_range_copy_and_multi_folder_paste_work_end_to_end() {
+        let project = TestProject::new();
+        for name in ["a.lua", "b.lua", "c.lua"] {
+            std::fs::write(project.0.join(name), name).unwrap();
+        }
+        for name in ["one", "two"] {
+            std::fs::create_dir(project.0.join(name)).unwrap();
+        }
+        let context = egui::Context::default();
+        let (output, _) = selection_frame(&context, &project.0, 0.0, vec![]);
+        let a = text_position(&output, "a.lua");
+        let c = text_position(&output, "c.lua");
+        let one = text_position(&output, "one");
+        let two = text_position(&output, "two");
+        selection_frame(
+            &context,
+            &project.0,
+            0.1,
+            vec![
+                egui::Event::PointerMoved(a),
+                modifier_pointer(a, true, egui::Modifiers::NONE),
+            ],
+        );
+        selection_frame(
+            &context,
+            &project.0,
+            0.2,
+            vec![modifier_pointer(a, false, egui::Modifiers::NONE)],
+        );
+        selection_frame(
+            &context,
+            &project.0,
+            0.4,
+            vec![
+                egui::Event::PointerMoved(c),
+                modifier_pointer(c, true, egui::Modifiers::CTRL),
+            ],
+        );
+        selection_frame(
+            &context,
+            &project.0,
+            0.5,
+            vec![modifier_pointer(c, false, egui::Modifiers::CTRL)],
+        );
+        let (_, copy) = selection_frame(&context, &project.0, 0.6, vec![ctrl_key(egui::Key::C)]);
+        let Some(ProjectFileAction::Copy(sources)) = copy else {
+            panic!("Ctrl+C must copy selected rows");
+        };
+        assert_eq!(sources, ["a.lua", "b.lua", "c.lua"].map(PathBuf::from));
+        let mut clipboard = ProjectClipboard {
+            sources,
+            cut: false,
+        };
+        selection_frame(
+            &context,
+            &project.0,
+            0.8,
+            vec![
+                egui::Event::PointerMoved(one),
+                modifier_pointer(one, true, egui::Modifiers::NONE),
+            ],
+        );
+        selection_frame(
+            &context,
+            &project.0,
+            0.9,
+            vec![modifier_pointer(one, false, egui::Modifiers::NONE)],
+        );
+        selection_frame(
+            &context,
+            &project.0,
+            1.1,
+            vec![
+                egui::Event::PointerMoved(two),
+                modifier_pointer(two, true, egui::Modifiers::SHIFT),
+            ],
+        );
+        selection_frame(
+            &context,
+            &project.0,
+            1.2,
+            vec![modifier_pointer(two, false, egui::Modifiers::SHIFT)],
+        );
+        let (_, paste) = selection_frame(
+            &context,
+            &project.0,
+            1.3,
+            vec![ctrl_key(egui::Key::V), egui::Event::Paste(String::new())],
+        );
+        let Some(ProjectFileAction::Paste(destinations)) = paste else {
+            panic!("Ctrl+V must paste into selected folders");
+        };
+        assert_eq!(destinations, ["one", "two"].map(PathBuf::from));
+        assert!(
+            paste_project_entries(&project.0, &mut clipboard, &destinations)
+                .into_iter()
+                .all(|result| result.is_ok())
+        );
+        for folder in ["one", "two"] {
+            for name in ["a.lua", "b.lua", "c.lua"] {
+                assert_eq!(
+                    std::fs::read_to_string(project.0.join(folder).join(name)).unwrap(),
+                    name
+                );
+            }
+        }
+        assert_eq!(
+            clipboard.sources.len(),
+            3,
+            "copy remains available for repeated paste"
+        );
+        assert!(
+            paste_project_entries(&project.0, &mut clipboard, &destinations)
+                .into_iter()
+                .all(|result| result.is_ok())
+        );
+        assert!(project.0.join("one/a copy 1.lua").exists());
+        assert!(project.0.join("two/a copy 1.lua").exists());
+    }
+
+    #[test]
+    fn explorer_dragging_selected_row_moves_the_whole_highlighted_group() {
+        let context = egui::Context::default();
+        let (output, _) = selection_frame(&context, Path::new(""), 0.0, vec![]);
+        let a = text_position(&output, "a.lua");
+        let b = text_position(&output, "b.lua");
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.1,
+            vec![
+                egui::Event::PointerMoved(a),
+                modifier_pointer(a, true, egui::Modifiers::NONE),
+            ],
+        );
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.2,
+            vec![modifier_pointer(a, false, egui::Modifiers::NONE)],
+        );
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.4,
+            vec![
+                egui::Event::PointerMoved(b),
+                modifier_pointer(b, true, egui::Modifiers::SHIFT),
+            ],
+        );
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.5,
+            vec![modifier_pointer(b, false, egui::Modifiers::SHIFT)],
+        );
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.8,
+            vec![
+                egui::Event::PointerMoved(a),
+                modifier_pointer(a, true, egui::Modifiers::NONE),
+            ],
+        );
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.9,
+            vec![egui::Event::PointerMoved(a + egui::vec2(40.0, 0.0))],
+        );
+        let payload = egui::DragAndDrop::payload::<ViewportDrop>(&context).unwrap();
+        assert_eq!(
+            payload.project_paths(),
+            ["a.lua", "b.lua"].map(PathBuf::from)
+        );
+    }
+
+    #[test]
+    fn paste_failures_preserve_cut_clipboard_and_process_other_copy_destinations() {
+        let project = TestProject::new();
+        std::fs::write(project.0.join("a.lua"), "a").unwrap();
+        std::fs::create_dir(project.0.join("one")).unwrap();
+        let mut clipboard = ProjectClipboard {
+            sources: vec!["a.lua".into()],
+            cut: true,
+        };
+        assert!(
+            paste_project_entries(&project.0, &mut clipboard, &["one".into(), "two".into()])[0]
+                .is_err()
+        );
+        assert!(project.0.join("a.lua").exists());
+        assert_eq!(clipboard.sources.len(), 1);
+        clipboard.cut = false;
+        let results = paste_project_entries(
+            &project.0,
+            &mut clipboard,
+            &["missing".into(), "one".into()],
+        );
+        assert!(results[0].is_err());
+        assert!(results[1].is_ok());
+        assert!(project.0.join("one/a.lua").exists());
+    }
+    #[test]
+    fn shift_hold_can_highlight_rows_without_starting_a_drag() {
+        let context = egui::Context::default();
+        let (output, _) = selection_frame(&context, Path::new(""), 0.0, vec![]);
+        let a = text_position(&output, "a.lua");
+        let c = text_position(&output, "c.lua");
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.1,
+            vec![
+                egui::Event::PointerMoved(a),
+                modifier_pointer(a, true, egui::Modifiers::SHIFT),
+            ],
+        );
+        selection_frame(
+            &context,
+            Path::new(""),
+            0.2,
+            vec![egui::Event::PointerMoved(c)],
+        );
+        let selection = context
+            .data_mut(|data| data.get_temp::<ExplorerSelection>(explorer_selection_id()))
+            .unwrap();
+        assert!(selection.highlighted.contains(Path::new("a.lua")));
+        assert!(selection.highlighted.contains(Path::new("c.lua")));
+        assert!(!egui::DragAndDrop::has_any_payload(&context));
+    }
+
+    #[test]
+    fn explorer_shortcuts_are_scoped_to_selection_and_leave_text_editing_alone() {
+        let context = egui::Context::default();
+        let frame = |focused, renaming, can_edit| {
+            context.data_mut(|data| {
+                data.insert_temp(
+                    explorer_selection_id(),
+                    ExplorerSelection {
+                        highlighted: [PathBuf::from("a.lua")].into(),
+                        focused,
+                        renaming,
+                        ..Default::default()
+                    },
+                )
+            });
+            let mut action = None;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    events: vec![egui::Event::Copy],
+                    ..Default::default()
+                },
+                |ui| {
+                    action = explorer_keyboard_action(ui, Path::new(""), can_edit);
+                },
+            );
+            output.textures_delta.clear();
+            action
+        };
+        assert!(frame(false, false, true).is_none());
+        assert!(frame(true, true, true).is_none());
+        assert!(frame(true, false, false).is_none());
+        assert!(matches!(
+            frame(true, false, true),
+            Some(ProjectFileAction::Copy(_))
+        ));
+    }
+
+    #[test]
+    fn double_click_rename_commits_enter_text() {
+        let context = egui::Context::default();
+        let (_, rect, _) = row_frame(&context, 0.0, vec![]);
+        let position = rect.center();
+        for (time, pressed) in [(0.1, true), (0.15, false), (0.2, true), (0.25, false)] {
+            row_frame(
+                &context,
+                time,
+                vec![
+                    egui::Event::PointerMoved(position),
+                    pointer(position, egui::PointerButton::Primary, pressed),
+                ],
+            );
+        }
+        row_frame(&context, 0.3, vec![]);
+        row_frame(
+            &context,
+            0.4,
+            vec![
+                egui::Event::ModifiersChanged(egui::Modifiers::CTRL | egui::Modifiers::COMMAND),
+                ctrl_key(egui::Key::A),
+                egui::Event::Text("renamed.lua".into()),
+            ],
+        );
+        let (_, _, action) = row_frame(
+            &context,
+            0.5,
+            vec![
+                egui::Event::ModifiersChanged(egui::Modifiers::NONE),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert!(
+            matches!(action.as_ref(), Some(ProjectFileAction::Rename(path, name)) if path == Path::new("script.lua") && name == "renamed.lua"),
+            "Rename action: {action:?}"
         );
     }
 }
