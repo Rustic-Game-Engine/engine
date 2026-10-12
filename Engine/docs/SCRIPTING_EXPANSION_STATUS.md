@@ -353,13 +353,16 @@ installer/hardware qualification remain separate from API test results.
 ## Executed validation (Linux)
 
 - `cargo test -p engine-world -p engine-play -p engine-scripting --locked`:
-  **137 passed**, 0 failures (30 world, 67 play, 40 scripting).
+  **138 passed**, 0 failures (31 world, 67 play, 40 scripting).
 - `cargo check --workspace --all-targets --locked`: passed, including editor/runtime.
 - Clippy for all targets of the three changed crates with `-D warnings`: passed.
 - `cargo fmt --all --check` and Git whitespace checks: passed.
 - Live foundation fixtures: Lua 5.4, Luau, JavaScript, HTML inline JavaScript,
-  Python, C and C++ passed. C#, Java and PHP fixtures were **skipped** because
+  Python, C and C++ passed. Installed .NET SDK 10.0.401 in the workspace and
+  reran the fixture: C# also passed. Java and PHP fixtures were **skipped** because
   those toolchains are unavailable. Their SDK code is included but unverified here.
+  The CI adapter-conformance job now runs the entity fixture with all toolchains
+  installed and fails if any required adapter is missing.
 - Built the separate bundled Luau host and put it on PATH for the Rust tests.
   This also resolved the original audio-recording test's missing-host failure.
 - Both published Lua/Python example scripts executed in the real world adapter.
@@ -376,7 +379,7 @@ installer/hardware qualification remain separate from API test results.
 Engine implementation: `crates/engine-world/src/foundations.rs`, `world.rs`,
 `lib.rs`; `crates/engine-play/src/entity_services.rs`, `script_runtime.rs`, `lib.rs`.
 Bindings/editor hints: `crates/engine-scripting/src/lua.rs`, `cpp_sdk.rs`,
-`workspace.rs`, and `sdk/{gameplay.lua,gameplay.js,rustic.h,rustic.py,rustic.php,
+`workspace.rs`, `.github/workflows/quality.yml`, and `sdk/{gameplay.lua,gameplay.js,rustic.h,rustic.py,rustic.php,
 Rustic.cs,Rustic.java,entity-api.lua,entity-api.d.ts}`.
 Engine docs: this checklist, `Scripting/API/entity-foundations.md`,
 `Scripting/README.md`. Tested examples: `examples/entity-foundations/`.

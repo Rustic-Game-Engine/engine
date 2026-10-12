@@ -2789,6 +2789,11 @@ rustic_run(['on_start'=>'on_start']);"#),
                 ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
             ) && !engine_scripting::probe_language_toolchain(*language).available
             {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_ENTITY_ADAPTERS").is_none(),
+                    "{} toolchain is required for complete entity adapter conformance",
+                    language.display_name()
+                );
                 eprintln!(
                     "SKIPPED entity foundations {}: missing toolchain",
                     language.display_name()

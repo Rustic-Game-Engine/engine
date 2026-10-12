@@ -128,27 +128,39 @@ impl SceneWorld {
         if keep_world {
             let world = self.world_transform(child)?.0;
             let local = match parent {
-                Some(parent) => self.world_transform(parent)?.0.inverse() * world,
+                Some(parent) => {
+                    let matrix = self.world_transform(parent)?.0;
+                    if !matrix.is_finite()
+                        || !matrix.determinant().is_finite()
+                        || matrix.determinant() == 0.0
+                    {
+                        return Err(WorldError::InvalidTransform(parent));
+                    }
+                    matrix.inverse() * world
+                }
                 None => world,
             };
+            if !local.is_finite() || !local.determinant().is_finite() || local.determinant() == 0.0
+            {
+                return Err(WorldError::InvalidTransform(child));
+            }
             let (scale, rotation, translation) = local.to_scale_rotation_translation();
             let value = LocalTransform {
                 translation,
                 rotation,
                 scale,
             };
+            if !value.is_finite() {
+                return Err(WorldError::InvalidTransform(child));
+            }
             let reconstructed = Mat4::from_scale_rotation_translation(scale, rotation, translation);
-            let tolerance = local
+            // Compare each element independently: large translations must never
+            // increase the shear tolerance of the rotation/scale basis.
+            if local
                 .to_cols_array()
                 .iter()
-                .fold(1.0_f32, |m, v| m.max(v.abs()))
-                * 1e-4;
-            if !value.is_finite()
-                || local
-                    .to_cols_array()
-                    .iter()
-                    .zip(reconstructed.to_cols_array())
-                    .any(|(a, b)| (*a - b).abs() > tolerance)
+                .zip(reconstructed.to_cols_array())
+                .any(|(a, b)| (*a - b).abs() > 1e-4 * a.abs().max(b.abs()).max(1.0))
             {
                 return Err(WorldError::InvalidArgument(
                     "world-preserving reparent requires a representable TRS transform (no shear)"
@@ -375,7 +387,7 @@ mod tests {
     fn hierarchy_rejects_shear_without_mutating_parent_or_local_transform() {
         let mut world = SceneWorld::new();
         let parent = spawn(&mut world, None, Vec3::ZERO);
-        let child = spawn(&mut world, None, Vec3::ZERO);
+        let child = spawn(&mut world, None, Vec3::new(1e6, 0., 0.));
         world
             .apply_commands(&[
                 WorldCommand::SetLocalTransform {
@@ -389,6 +401,7 @@ mod tests {
                     entity: child,
                     value: LocalTransform {
                         rotation: Quat::from_rotation_z(0.5),
+                        translation: Vec3::new(1e6, 0., 0.),
                         ..LocalTransform::IDENTITY
                     },
                 },
@@ -398,6 +411,26 @@ mod tests {
         assert!(world.reparent(child, Some(parent), true).is_err());
         assert_eq!(world.local_transform(child).unwrap(), before);
         assert_eq!(world.parent(child).unwrap(), None);
+    }
+
+    #[test]
+    fn unrepresentable_derived_matrices_fail_without_panics_or_mutation() {
+        let mut world = SceneWorld::new();
+        let parent = spawn(&mut world, None, Vec3::ZERO);
+        let child = spawn(&mut world, None, Vec3::ZERO);
+        world
+            .apply_commands(&[WorldCommand::SetLocalTransform {
+                entity: parent,
+                value: LocalTransform {
+                    scale: Vec3::splat(1e30),
+                    ..LocalTransform::IDENTITY
+                },
+            }])
+            .unwrap();
+        let before = world.local_transform(child).unwrap();
+        assert!(world.reparent(child, Some(parent), true).is_err());
+        assert_eq!(world.parent(child).unwrap(), None);
+        assert_eq!(world.local_transform(child).unwrap(), before);
     }
 
     #[test]
