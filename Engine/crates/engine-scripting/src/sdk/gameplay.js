@@ -134,3 +134,41 @@ globalThis.Smooth={
 globalThis.Clock={timeScale:scale=>rustic.query({op:"clock",scale}).scale,pause:()=>rustic.query({op:"clock",paused:true}),resume:()=>rustic.query({op:"clock",paused:false}),state:()=>rustic.query({op:"clock"})};
 Camera.current=()=>rustic.query({op:"camera_current"});
 {const move=Camera.moveTo,zoom=Camera.zoom;Camera.moveTo=(a,b,c,d)=>Array.isArray(a)?move(Camera.current(),a,b,c):move(a,b,c,d);Camera.zoom=(a,b,c,d)=>typeof a==="number"?zoom(Camera.current(),a,b,c):zoom(a,b,c,d);Camera.fov=Camera.zoom;}
+
+const _rusticEntity = object => {
+ if(object==null)return rustic.entity_id();
+ if(typeof object==="object")object=object.__source||object.id||object.source;
+ if(typeof object!=="string")throw new TypeError("expected entity ID or path");
+ return Game.scene.Find(object)||object;
+};
+
+// Entity services use the live shared Rust world.
+globalThis.Tags={
+add(entity,name){return rustic.query({op:"tags_add",entity:_rusticEntity(entity),name:name});},
+remove(entity,name){return rustic.query({op:"tags_remove",entity:_rusticEntity(entity),name:name});},
+find_all(name){return rustic.query({op:"tags_find_all",name:name});},
+};
+globalThis.Groups={
+create(name){return rustic.query({op:"groups_create",name:name});},
+add(name,entity){return rustic.query({op:"groups_add",name:name,entity:_rusticEntity(entity)});},
+get_members(name){return rustic.query({op:"groups_get_members",name:name});},
+};
+globalThis.Hierarchy={
+set_parent(entity,parent,keep_world=true){return rustic.query({op:"hierarchy_set_parent",entity:_rusticEntity(entity),parent:(parent==null?null:_rusticEntity(parent)),keep_world:keep_world});},
+get_children(entity){return rustic.query({op:"hierarchy_get_children",entity:_rusticEntity(entity)});},
+detach(entity,keep_world=true){return rustic.query({op:"hierarchy_detach",entity:_rusticEntity(entity),keep_world:keep_world});},
+};
+globalThis.Entity={
+destroy(entity){return rustic.query({op:"entity_destroy",entity:_rusticEntity(entity)});},
+destroy_after(entity,delay){return rustic.query({op:"entity_destroy_after",entity:_rusticEntity(entity),delay:delay});},
+is_valid(entity){return rustic.query({op:"entity_is_valid",entity:_rusticEntity(entity)});},
+};
+globalThis.Components={
+has(entity,name){return rustic.query({op:"components_has",entity:_rusticEntity(entity),name:name});},
+get_all(entity){return rustic.query({op:"components_get_all",entity:_rusticEntity(entity)});},
+find_in_children(entity,name){return rustic.query({op:"components_find_in_children",entity:_rusticEntity(entity),name:name});},
+};
+globalThis.World={
+find_by_tag(name){return rustic.query({op:"world_find_by_tag",name:name});},
+find_in_radius(center,radius){return rustic.query({op:"world_find_in_radius",center:center,radius:radius});},
+};

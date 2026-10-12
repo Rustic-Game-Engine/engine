@@ -5,6 +5,7 @@
 //! runtime, tests, and future command-line tooling.
 
 pub mod changes;
+mod entity_services;
 pub mod frame_ring;
 pub mod local_ipc;
 mod physics;

@@ -66,3 +66,6 @@ last good instance running. External callbacks have a three-second deadline and 
 
 See [Edit scene objects](sceneObjects.md) to target built-in properties on another
 object using `rustic.game.<scene-name>.<hierarchy>` in native language syntax.
+
+See [Entity foundations](API/entity-foundations.md) for live tags, groups, hierarchy,
+lifetime, component and world queries in the shared scripting runtime.

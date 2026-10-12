@@ -467,7 +467,11 @@ impl RuntimeScripts {
         if let Ok(mut context) = self.gameplay.lock() {
             context.fixed_delta = delta;
         }
+        self.unregister_disabled();
         for behavior in &mut self.behaviors {
+            if !behavior.active() {
+                continue;
+            }
             if let Err(error) = behavior.fixed_update(delta) {
                 push_log(
                     &self.logs,
@@ -488,6 +492,9 @@ impl RuntimeScripts {
                 .map_err(|_| "gameplay lock poisoned".to_owned())
                 .and_then(|mut context| {
                     let scaled = context.runtime.scaled_delta(delta)?;
+                    world
+                        .tick_entity_lifetimes(scaled)
+                        .map_err(|e| e.to_string())?;
                     context
                         .physics
                         .step(&mut world, scaled)
@@ -548,7 +555,11 @@ impl RuntimeScripts {
                 Err(error) => push_log(&self.logs, &self.dropped_logs, "error", &error),
             }
         }
+        self.unregister_disabled();
         for behavior in &mut self.behaviors {
+            if !behavior.active() {
+                continue;
+            }
             if let Err(error) = behavior.update(delta) {
                 push_log(
                     &self.logs,
@@ -578,6 +589,10 @@ impl RuntimeScripts {
                 active.push(behavior);
             } else {
                 let _ = behavior.on_disable();
+                let host = behavior.host();
+                if host.lock().is_ok_and(|host| host.entity_lifetime_ended()) {
+                    let _ = behavior.on_destroy();
+                }
                 behavior.cleanup_gameplay();
             }
         }
@@ -935,6 +950,10 @@ impl GameplayHost for RuntimeHost {
             .get("op")
             .and_then(serde_json::Value::as_str)
             .ok_or("query operation is missing")?;
+        if crate::entity_services::handles(op) {
+            let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
+            return crate::entity_services::query(&mut world, query);
+        }
         if op == "scene_environment_field" {
             let world = self
                 .world
@@ -1906,6 +1925,13 @@ impl GameplayHost for RuntimeHost {
     fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
     }
+    fn entity_lifetime_ended(&self) -> bool {
+        self.entity_bound
+            && self
+                .world
+                .lock()
+                .is_ok_and(|world| !world.contains(self.entity))
+    }
     fn enabled(&self) -> bool {
         self.enabled
             && (!self.entity_bound
@@ -2654,6 +2680,266 @@ mod tests {
                 .unwrap_err()
                 .contains("ambiguous")
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "cross-language fixtures exercise the same live world contract"
+    )]
+    fn entity_foundations_round_trip_through_available_language_adapters() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54, "entities.lua", br"return {Start=function()
+                local e=rustic.entity_id()
+                assert(Tags.add(e,'enemy'));assert(not Tags.add(e,'enemy'))
+                assert(#Tags.find_all('enemy')==1);assert(#World.find_by_tag('enemy')==1)
+                assert(Groups.create('enemies'));assert(Groups.add('enemies',e));assert(#Groups.get_members('enemies')==1)
+                assert(Components.has(e,'rustic.transform'));assert(#Components.get_all(e)>=2)
+                assert(#Components.find_in_children(e,'rustic.transform')==0)
+                assert(#Hierarchy.get_children(e)==0);Hierarchy.set_parent(e,nil);Hierarchy.detach(e)
+                assert(#World.find_in_radius({0,0,0},1)==1);assert(Entity.is_valid(e))
+                assert(Tags.remove(e,'enemy'));assert(not Tags.remove(e,'enemy'));Tags.add(e,'enemy')
+                Entity.destroy(Tags.find_all('disposable')[1]);Entity.destroy_after(e,1)
+            end}"),
+            (ScriptLanguage::Luau, "entities.luau", br"return {Start=function()
+                local e=rustic.entity_id();assert(Tags.add(e,'enemy'));assert(#Tags.find_all('enemy')==1)
+                assert(Groups.create('enemies'));assert(Groups.add('enemies',e));assert(#Groups.get_members('enemies')==1)
+                assert(Components.has(e,'rustic.transform'));Hierarchy.detach(e);assert(Entity.is_valid(e));Entity.destroy(Tags.find_all('disposable')[1]);Entity.destroy_after(e,1)
+            end}"),
+            (ScriptLanguage::JavaScript, "entities.js", br"globalThis.behavior.Start=function(){
+                const e=rustic.entity_id();if(!Tags.add(e,'enemy')||Tags.add(e,'enemy'))throw Error('tags');
+                if(Tags.find_all('enemy').length!==1||World.find_by_tag('enemy').length!==1)throw Error('find');
+                Groups.create('enemies');Groups.add('enemies',e);if(Groups.get_members('enemies').length!==1)throw Error('group');
+                if(!Components.has(e,'rustic.transform')||Components.get_all(e).length<2||Components.find_in_children(e,'rustic.transform').length)throw Error('components');
+                Hierarchy.set_parent(e,null);Hierarchy.detach(e);if(Hierarchy.get_children(e).length)throw Error('children');
+                if(World.find_in_radius([0,0,0],1).length!==1||!Entity.is_valid(e))throw Error('world');
+                if(!Tags.remove(e,'enemy')||Tags.remove(e,'enemy'))throw Error('remove');Tags.add(e,'enemy');Entity.destroy(Tags.find_all('disposable')[0]);Entity.destroy_after(e,1);
+            };"),
+            (ScriptLanguage::Web, "entities.html", br"<!doctype html><html><body><script>globalThis.behavior.Start=function(){const e=rustic.entity_id();Tags.add(e,'enemy');Groups.create('enemies');Groups.add('enemies',e);if(!Entity.is_valid(e))throw Error('valid');Entity.destroy(Tags.find_all('disposable')[0]);Entity.destroy_after(e,1);};</script></body></html>"),
+            (ScriptLanguage::Python, "entities.py", br"from rustic import *
+def on_start():
+    e=rustic.entity_id()
+    assert Tags.add(e,'enemy') and not Tags.add(e,'enemy')
+    assert len(Tags.find_all('enemy'))==1 and len(World.find_by_tag('enemy'))==1
+    assert Groups.create('enemies') and Groups.add('enemies',e)
+    assert len(Groups.get_members('enemies'))==1
+    assert Components.has(e,'rustic.transform') and len(Components.get_all(e))>=2
+    assert not Components.find_in_children(e,'rustic.transform')
+    Hierarchy.set_parent(e,None);Hierarchy.detach(e)
+    assert not Hierarchy.get_children(e) and Entity.is_valid(e)
+    assert len(World.find_in_radius([0,0,0],1))==1
+    assert Tags.remove(e,'enemy') and not Tags.remove(e,'enemy')
+    Tags.add(e,'enemy');Entity.destroy(Tags.find_all('disposable')[0]);Entity.destroy_after(e,1)
+run(globals())"),
+            (ScriptLanguage::C, "entities.c", br#"#include "rustic.h"
+void start(void){const char *e=rustic.entity_id();
+if(!Tags.add(e,"enemy")||Tags.add(e,"enemy"))r_fail("tags");
+if(Tags.find_all("enemy").count!=1||World.find_by_tag("enemy").count!=1)r_fail("find");
+Groups.create("enemies");Groups.add("enemies",e);if(Groups.get_members("enemies").count!=1)r_fail("groups");
+if(!Components.has(e,"rustic.transform")||Components.get_all(e).count<2||Components.find_in_children(e,"rustic.transform").count)r_fail("components");
+Hierarchy.set_parent(e,NULL,true);Hierarchy.detach(e,true);if(Hierarchy.get_children(e).count||!Entity.is_valid(e))r_fail("hierarchy");
+if(World.find_in_radius((RusticVector3){0,0,0},1).count!=1)r_fail("radius");
+if(!Tags.remove(e,"enemy")||Tags.remove(e,"enemy")){r_fail("remove");}
+Tags.add(e,"enemy");Entity.destroy(Tags.find_all("disposable").items[0]);Entity.destroy_after(e,1);}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
+            (ScriptLanguage::Cpp, "entities.cpp", br#"#include "rustic.hpp"
+void start(){auto e=rustic.entity_id();
+if(!Tags::add(e,"enemy")||Tags::add(e,"enemy"))throw std::runtime_error("tags");
+if(Tags::find_all("enemy").size()!=1||World::find_by_tag("enemy").size()!=1)throw std::runtime_error("find");
+Groups::create("enemies");Groups::add("enemies",e);if(Groups::get_members("enemies").size()!=1)throw std::runtime_error("groups");
+if(!Components::has(e,"rustic.transform")||Components::get_all(e).size()<2||!Components::find_in_children(e,"rustic.transform").empty())throw std::runtime_error("components");
+Hierarchy::set_parent(e,"");Hierarchy::detach(e);if(!Hierarchy::get_children(e).empty()||!Entity::is_valid(e))throw std::runtime_error("hierarchy");
+if(World::find_in_radius({0,0,0},1).size()!=1)throw std::runtime_error("radius");
+if(!Tags::remove(e,"enemy")||Tags::remove(e,"enemy")){throw std::runtime_error("remove");}
+Tags::add(e,"enemy");Entity::destroy(Tags::find_all("disposable").front());Entity::destroy_after(e,1);}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
+            (ScriptLanguage::CSharp, "entities.cs", br#"using static Rustic;
+Run((callback,dt)=>{if(callback=="on_start"){var e=rustic.entity_id();
+if(!Tags.add(e,"enemy")||Tags.add(e,"enemy"))throw new System.Exception("tags");
+if(Tags.find_all("enemy").Length!=1||World.find_by_tag("enemy").Length!=1)throw new System.Exception("find");
+Groups.create("enemies");Groups.add("enemies",e);if(Groups.get_members("enemies").Length!=1)throw new System.Exception("groups");
+if(!Components.has(e,"rustic.transform")||Components.get_all(e).Length<2||Components.find_in_children(e,"rustic.transform").Length!=0)throw new System.Exception("components");
+Hierarchy.set_parent(e,null);Hierarchy.detach(e);if(Hierarchy.get_children(e).Length!=0||!Entity.is_valid(e))throw new System.Exception("hierarchy");
+if(World.find_in_radius(new double[]{0,0,0},1).Length!=1)throw new System.Exception("radius");
+Tags.remove(e,"enemy");Tags.add(e,"enemy");Entity.destroy(Tags.find_all("disposable")[0]);Entity.destroy_after(e,1);}});"#),
+            (ScriptLanguage::Java, "RusticBehavior.java", br#"class RusticBehavior extends Rustic {
+public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){String e=rustic.entity_id();
+if(!Tags.add(e,"enemy")||Tags.add(e,"enemy"))throw new RuntimeException("tags");
+if(Tags.find_all("enemy").length!=1||World.find_by_tag("enemy").length!=1)throw new RuntimeException("find");
+Groups.create("enemies");Groups.add("enemies",e);if(Groups.get_members("enemies").length!=1)throw new RuntimeException("groups");
+if(!Components.has(e,"rustic.transform")||Components.get_all(e).length<2||Components.find_in_children(e,"rustic.transform").length!=0)throw new RuntimeException("components");
+Hierarchy.set_parent(e,null);Hierarchy.detach(e);if(Hierarchy.get_children(e).length!=0||!Entity.is_valid(e))throw new RuntimeException("hierarchy");
+if(World.find_in_radius(new double[]{0,0,0},1).length!=1)throw new RuntimeException("radius");
+Tags.remove(e,"enemy");Tags.add(e,"enemy");Entity.destroy(Tags.find_all("disposable")[0]);Entity.destroy_after(e,1);}});}}"#),
+            (ScriptLanguage::Php, "entities.php", br#"<?php
+require __DIR__."/rustic.php";
+function on_start():void{global $rustic;$e=$rustic->entity_id();
+if(!Tags::add($e,'enemy')||Tags::add($e,'enemy'))throw new Exception('tags');
+if(count(Tags::find_all('enemy'))!==1||count(World::find_by_tag('enemy'))!==1)throw new Exception('find');
+Groups::create('enemies');Groups::add('enemies',$e);if(count(Groups::get_members('enemies'))!==1)throw new Exception('groups');
+if(!Components::has($e,'rustic.transform')||count(Components::get_all($e))<2||count(Components::find_in_children($e,'rustic.transform')))throw new Exception('components');
+Hierarchy::set_parent($e,null);Hierarchy::detach($e);if(count(Hierarchy::get_children($e))||!Entity::is_valid($e))throw new Exception('hierarchy');
+if(count(World::find_in_radius([0,0,0],1))!==1)throw new Exception('radius');
+Tags::remove($e,'enemy');Tags::add($e,'enemy');Entity::destroy(Tags::find_all("disposable")[0]);Entity::destroy_after($e,1);}
+rustic_run(['on_start'=>'on_start']);"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !matches!(
+                language,
+                ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
+            ) && !engine_scripting::probe_language_toolchain(*language).available
+            {
+                eprintln!(
+                    "SKIPPED entity foundations {}: missing toolchain",
+                    language.display_name()
+                );
+                continue;
+            }
+            let mut world = SceneWorld::new();
+            let entity = engine_world::EntitySnapshot::default();
+            let id = entity.id;
+            world
+                .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+                .unwrap();
+            let disposable = engine_world::EntitySnapshot {
+                local_transform: engine_world::LocalTransform {
+                    translation: glam::Vec3::new(100., 0., 0.),
+                    ..engine_world::LocalTransform::IDENTITY
+                },
+                ..engine_world::EntitySnapshot::default()
+            };
+            let disposable_id = disposable.id;
+            world
+                .apply_commands(&[WorldCommand::Spawn(Box::new(disposable))])
+                .unwrap();
+            world.add_tag(disposable_id, "disposable").unwrap();
+            let world = Arc::new(Mutex::new(world));
+            let mut host = environment_host(&world);
+            host.entity = id;
+            let mut behavior =
+                RuntimeBehavior::load(*language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap_or_else(|e| panic!("{} load: {e}", language.display_name()));
+            behavior
+                .on_start()
+                .unwrap_or_else(|e| panic!("{} start: {e}", language.display_name()));
+            let mut world = world.lock().unwrap();
+            assert!(
+                !world.contains(disposable_id),
+                "{} destroy binding",
+                language.display_name()
+            );
+            assert!(world.find_by_tag("disposable").unwrap().is_empty());
+            assert_eq!(world.find_by_tag("enemy").unwrap(), vec![id]);
+            assert_eq!(world.group_members("enemies").unwrap(), vec![id]);
+            world.tick_entity_lifetimes(0.5).unwrap();
+            assert!(world.contains(id));
+            world.tick_entity_lifetimes(0.5).unwrap();
+            assert!(!world.contains(id));
+            assert!(world.group_members("enemies").unwrap().is_empty());
+            eprintln!("PASSED entity foundations {}", language.display_name());
+        }
+    }
+
+    #[test]
+    fn destroying_an_owner_cleans_callbacks_and_invokes_destroy_once() {
+        let mut world = SceneWorld::new();
+        let entity = engine_world::EntitySnapshot::default();
+        let id = entity.id;
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+            .unwrap();
+        let world = Arc::new(Mutex::new(world));
+        let mut host = environment_host(&world);
+        host.entity = id;
+        host.entity_bound = true;
+        let owner = Owner {
+            entity_bound: true,
+            entity: id,
+            script: host.owner_script,
+            scene: host.gameplay.lock().unwrap().scene,
+        };
+        let gameplay = Arc::clone(&host.gameplay);
+        let logs = Arc::clone(&host.logs);
+        let mut behavior=RuntimeBehavior::load(ScriptLanguage::Lua54, ScriptId::new(), br"
+            return {Start=function() Events.on('retained',function() end);Timer.after(100,function() end) end,
+              FixedUpdate=function() error('dead owner was called') end,
+              OnDestroy=function() rustic.log('info','destroyed once') end}
+        ", "lifetime.lua",Box::new(host)).unwrap();
+        behavior.on_start().unwrap();
+        let mut scripts = RuntimeScripts {
+            gameplay,
+            behaviors: vec![behavior],
+            world: Arc::clone(&world),
+            input_keys: Arc::new(Mutex::new(BTreeSet::new())),
+            logs: Arc::clone(&logs),
+            dropped_logs: Arc::new(Mutex::new(0)),
+            valid_scene: true,
+        };
+        world.lock().unwrap().destroy_entity(id).unwrap();
+        scripts.fixed_update(0.01);
+        scripts.fixed_update(0.01);
+        assert!(scripts.behaviors.is_empty());
+        let context = scripts.gameplay.lock().unwrap();
+        assert!(context.runtime.states(owner).is_empty());
+        assert!(context.runtime.signals.tokens(owner).is_empty());
+        drop(context);
+        let logs = logs.lock().unwrap();
+        assert_eq!(
+            logs.iter()
+                .filter(|(_, message)| message == "destroyed once")
+                .count(),
+            1
+        );
+        assert!(!logs.iter().any(|(level, _)| level == "error"));
+    }
+
+    #[test]
+    fn documented_entity_foundation_examples_execute_in_the_live_world() {
+        for (language, name, source) in [
+            (
+                ScriptLanguage::Lua54,
+                "behavior.lua",
+                include_bytes!("../../../examples/entity-foundations/behavior.lua").as_slice(),
+            ),
+            (
+                ScriptLanguage::Python,
+                "behavior.py",
+                include_bytes!("../../../examples/entity-foundations/behavior.py").as_slice(),
+            ),
+        ] {
+            if language == ScriptLanguage::Python
+                && !engine_scripting::probe_language_toolchain(language).available
+            {
+                eprintln!("SKIPPED documented Python example: missing toolchain");
+                continue;
+            }
+            let mut world = SceneWorld::new();
+            let entity = engine_world::EntitySnapshot::default();
+            let id = entity.id;
+            world
+                .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+                .unwrap();
+            let world = Arc::new(Mutex::new(world));
+            let mut host = environment_host(&world);
+            host.entity = id;
+            let logs = Arc::clone(&host.logs);
+            let mut behavior =
+                RuntimeBehavior::load(language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap();
+            behavior.on_start().unwrap();
+            assert!(
+                logs.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, message)| message == "entity foundations ready")
+            );
+            let mut world = world.lock().unwrap();
+            assert_eq!(world.find_by_tag("enemy").unwrap(), vec![id]);
+            assert_eq!(world.group_members("enemies").unwrap(), vec![id]);
+            world.tick_entity_lifetimes(1.).unwrap();
+            assert!(!world.contains(id));
+            assert!(world.group_members("enemies").unwrap().is_empty());
+        }
     }
 
     fn environment_host(world: &Arc<Mutex<SceneWorld>>) -> RuntimeHost {

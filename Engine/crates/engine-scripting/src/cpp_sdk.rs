@@ -312,6 +312,37 @@ inline auto lookAt(const std::string&e,RusticVector3 target,double duration=0,co
 inline auto headTracking(const std::string&e,RusticVector3 target,double d=0,const std::string&ease="Linear"){return Movement::lookAt(e,target,d,ease);}
 inline auto recoil(const std::string&e,std::array<double,4> r,double d,const std::string&ease="Linear"){return Gameplay::start(Tween::action(e,"Rotation",RusticValue::Array{r[0],r[1],r[2],r[3]},d,ease),false,1,true);}
 }
+
+namespace Tags {
+inline bool add(const std::string& entity,const std::string& name){return rustic.query(rustic_detail::object({{"op","tags_add"},{"entity",Gameplay::entity(entity)},{"name",name}})).boolean();}
+inline bool remove(const std::string& entity,const std::string& name){return rustic.query(rustic_detail::object({{"op","tags_remove"},{"entity",Gameplay::entity(entity)},{"name",name}})).boolean();}
+inline std::vector<std::string> find_all(const std::string& name){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","tags_find_all"},{"name",name}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+}
+namespace Groups {
+inline bool create(const std::string& name){return rustic.query(rustic_detail::object({{"op","groups_create"},{"name",name}})).boolean();}
+inline bool add(const std::string& name,const std::string& entity){return rustic.query(rustic_detail::object({{"op","groups_add"},{"name",name},{"entity",Gameplay::entity(entity)}})).boolean();}
+inline std::vector<std::string> get_members(const std::string& name){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","groups_get_members"},{"name",name}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+}
+namespace Hierarchy {
+inline void set_parent(const std::string& entity,const std::string& parent,bool keep_world=true){(void)rustic.query(rustic_detail::object({{"op","hierarchy_set_parent"},{"entity",Gameplay::entity(entity)},{"parent",(parent.empty()?RusticValue{}:RusticValue(Gameplay::entity(parent)))},{"keep_world",keep_world}}));}
+inline std::vector<std::string> get_children(const std::string& entity){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","hierarchy_get_children"},{"entity",Gameplay::entity(entity)}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+inline void detach(const std::string& entity,bool keep_world=true){(void)rustic.query(rustic_detail::object({{"op","hierarchy_detach"},{"entity",Gameplay::entity(entity)},{"keep_world",keep_world}}));}
+}
+namespace Entity {
+inline void destroy(const std::string& entity){(void)rustic.query(rustic_detail::object({{"op","entity_destroy"},{"entity",Gameplay::entity(entity)}}));}
+inline void destroy_after(const std::string& entity,double delay){(void)rustic.query(rustic_detail::object({{"op","entity_destroy_after"},{"entity",Gameplay::entity(entity)},{"delay",delay}}));}
+inline bool is_valid(const std::string& entity){return rustic.query(rustic_detail::object({{"op","entity_is_valid"},{"entity",Gameplay::entity(entity)}})).boolean();}
+}
+namespace Components {
+inline bool has(const std::string& entity,const std::string& name){return rustic.query(rustic_detail::object({{"op","components_has"},{"entity",Gameplay::entity(entity)},{"name",name}})).boolean();}
+inline std::vector<std::string> get_all(const std::string& entity){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","components_get_all"},{"entity",Gameplay::entity(entity)}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+inline std::vector<std::string> find_in_children(const std::string& entity,const std::string& name){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","components_find_in_children"},{"entity",Gameplay::entity(entity)},{"name",name}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+}
+namespace World {
+inline std::vector<std::string> find_by_tag(const std::string& name){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","world_find_by_tag"},{"name",name}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+inline std::vector<std::string> find_in_radius(RusticVector3 center,double radius){std::vector<std::string> out;auto response=rustic.query(rustic_detail::object({{"op","world_find_in_radius"},{"center",Physics::vec(center)},{"radius",radius}}));for(const auto& v:response.array())out.push_back(v.string());return out;}
+}
+
 struct RusticBehavior {std::function<void()> on_create={},on_start={},on_enable={},on_disable={},on_destroy={},on_stop={};std::function<void(double)> fixed_update={},update={};};
 inline int rustic_run(const RusticBehavior& b){std::string line;while(std::getline(std::cin,line)){try{auto state=rustic_detail::Parser(line).parse();std::vector<RusticValue> commands;rustic.state=&state;rustic.commands=&commands;instance.commands=&commands;Game.commands=&commands;Game.scene.state=&state.at("scene_paths");auto cb=state.at("callback").string();double d=state.at("delta").is_null()?0:state.at("delta").number();if(cb=="update")Gameplay::dispatch();if(cb=="on_create"&&b.on_create)b.on_create();else if(cb=="on_start"&&b.on_start)b.on_start();else if(cb=="on_enable"&&b.on_enable)b.on_enable();else if(cb=="on_disable"&&b.on_disable)b.on_disable();else if(cb=="fixed_update"&&b.fixed_update)b.fixed_update(d);else if(cb=="update"&&b.update)b.update(d);else if(cb=="on_destroy"&&b.on_destroy)b.on_destroy();else if(cb=="on_stop"&&b.on_stop)b.on_stop();std::cout<<rustic_detail::dump(rustic_detail::object({{"format_version",1},{"commands",commands}}))<<std::endl;}catch(const std::exception&e){std::cerr<<"Rustic C++ SDK: "<<e.what()<<std::endl;return 1;}}return 0;}
 "#;

@@ -153,6 +153,7 @@ static const struct {
     bool (*any_key_pressed)(void);void (*log)(const char*,const char*),(*set_enabled)(bool);
 } rustic={{r_edit_object_attribute},r_entity_id,r_delta_time,r_fixed_delta_time,r_translation,r_set_translation,r_property,r_attribute,r_set_property,r_edit_attribute,r_input,r_key,r_events,r_any,r_log,r_enabled};
 static const struct {void (*add)(const char*,const char*),(*clone)(const char*,const char*);} instance={r_add,r_clone};
+
 static RusticValue r_environment_get(const char *field);
 static void r_environment_set(const char *field,RusticValue value);
 static void r_environment_sky(const char *path);
@@ -210,6 +211,31 @@ static RQueryResult r_query_end(RQuerySave saved){
     strcpy(r_source,saved.source);memcpy(r_tokens,saved.tokens,saved.count*sizeof(RToken));r_count=saved.count;r_at=saved.at;
     free(saved.source);free(saved.pending);free(saved.tokens);r_written=r_commands=0;r_output[0]=0;r_append("{\"format_version\":1,\"commands\":[");return out;
 }
+/* Entity services: returned lists/strings live until the next callback. */
+static bool r_tags_add(const char* entity,const char* name){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("tags_add");r_q_string("entity",resolved_entity);r_q_string("name",name);return r_query_end(s).value.boolean;}
+static bool r_tags_remove(const char* entity,const char* name){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("tags_remove");r_q_string("entity",resolved_entity);r_q_string("name",name);return r_query_end(s).value.boolean;}
+static RusticList r_tags_find_all(const char* name){RQuerySave s=r_query_begin("tags_find_all");r_q_string("name",name);return r_query_end(s).list;}
+static const struct {bool(*add)(const char*,const char*);bool(*remove)(const char*,const char*);RusticList(*find_all)(const char*);} Tags={r_tags_add,r_tags_remove,r_tags_find_all};
+static bool r_groups_create(const char* name){RQuerySave s=r_query_begin("groups_create");r_q_string("name",name);return r_query_end(s).value.boolean;}
+static bool r_groups_add(const char* name,const char* entity){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("groups_add");r_q_string("name",name);r_q_string("entity",resolved_entity);return r_query_end(s).value.boolean;}
+static RusticList r_groups_get_members(const char* name){RQuerySave s=r_query_begin("groups_get_members");r_q_string("name",name);return r_query_end(s).list;}
+static const struct {bool(*create)(const char*);bool(*add)(const char*,const char*);RusticList(*get_members)(const char*);} Groups={r_groups_create,r_groups_add,r_groups_get_members};
+static void r_hierarchy_set_parent(const char* entity,const char* parent,bool keep_world){const char *resolved_entity=r_resolve(entity);const char *resolved_parent=parent?r_resolve(parent):NULL;RQuerySave s=r_query_begin("hierarchy_set_parent");r_q_string("entity",resolved_entity);if(resolved_parent)r_q_string("parent",resolved_parent);else r_append(",\"parent\":null");r_append(keep_world?",\"keep_world\":true":",\"keep_world\":false");(void)r_query_end(s);}
+static RusticList r_hierarchy_get_children(const char* entity){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("hierarchy_get_children");r_q_string("entity",resolved_entity);return r_query_end(s).list;}
+static void r_hierarchy_detach(const char* entity,bool keep_world){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("hierarchy_detach");r_q_string("entity",resolved_entity);r_append(keep_world?",\"keep_world\":true":",\"keep_world\":false");(void)r_query_end(s);}
+static const struct {void(*set_parent)(const char*,const char*,bool);RusticList(*get_children)(const char*);void(*detach)(const char*,bool);} Hierarchy={r_hierarchy_set_parent,r_hierarchy_get_children,r_hierarchy_detach};
+static void r_entity_destroy(const char* entity){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("entity_destroy");r_q_string("entity",resolved_entity);(void)r_query_end(s);}
+static void r_entity_destroy_after(const char* entity,double delay){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("entity_destroy_after");r_q_string("entity",resolved_entity);r_q_number("delay",delay);(void)r_query_end(s);}
+static bool r_entity_is_valid(const char* entity){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("entity_is_valid");r_q_string("entity",resolved_entity);return r_query_end(s).value.boolean;}
+static const struct {void(*destroy)(const char*);void(*destroy_after)(const char*,double);bool(*is_valid)(const char*);} Entity={r_entity_destroy,r_entity_destroy_after,r_entity_is_valid};
+static bool r_components_has(const char* entity,const char* name){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("components_has");r_q_string("entity",resolved_entity);r_q_string("name",name);return r_query_end(s).value.boolean;}
+static RusticList r_components_get_all(const char* entity){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("components_get_all");r_q_string("entity",resolved_entity);return r_query_end(s).list;}
+static RusticList r_components_find_in_children(const char* entity,const char* name){const char *resolved_entity=r_resolve(entity);RQuerySave s=r_query_begin("components_find_in_children");r_q_string("entity",resolved_entity);r_q_string("name",name);return r_query_end(s).list;}
+static const struct {bool(*has)(const char*,const char*);RusticList(*get_all)(const char*);RusticList(*find_in_children)(const char*,const char*);} Components={r_components_has,r_components_get_all,r_components_find_in_children};
+static RusticList r_world_find_by_tag(const char* name){RQuerySave s=r_query_begin("world_find_by_tag");r_q_string("name",name);return r_query_end(s).list;}
+static RusticList r_world_find_in_radius(RusticVector3 center,double radius){RQuerySave s=r_query_begin("world_find_in_radius");r_q_value("center",r_vec(center));r_q_number("radius",radius);return r_query_end(s).list;}
+static const struct {RusticList(*find_by_tag)(const char*);RusticList(*find_in_radius)(RusticVector3,double);} World={r_world_find_by_tag,r_world_find_in_radius};
+
 static RusticValue r_environment_get(const char *field){RQuerySave s=r_query_begin("scene_environment_field");r_q_string("field",field);return r_query_end(s).value;}
 static void r_environment_set(const char *field,RusticValue value){RQuerySave s=r_query_begin("scene_environment");r_append(",\"settings\":{");r_quote(field);r_append(":");r_write_value(value);r_append("}");(void)r_query_end(s);}
 static void r_environment_sky(const char *path){r_environment_set("sky_image",(RusticValue){.type=RUSTIC_STRING,.string=path});}
