@@ -4,6 +4,7 @@
 
 mod components;
 mod environment;
+mod foundations;
 pub use environment::SceneEnvironment;
 mod ids;
 mod primitive;

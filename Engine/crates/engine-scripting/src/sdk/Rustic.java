@@ -11,6 +11,39 @@ class Rustic {
     static final RusticApi rustic = new RusticApi();
     static final InstanceApi instance = new InstanceApi();
     static final GameApi Game = new GameApi();
+
+    static class Tags {
+        static boolean add(String entity,String name){return (Boolean)query(args("tags_add","entity",Gameplay.entity(entity),"name",name));}
+        static boolean remove(String entity,String name){return (Boolean)query(args("tags_remove","entity",Gameplay.entity(entity),"name",name));}
+        static String[] find_all(String name){return ((List<?>)query(args("tags_find_all","name",name))).stream().map(v->(String)v).toArray(String[]::new);}
+    }
+    static class Groups {
+        static boolean create(String name){return (Boolean)query(args("groups_create","name",name));}
+        static boolean add(String name,String entity){return (Boolean)query(args("groups_add","name",name,"entity",Gameplay.entity(entity)));}
+        static String[] get_members(String name){return ((List<?>)query(args("groups_get_members","name",name))).stream().map(v->(String)v).toArray(String[]::new);}
+    }
+    static class Hierarchy {
+        static void set_parent(String entity,String parent,boolean keep_world){query(args("hierarchy_set_parent","entity",Gameplay.entity(entity),"parent",(parent==null?null:Gameplay.entity(parent)),"keep_world",keep_world));}
+        static void set_parent(String entity,String parent){set_parent(entity,parent,true);}
+        static String[] get_children(String entity){return ((List<?>)query(args("hierarchy_get_children","entity",Gameplay.entity(entity)))).stream().map(v->(String)v).toArray(String[]::new);}
+        static void detach(String entity,boolean keep_world){query(args("hierarchy_detach","entity",Gameplay.entity(entity),"keep_world",keep_world));}
+        static void detach(String entity){detach(entity,true);}
+    }
+    static class Entity {
+        static void destroy(String entity){query(args("entity_destroy","entity",Gameplay.entity(entity)));}
+        static void destroy_after(String entity,double delay){query(args("entity_destroy_after","entity",Gameplay.entity(entity),"delay",delay));}
+        static boolean is_valid(String entity){return (Boolean)query(args("entity_is_valid","entity",Gameplay.entity(entity)));}
+    }
+    static class Components {
+        static boolean has(String entity,String name){return (Boolean)query(args("components_has","entity",Gameplay.entity(entity),"name",name));}
+        static String[] get_all(String entity){return ((List<?>)query(args("components_get_all","entity",Gameplay.entity(entity)))).stream().map(v->(String)v).toArray(String[]::new);}
+        static String[] find_in_children(String entity,String name){return ((List<?>)query(args("components_find_in_children","entity",Gameplay.entity(entity),"name",name))).stream().map(v->(String)v).toArray(String[]::new);}
+    }
+    static class World {
+        static String[] find_by_tag(String name){return ((List<?>)query(args("world_find_by_tag","name",name))).stream().map(v->(String)v).toArray(String[]::new);}
+        static String[] find_in_radius(double[] center,double radius){return ((List<?>)query(args("world_find_in_radius","center",center,"radius",radius))).stream().map(v->(String)v).toArray(String[]::new);}
+    }
+
     interface Callback { void invoke(String callback, double dt) throws Exception; }
     static void run(Callback callback) throws Exception {
         input = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));

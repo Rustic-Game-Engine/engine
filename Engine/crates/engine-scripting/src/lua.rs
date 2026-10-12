@@ -120,6 +120,11 @@ pub trait GameplayHost: Send {
     /// # Errors
     /// Rejects undeclared properties and type mismatches.
     fn set_property(&mut self, name: &str, value: EngineValue) -> Result<(), String>;
+    /// True when a component owner was destroyed; distinguishes destruction from
+    /// disabling a script or a global/UI host with no scene entity.
+    fn entity_lifetime_ended(&self) -> bool {
+        false
+    }
     fn enabled(&self) -> bool {
         true
     }

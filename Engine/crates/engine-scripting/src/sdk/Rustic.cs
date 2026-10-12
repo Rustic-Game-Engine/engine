@@ -17,6 +17,37 @@ static class Rustic {
         if(response.RootElement.TryGetProperty("error",out var error))throw new InvalidOperationException(error.GetString());
         return response.RootElement.GetProperty("result").Clone();
     }
+
+    public static class Tags {
+        public static bool add(string? entity,string name)=>Query(new{op="tags_add",entity=Gameplay.Entity(entity),name=name}).GetBoolean();
+        public static bool remove(string? entity,string name)=>Query(new{op="tags_remove",entity=Gameplay.Entity(entity),name=name}).GetBoolean();
+        public static string[] find_all(string name)=>Query(new{op="tags_find_all",name=name}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+    }
+    public static class Groups {
+        public static bool create(string name)=>Query(new{op="groups_create",name=name}).GetBoolean();
+        public static bool add(string name,string? entity)=>Query(new{op="groups_add",name=name,entity=Gameplay.Entity(entity)}).GetBoolean();
+        public static string[] get_members(string name)=>Query(new{op="groups_get_members",name=name}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+    }
+    public static class Hierarchy {
+        public static void set_parent(string? entity,string? parent,bool keep_world=true)=>Query(new{op="hierarchy_set_parent",entity=Gameplay.Entity(entity),parent=(parent is null?null:Gameplay.Entity(parent)),keep_world=keep_world});
+        public static string[] get_children(string? entity)=>Query(new{op="hierarchy_get_children",entity=Gameplay.Entity(entity)}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+        public static void detach(string? entity,bool keep_world=true)=>Query(new{op="hierarchy_detach",entity=Gameplay.Entity(entity),keep_world=keep_world});
+    }
+    public static class Entity {
+        public static void destroy(string? entity)=>Query(new{op="entity_destroy",entity=Gameplay.Entity(entity)});
+        public static void destroy_after(string? entity,double delay)=>Query(new{op="entity_destroy_after",entity=Gameplay.Entity(entity),delay=delay});
+        public static bool is_valid(string? entity)=>Query(new{op="entity_is_valid",entity=Gameplay.Entity(entity)}).GetBoolean();
+    }
+    public static class Components {
+        public static bool has(string? entity,string name)=>Query(new{op="components_has",entity=Gameplay.Entity(entity),name=name}).GetBoolean();
+        public static string[] get_all(string? entity)=>Query(new{op="components_get_all",entity=Gameplay.Entity(entity)}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+        public static string[] find_in_children(string? entity,string name)=>Query(new{op="components_find_in_children",entity=Gameplay.Entity(entity),name=name}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+    }
+    public static class World {
+        public static string[] find_by_tag(string name)=>Query(new{op="world_find_by_tag",name=name}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+        public static string[] find_in_radius(double[] center,double radius)=>Query(new{op="world_find_in_radius",center=center,radius=radius}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+    }
+
     internal static object Ordinary(JsonElement v)=>v.ValueKind switch{JsonValueKind.String=>v.GetString()!,JsonValueKind.True=>true,JsonValueKind.False=>false,JsonValueKind.Number=>v.GetDouble(),JsonValueKind.Array=>v.EnumerateArray().Select(n=>n.GetDouble()).ToArray(),_=>throw new InvalidOperationException("unsupported gameplay value")};
     public sealed record MotionOptions(double? duration=null,double? speed=null,string easing="Linear");
     public static class Smooth{

@@ -14,6 +14,8 @@ use thiserror::Error;
 /// Errors from world mutation, reference validation, or schedule execution.
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum WorldError {
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
     #[error("invalid scene environment settings")]
     InvalidEnvironment,
     #[error("entity {0} does not exist")]
@@ -159,6 +161,7 @@ struct Slot {
 
 /// Live ECS world with stable identities, generational references, and a scene graph.
 pub struct SceneWorld {
+    pub(crate) services: crate::foundations::EntityServices,
     environment: crate::SceneEnvironment,
     id: WorldId,
     ecs: World,
@@ -195,6 +198,7 @@ impl Default for SceneWorld {
 impl SceneWorld {
     pub fn new() -> Self {
         Self {
+            services: crate::foundations::EntityServices::default(),
             environment: crate::SceneEnvironment::default(),
             id: WorldId::new(),
             ecs: World::new(),
@@ -849,6 +853,11 @@ impl SceneWorld {
     }
 
     fn despawn_now(&mut self, id: EntityId) {
+        self.services.tags.remove(&id);
+        self.services.deadlines.remove(&id);
+        for members in self.services.groups.values_mut() {
+            members.remove(&id);
+        }
         if let Some(entity) = self.lookup.remove(&id) {
             let _ = self.ecs.despawn(entity);
         }

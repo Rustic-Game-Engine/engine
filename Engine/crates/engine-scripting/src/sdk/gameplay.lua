@@ -343,3 +343,29 @@ rustic.game.start_recording=rustic.game.startRecording
 rustic.game.stop_recording=rustic.game.stopRecording
 rustic.game.start_hot_mic=rustic.game.startHotMic
 rustic.game.stop_hot_mic=rustic.game.stopHotMic
+
+-- Entity services use the live shared Rust world, never cached scene paths.
+local resolve_entity=entity
+Tags={}
+function Tags.add(entity,name) return rustic.query({op="tags_add",entity=resolve_entity(entity),name=name}) end
+function Tags.remove(entity,name) return rustic.query({op="tags_remove",entity=resolve_entity(entity),name=name}) end
+function Tags.find_all(name) return rustic.query({op="tags_find_all",name=name}) end
+Groups={}
+function Groups.create(name) return rustic.query({op="groups_create",name=name}) end
+function Groups.add(name,entity) return rustic.query({op="groups_add",name=name,entity=resolve_entity(entity)}) end
+function Groups.get_members(name) return rustic.query({op="groups_get_members",name=name}) end
+Hierarchy={}
+function Hierarchy.set_parent(entity,parent,keep_world) return rustic.query({op="hierarchy_set_parent",entity=resolve_entity(entity),parent=(parent~=nil and resolve_entity(parent) or nil),keep_world=(keep_world==nil or keep_world)}) end
+function Hierarchy.get_children(entity) return rustic.query({op="hierarchy_get_children",entity=resolve_entity(entity)}) end
+function Hierarchy.detach(entity,keep_world) return rustic.query({op="hierarchy_detach",entity=resolve_entity(entity),keep_world=(keep_world==nil or keep_world)}) end
+Entity={}
+function Entity.destroy(entity) return rustic.query({op="entity_destroy",entity=resolve_entity(entity)}) end
+function Entity.destroy_after(entity,delay) return rustic.query({op="entity_destroy_after",entity=resolve_entity(entity),delay=delay}) end
+function Entity.is_valid(entity) return rustic.query({op="entity_is_valid",entity=resolve_entity(entity)}) end
+Components={}
+function Components.has(entity,name) return rustic.query({op="components_has",entity=resolve_entity(entity),name=name}) end
+function Components.get_all(entity) return rustic.query({op="components_get_all",entity=resolve_entity(entity)}) end
+function Components.find_in_children(entity,name) return rustic.query({op="components_find_in_children",entity=resolve_entity(entity),name=name}) end
+World={}
+function World.find_by_tag(name) return rustic.query({op="world_find_by_tag",name=name}) end
+function World.find_in_radius(center,radius) return rustic.query({op="world_find_in_radius",center=center,radius=radius}) end

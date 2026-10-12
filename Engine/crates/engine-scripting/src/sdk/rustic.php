@@ -267,3 +267,34 @@ final class EventConnection{function __construct(public string $token){}function
 
 class_alias(Sequence::class,"Timeline");
 class_alias(Smooth::class,"Interpolation");
+
+// Entity services use the shared Rust runtime.
+final class Tags {
+    static function add(?string $entity,string $name):bool {global $rustic;return $rustic->query(["op"=>"tags_add","entity"=>Gameplay::entity($entity),"name"=>$name]);}
+    static function remove(?string $entity,string $name):bool {global $rustic;return $rustic->query(["op"=>"tags_remove","entity"=>Gameplay::entity($entity),"name"=>$name]);}
+    static function find_all(string $name):array {global $rustic;return $rustic->query(["op"=>"tags_find_all","name"=>$name]);}
+}
+final class Groups {
+    static function create(string $name):bool {global $rustic;return $rustic->query(["op"=>"groups_create","name"=>$name]);}
+    static function add(string $name,?string $entity):bool {global $rustic;return $rustic->query(["op"=>"groups_add","name"=>$name,"entity"=>Gameplay::entity($entity)]);}
+    static function get_members(string $name):array {global $rustic;return $rustic->query(["op"=>"groups_get_members","name"=>$name]);}
+}
+final class Hierarchy {
+    static function set_parent(?string $entity,?string $parent,bool $keep_world=true):void {global $rustic;$rustic->query(["op"=>"hierarchy_set_parent","entity"=>Gameplay::entity($entity),"parent"=>($parent===null?null:Gameplay::entity($parent)),"keep_world"=>$keep_world]);}
+    static function get_children(?string $entity):array {global $rustic;return $rustic->query(["op"=>"hierarchy_get_children","entity"=>Gameplay::entity($entity)]);}
+    static function detach(?string $entity,bool $keep_world=true):void {global $rustic;$rustic->query(["op"=>"hierarchy_detach","entity"=>Gameplay::entity($entity),"keep_world"=>$keep_world]);}
+}
+final class Entity {
+    static function destroy(?string $entity):void {global $rustic;$rustic->query(["op"=>"entity_destroy","entity"=>Gameplay::entity($entity)]);}
+    static function destroy_after(?string $entity,float $delay):void {global $rustic;$rustic->query(["op"=>"entity_destroy_after","entity"=>Gameplay::entity($entity),"delay"=>$delay]);}
+    static function is_valid(?string $entity):bool {global $rustic;return $rustic->query(["op"=>"entity_is_valid","entity"=>Gameplay::entity($entity)]);}
+}
+final class Components {
+    static function has(?string $entity,string $name):bool {global $rustic;return $rustic->query(["op"=>"components_has","entity"=>Gameplay::entity($entity),"name"=>$name]);}
+    static function get_all(?string $entity):array {global $rustic;return $rustic->query(["op"=>"components_get_all","entity"=>Gameplay::entity($entity)]);}
+    static function find_in_children(?string $entity,string $name):array {global $rustic;return $rustic->query(["op"=>"components_find_in_children","entity"=>Gameplay::entity($entity),"name"=>$name]);}
+}
+final class World {
+    static function find_by_tag(string $name):array {global $rustic;return $rustic->query(["op"=>"world_find_by_tag","name"=>$name]);}
+    static function find_in_radius(array $center,float $radius):array {global $rustic;return $rustic->query(["op"=>"world_find_in_radius","center"=>$center,"radius"=>$radius]);}
+}

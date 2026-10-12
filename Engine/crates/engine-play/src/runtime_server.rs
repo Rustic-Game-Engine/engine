@@ -465,3 +465,141 @@ pub enum RuntimeServerError {
     #[error("runtime script startup/execution failed: {0}")]
     Scripts(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RuntimeValue, SnapshotBuilder, SnapshotInput, connect_authenticated};
+    use engine_scripting::{ScriptManifest, ScriptManifestEntry};
+    use engine_world::{EntitySnapshot, LocalTransform, SceneDocument};
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercise the complete authenticated Stop/change-review exchange"
+    )]
+    fn stop_acknowledges_after_scripts_destroy_and_reparent_authored_entities() {
+        let temp = tempfile::tempdir().unwrap();
+        let script_id = engine_scripting::ScriptId::new();
+        let old_parent = EntitySnapshot {
+            name: Some("OldParent".into()),
+            local_transform: LocalTransform {
+                translation: glam::Vec3::new(10., 0., 0.),
+                ..LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let new_parent = EntitySnapshot {
+            name: Some("NewParent".into()),
+            local_transform: LocalTransform {
+                translation: glam::Vec3::new(20., 0., 0.),
+                ..LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let child = EntitySnapshot {
+            name: Some("Child".into()),
+            parent: Some(old_parent.id),
+            local_transform: LocalTransform {
+                translation: glam::Vec3::X,
+                ..LocalTransform::IDENTITY
+            },
+            ..EntitySnapshot::default()
+        };
+        let deleted = EntitySnapshot {
+            scripts: vec![engine_world::ScriptComponent::new(script_id)],
+            name: Some("Deleted".into()),
+            ..EntitySnapshot::default()
+        };
+        let moved = EntitySnapshot {
+            name: Some("Moved".into()),
+            ..EntitySnapshot::default()
+        };
+        let moved_id = moved.id;
+        let mut scene = SceneDocument::new("Review");
+        scene.entities = vec![old_parent, new_parent, child, deleted, moved];
+        let scene_bytes = scene.to_bytes().unwrap();
+        let manifest = ScriptManifest {
+            format_version: engine_scripting::CURRENT_SCRIPT_MANIFEST_VERSION,
+            scripts: vec![ScriptManifestEntry {
+                id: script_id,
+                language: engine_scripting::ScriptLanguage::Lua54,
+                relative_path: "scripts/review.lua".into(),
+                api_version: engine_scripting::ScriptApiVersion::CURRENT,
+                public_properties: Vec::new(),
+            }],
+        };
+        let snapshot = SnapshotBuilder::new(temp.path().join("play"))
+            .stage(
+                PlayMode::Play,
+                SnapshotInput::new("scene/main.scene", scene_bytes.clone()),
+                &[
+                    SnapshotInput::new(
+                        "config/scripts.ron",
+                        ron::ser::to_string(&manifest).unwrap().into_bytes(),
+                    ),
+                    SnapshotInput::new(
+                        "scripts/review.lua",
+                        br"return {Start=function()
+                    Entity.destroy('Deleted')
+                    Hierarchy.set_parent('OldParent.Child','NewParent')
+                    rustic.edit_object_attribute('Moved','Position',{4,0,0})
+                end}"
+                            .to_vec(),
+                    ),
+                ],
+            )
+            .unwrap();
+        let endpoint = LocalEndpoint::unique(temp.path());
+        let token = AuthenticationToken::generate();
+        let config = RuntimeServerConfig {
+            endpoint: endpoint.clone(),
+            authentication_token: token.clone(),
+            snapshot_root: snapshot.root().into(),
+            logs_directory: temp.path().join("logs"),
+            mode: PlayMode::Play,
+            fixed_delta: Duration::from_millis(16),
+            crash_after_ready: false,
+            ignore_stop: false,
+        };
+        let server = thread::spawn(move || run_runtime_server(config));
+        let mut client = connect_authenticated(&endpoint, token, Duration::from_secs(5)).unwrap();
+        client
+            .set_receive_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        while !matches!(
+            client.receive().unwrap().message,
+            ProtocolMessage::Ready { .. }
+        ) {}
+        client
+            .send(42, &ProtocolMessage::Control(ControlRequest::Stop))
+            .unwrap();
+        let mut changes = None;
+        loop {
+            let received = client.receive().unwrap();
+            match received.message {
+                ProtocolMessage::RuntimeChanges(value) => {
+                    assert_eq!(received.request_id, 42);
+                    changes = Some(value);
+                }
+                ProtocolMessage::ControlAck(ack) => {
+                    assert_eq!(received.request_id, 42);
+                    assert_eq!(ack.request, ControlRequest::Stop);
+                    assert_eq!(ack.state, RuntimeState::Stopped);
+                    break;
+                }
+                ProtocolMessage::Error { message, .. } => panic!("Stop failed: {message}"),
+                _ => {}
+            }
+        }
+        assert!(server.join().unwrap().is_ok());
+        let changes = changes.expect("Stop must deliver changes before its acknowledgement");
+        assert_eq!(changes.changes.len(), 1);
+        assert_eq!(changes.changes[0].target.entity_id, moved_id.to_string());
+        assert_eq!(
+            changes.changes[0].after,
+            RuntimeValue::Vector3([4., 0., 0.])
+        );
+        assert_eq!(snapshot.scene_bytes().unwrap(), scene_bytes);
+    }
+}

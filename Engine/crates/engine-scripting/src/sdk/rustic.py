@@ -355,3 +355,45 @@ class Clock:
     @staticmethod
     def state(): return rustic.query(dict(op="clock"))
 Camera.current=staticmethod(lambda:rustic.query(dict(op="camera_current")))
+
+# Entity services use the shared Rust runtime.
+class Tags:
+    @staticmethod
+    def add(entity,name): return rustic.query({"op":"tags_add",'entity':_entity(entity),'name':name})
+    @staticmethod
+    def remove(entity,name): return rustic.query({"op":"tags_remove",'entity':_entity(entity),'name':name})
+    @staticmethod
+    def find_all(name): return rustic.query({"op":"tags_find_all",'name':name})
+class Groups:
+    @staticmethod
+    def create(name): return rustic.query({"op":"groups_create",'name':name})
+    @staticmethod
+    def add(name,entity): return rustic.query({"op":"groups_add",'name':name,'entity':_entity(entity)})
+    @staticmethod
+    def get_members(name): return rustic.query({"op":"groups_get_members",'name':name})
+class Hierarchy:
+    @staticmethod
+    def set_parent(entity,parent,keep_world=True): return rustic.query({"op":"hierarchy_set_parent",'entity':_entity(entity),'parent':(None if parent is None else _entity(parent)),'keep_world':keep_world})
+    @staticmethod
+    def get_children(entity): return rustic.query({"op":"hierarchy_get_children",'entity':_entity(entity)})
+    @staticmethod
+    def detach(entity,keep_world=True): return rustic.query({"op":"hierarchy_detach",'entity':_entity(entity),'keep_world':keep_world})
+class Entity:
+    @staticmethod
+    def destroy(entity): return rustic.query({"op":"entity_destroy",'entity':_entity(entity)})
+    @staticmethod
+    def destroy_after(entity,delay): return rustic.query({"op":"entity_destroy_after",'entity':_entity(entity),'delay':delay})
+    @staticmethod
+    def is_valid(entity): return rustic.query({"op":"entity_is_valid",'entity':_entity(entity)})
+class Components:
+    @staticmethod
+    def has(entity,name): return rustic.query({"op":"components_has",'entity':_entity(entity),'name':name})
+    @staticmethod
+    def get_all(entity): return rustic.query({"op":"components_get_all",'entity':_entity(entity)})
+    @staticmethod
+    def find_in_children(entity,name): return rustic.query({"op":"components_find_in_children",'entity':_entity(entity),'name':name})
+class World:
+    @staticmethod
+    def find_by_tag(name): return rustic.query({"op":"world_find_by_tag",'name':name})
+    @staticmethod
+    def find_in_radius(center,radius): return rustic.query({"op":"world_find_in_radius",'center':center,'radius':radius})
