@@ -5414,4 +5414,63 @@ mod explorer_tests {
         }
         assert!(!egui::DragAndDrop::has_any_payload(&context));
     }
+    #[test]
+    fn expanded_folder_child_owns_its_drag_payload() {
+        let context = egui::Context::default();
+        egui_extras::install_image_loaders(&context);
+        let directory = ProjectDirectory {
+            name: "scripts".into(),
+            relative_path: "scripts".into(),
+            directories: vec![],
+            files: vec![ProjectFile {
+                name: "child.lua".into(),
+                relative_path: "scripts/child.lua".into(),
+            }],
+        };
+        let frame = |time, events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    render_project_directory(ui, &directory, "", true, true, true);
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let output = frame(0.0, vec![]);
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::epaint::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == "child.lua"
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .expect("expanded folder must show its child");
+        let output = frame(0.1, vec![egui::Event::PointerMoved(position)]);
+        assert_ne!(output.platform_output.cursor_icon, egui::CursorIcon::Move);
+        assert_ne!(output.platform_output.cursor_icon, egui::CursorIcon::Grab);
+        assert!(!egui::DragAndDrop::has_any_payload(&context));
+        frame(
+            0.2,
+            vec![pointer(position, egui::PointerButton::Primary, true)],
+        );
+        frame(
+            0.3,
+            vec![egui::Event::PointerMoved(position + egui::vec2(25.0, 0.0))],
+        );
+        let payload =
+            egui::DragAndDrop::payload::<ViewportDrop>(&context).expect("child starts dragging");
+        assert!(
+            matches!(payload.as_ref(), ViewportDrop::ProjectFile(path) if path == Path::new("scripts/child.lua"))
+        );
+    }
 }
