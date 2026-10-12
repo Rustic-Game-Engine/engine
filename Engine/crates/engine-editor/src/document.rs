@@ -486,6 +486,90 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// Captures an object and its descendants in parent-first order.
+    /// # Errors
+    /// Returns an error if the entity is absent.
+    pub fn snapshot_tree(&self, entity: EntityId) -> Result<Vec<EntitySnapshot>, AuthoringError> {
+        let snapshots = self.entity_snapshots()?;
+        let mut result = vec![self.world.snapshot(entity)?];
+        let mut index = 0;
+        while index < result.len() {
+            let parent = result[index].id;
+            result.extend(
+                snapshots
+                    .iter()
+                    .filter(|snapshot| snapshot.parent == Some(parent))
+                    .cloned(),
+            );
+            index += 1;
+        }
+        Ok(result)
+    }
+
+    /// Deletes an object and its descendants as one undoable edit.
+    /// # Errors
+    /// Returns an error for read-only access or an absent entity.
+    pub fn delete_tree(&mut self, entity: EntityId) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let snapshots = self.snapshot_tree(entity)?;
+        let edits = snapshots
+            .iter()
+            .rev()
+            .map(|snapshot| SceneEdit::capture_delete(&self.world, snapshot.id))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.undo.execute(
+            &mut self.world,
+            SceneEdit::Transaction {
+                label: "Delete object tree".into(),
+                edits,
+            },
+        )?;
+        if self
+            .selected
+            .is_some_and(|selected| snapshots.iter().any(|snapshot| snapshot.id == selected))
+        {
+            self.selected = None;
+        }
+        Ok(())
+    }
+
+    /// Pastes copied objects with fresh IDs and preserved internal parent links.
+    /// # Errors
+    /// Returns an error for read-only access or invalid hierarchy/component data.
+    pub fn paste_tree(
+        &mut self,
+        snapshots: &[EntitySnapshot],
+        parent: Option<EntityId>,
+    ) -> Result<Option<EntityId>, AuthoringError> {
+        self.ensure_writable()?;
+        let ids: BTreeMap<_, _> = snapshots
+            .iter()
+            .map(|snapshot| (snapshot.id, EntityId::new()))
+            .collect();
+        let edits = snapshots
+            .iter()
+            .map(|snapshot| {
+                let mut copy = snapshot.clone();
+                copy.id = ids[&snapshot.id];
+                copy.parent = snapshot
+                    .parent
+                    .and_then(|id| ids.get(&id).copied())
+                    .or(parent);
+                SceneEdit::Create { snapshot: copy }
+            })
+            .collect();
+        let root = snapshots.first().map(|snapshot| ids[&snapshot.id]);
+        self.undo.execute(
+            &mut self.world,
+            SceneEdit::Transaction {
+                label: "Paste object tree".into(),
+                edits,
+            },
+        )?;
+        self.selected = root;
+        Ok(root)
+    }
+
     /// Inserts a `.rscene` from the project's `scenes` folder as an additive instance.
     /// # Errors
     /// Returns an error for read-only state, an unsafe path, or invalid scene data.
@@ -763,6 +847,70 @@ mod tests {
     use engine_project::ProjectTemplate;
     use glam::Vec3;
     use tempfile::tempdir;
+
+    #[test]
+    fn explorer_tree_copy_delete_are_atomic_and_undoable() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("trees"),
+            "Trees",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let folder = document.add_folder(None).unwrap();
+        let child = document
+            .add_primitive("Child", Primitive::Cube { size: 1.0 }, Some(folder))
+            .unwrap();
+        let snapshots = document.snapshot_tree(folder).unwrap();
+        assert_eq!(snapshots.len(), 2);
+        let copied = document.paste_tree(&snapshots, None).unwrap().unwrap();
+        assert_ne!(copied, folder);
+        let copied_tree = document.snapshot_tree(copied).unwrap();
+        assert_ne!(copied_tree[1].id, child);
+        assert_eq!(copied_tree[1].parent, Some(copied));
+        document.undo().unwrap();
+        assert!(document.snapshot_tree(copied).is_err());
+        document.redo().unwrap();
+        assert_eq!(document.snapshot_tree(copied).unwrap(), copied_tree);
+        document.delete_tree(folder).unwrap();
+        assert!(document.snapshot_tree(folder).is_err());
+        assert!(document.world().snapshot(child).is_err());
+        document.undo().unwrap();
+        assert_eq!(document.snapshot_tree(folder).unwrap(), snapshots);
+        document.redo().unwrap();
+        assert!(document.snapshot_tree(folder).is_err());
+    }
+
+    #[test]
+    fn explorer_paste_rejects_missing_parent_without_partial_objects() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("paste"),
+            "Paste",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let folder = document.add_folder(None).unwrap();
+        let snapshots = document.snapshot_tree(folder).unwrap();
+        let before = document.entity_snapshots().unwrap();
+        assert!(
+            document
+                .paste_tree(&snapshots, Some(EntityId::new()))
+                .is_err()
+        );
+        assert_eq!(document.entity_snapshots().unwrap(), before);
+        document.read_only = true;
+        assert!(matches!(
+            document.delete_tree(folder),
+            Err(AuthoringError::ReadOnly)
+        ));
+        assert!(matches!(
+            document.paste_tree(&snapshots, None),
+            Err(AuthoringError::ReadOnly)
+        ));
+    }
 
     #[test]
     fn gizmo_preview_drag_commits_exactly_one_undo_entry_and_read_only_rejects() {

@@ -81,4 +81,6 @@ After a successful run, download the **RusticGameEngine-Windows-Installer** arti
 from the run page and extract the ZIP to obtain the setup `.exe`. Artifacts require
 GitHub access to this repository and are retained for 30 days.
 
+Explorer rename, clipboard, drag and script-scope controls are described in [`docs/EXPLORER.md`](docs/EXPLORER.md).
+
 Gameplay authors should start with [`docs/GAMEPLAY_PROGRAMMING.md`](docs/GAMEPLAY_PROGRAMMING.md).
