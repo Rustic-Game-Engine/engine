@@ -2185,6 +2185,7 @@ impl EditorViewer<'_> {
             .auto_shrink([false, false])
             .show(ui, |ui| match snapshots {
                 Ok(snapshots) => {
+                    let background = explorer_tree_background(ui, "scene-tree-background");
                     let (root, dropped) =
                         ui.dnd_drop_zone::<SceneTreeDrag, _>(egui::Frame::NONE, |ui| {
                             render_scene_hierarchy(
@@ -2196,7 +2197,9 @@ impl EditorViewer<'_> {
                                 self.gizmo.space,
                             )
                         });
-                    root.response.context_menu(|ui| {
+                    let dropped =
+                        dropped.or_else(|| background.dnd_release_payload::<SceneTreeDrag>());
+                    background.context_menu(|ui| {
                         let enabled = !self.playing
                             && !self.document.is_read_only()
                             && ui.ctx().data_mut(|data| {
@@ -2334,6 +2337,7 @@ impl EditorViewer<'_> {
                 .id_salt("game-project-files")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
+                    let background = explorer_tree_background(ui, "project-tree-background");
                     let (root, dropped) =
                         ui.dnd_drop_zone::<ViewportDrop, _>(egui::Frame::NONE, |ui| {
                             render_project_root(
@@ -2345,7 +2349,9 @@ impl EditorViewer<'_> {
                             )
                         });
                     action = root.inner;
-                    root.response.context_menu(|ui| {
+                    let dropped =
+                        dropped.or_else(|| background.dnd_release_payload::<ViewportDrop>());
+                    background.context_menu(|ui| {
                         let enabled = !self.playing
                             && !self.document.is_read_only()
                             && ui.ctx().data_mut(|data| {
@@ -3962,6 +3968,15 @@ fn edit_primitive(ui: &mut egui::Ui, primitive: &mut Primitive) -> bool {
     changed
 }
 
+// Register the background before rows so item controls retain pointer priority.
+fn explorer_tree_background(ui: &egui::Ui, id: &str) -> egui::Response {
+    ui.interact(
+        ui.clip_rect(),
+        ui.make_persistent_id(id),
+        egui::Sense::click(),
+    )
+}
+
 #[derive(Debug)]
 struct ProjectDirectory {
     name: String,
@@ -5471,6 +5486,76 @@ mod explorer_tests {
             egui::DragAndDrop::payload::<ViewportDrop>(&context).expect("child starts dragging");
         assert!(
             matches!(payload.as_ref(), ViewportDrop::ProjectFile(path) if path == Path::new("scripts/child.lua"))
+        );
+    }
+    #[test]
+    fn explorer_background_menu_opens_in_empty_space_without_stealing_row_clicks() {
+        let context = egui::Context::default();
+        let frame = |time, events| {
+            let mut clicked = false;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let background = explorer_tree_background(ui, "background");
+                    clicked = ui.button("Object").clicked();
+                    background.context_menu(|ui| {
+                        let _ = ui.button("Paste at Project Root");
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            (output, clicked)
+        };
+        let (output, _) = frame(0.0, vec![]);
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| {
+                if let egui::epaint::Shape::Text(text) = &shape.shape
+                    && text.galley.job.text == "Object"
+                {
+                    Some(text.pos + text.galley.size() * 0.5)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        frame(
+            0.1,
+            vec![
+                egui::Event::PointerMoved(position),
+                pointer(position, egui::PointerButton::Primary, true),
+            ],
+        );
+        let (_, clicked) = frame(
+            0.2,
+            vec![pointer(position, egui::PointerButton::Primary, false)],
+        );
+        assert!(clicked, "the item must keep its click interaction");
+        let empty_space = position + egui::vec2(100.0, 100.0);
+        frame(
+            0.3,
+            vec![
+                egui::Event::PointerMoved(empty_space),
+                pointer(empty_space, egui::PointerButton::Secondary, true),
+            ],
+        );
+        frame(
+            0.4,
+            vec![pointer(empty_space, egui::PointerButton::Secondary, false)],
+        );
+        let (output, _) = frame(0.5, vec![]);
+        let mut text = String::new();
+        for shape in output.shapes {
+            collect_text(&shape.shape, &mut text);
+        }
+        assert!(
+            text.contains("Paste at Project Root"),
+            "Missing root paste menu: {text}"
         );
     }
 }
