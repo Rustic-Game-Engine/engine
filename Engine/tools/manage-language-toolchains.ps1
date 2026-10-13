@@ -2,19 +2,12 @@
 param(
     [string]$Languages,
     [string]$LogPath,
-    [switch]$CheckOnly
+    [switch]$CheckOnly,
+    [switch]$Setup
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
-if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
-    $logDirectory = Split-Path -Parent $LogPath
-    if ($logDirectory) {
-        New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
-    }
-    Start-Transcript -Path $LogPath -Append | Out-Null
-}
 
 $catalog = [ordered]@{
     Python = [pscustomobject]@{ Name = 'Python 3.14'; Package = 'Python.Python.3.14'; Commands = @('python.exe', 'py.exe') }
@@ -57,6 +50,14 @@ function Read-LanguageSelection {
     return @($selected | Select-Object -Unique)
 }
 
+function Assert-WinGetInitialized([int]$ExitCode) {
+    # Stop the whole batch if the host cannot initialize, instead of launching
+    # the same broken executable again for each selected language.
+    if ($ExitCode -in @(142, -1073741502, 3221225794)) {
+        throw "Windows Package Manager failed to initialize (exit code $ExitCode). Repair Microsoft App Installer before retrying."
+    }
+}
+
 function Test-ToolchainInstalled($Entry) {
     foreach ($commandName in $Entry.Commands) {
         if (Get-Command $commandName -ErrorAction SilentlyContinue) { return $true }
@@ -71,55 +72,83 @@ function Test-ToolchainInstalled($Entry) {
 
     $wingetPath = if ($wingetCommand -is [string]) { $wingetCommand } else { $wingetCommand.Source }
     & $wingetPath list --id $Entry.Package --exact --source winget `
-        --disable-interactivity --accept-source-agreements *> $null
+        --disable-interactivity --accept-source-agreements | Out-Host
+    Assert-WinGetInitialized $LASTEXITCODE
     return $LASTEXITCODE -eq 0
 }
 
-$selectedLanguages = if ([string]::IsNullOrWhiteSpace($Languages)) {
-    @(Read-LanguageSelection)
-}
-else {
-    @($Languages.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-}
-$selectedLanguages = @($selectedLanguages)
+$exitCode = 0
+$transcriptStarted = $false
+try {
+    if ($Setup -and [string]::IsNullOrWhiteSpace($LogPath)) {
+        # Resolve this in the original user's process, not elevated Setup's profile.
+        $LogPath = Join-Path $env:LOCALAPPDATA 'Rustic Game Engine\logs\toolchain-install.log'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($LogPath)) {
+        $logDirectory = Split-Path -Parent $LogPath
+        if ($logDirectory) {
+            New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        }
+        Start-Transcript -Path $LogPath -Append | Out-Null
+        $transcriptStarted = $true
+    }
 
-if ($selectedLanguages.Count -eq 0) {
-    Write-Host 'No external language toolchains selected.'
-    exit 0
-}
+    if ($Setup -and [string]::IsNullOrWhiteSpace($Languages)) {
+        throw 'Setup must supply the selected languages; interactive selection is unavailable.'
+    }
+    $selectedLanguages = if ([string]::IsNullOrWhiteSpace($Languages)) {
+        @(Read-LanguageSelection)
+    }
+    else {
+        @($Languages.Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    $selectedLanguages = @($selectedLanguages | Select-Object -Unique)
 
-foreach ($language in $selectedLanguages) {
-    if (-not $catalog.Contains($language)) { throw "Unknown language selection '$language'." }
-}
-
-if ($CheckOnly) {
     foreach ($language in $selectedLanguages) {
-        if (-not (Test-ToolchainInstalled $catalog[$language])) { exit 1 }
-    }
-    exit 0
-}
-
-$winget = Find-WinGet
-$failures = [System.Collections.Generic.List[string]]::new()
-foreach ($language in $selectedLanguages) {
-    $entry = $catalog[$language]
-    if (Test-ToolchainInstalled $entry) {
-        Write-Host "$($entry.Name) is already installed."
-        continue
+        if (-not $catalog.Contains($language)) { throw "Unknown language selection '$language'." }
     }
 
-    Write-Host "Installing $($entry.Name)..."
-    & $winget install --id $entry.Package --exact --source winget --silent `
-        --disable-interactivity --accept-source-agreements --accept-package-agreements
-    if ($LASTEXITCODE -ne 0) {
-        $failures.Add("$($entry.Name) (WinGet exit code $LASTEXITCODE)")
+    if ($CheckOnly) {
+        foreach ($language in $selectedLanguages) {
+            if (-not (Test-ToolchainInstalled $catalog[$language])) { $exitCode = 1 }
+        }
+    }
+    else {
+        $winget = $null
+        $failures = [System.Collections.Generic.List[string]]::new()
+        foreach ($language in $selectedLanguages) {
+            $entry = $catalog[$language]
+            Write-Host "Checking $($entry.Name)..."
+            if (Test-ToolchainInstalled $entry) {
+                Write-Host "$($entry.Name) is already installed."
+                continue
+            }
+
+            if (-not $winget) { $winget = Find-WinGet }
+            Write-Host "Installing $($entry.Name)..."
+            & $winget install --id $entry.Package --exact --source winget --silent `
+                --disable-interactivity --accept-source-agreements --accept-package-agreements | Out-Host
+            $packageExitCode = $LASTEXITCODE
+            Write-Host "WinGet exit code: $packageExitCode"
+            Assert-WinGetInitialized $packageExitCode
+            if ($packageExitCode -ne 0) {
+                $failures.Add("$($entry.Name) (WinGet exit code $packageExitCode)")
+            }
+        }
+
+        if ($failures.Count -gt 0) {
+            throw ("The following toolchains could not be installed: " + ($failures -join ', ') + '.')
+        }
+
+        Write-Host 'Selected gameplay language toolchains are installed.'
+        Write-Host 'Restart Rustic Game Engine if it was already open so it can refresh PATH.'
     }
 }
-
-if ($failures.Count -gt 0) {
-    Write-Error ("The following toolchains could not be installed: " + ($failures -join ', ') + '.')
-    exit 1
+catch {
+    Write-Error $_ -ErrorAction Continue
+    $exitCode = 1
 }
-
-Write-Host 'Selected gameplay language toolchains are installed.'
-Write-Host 'Restart Rustic Game Engine if it was already open so it can refresh PATH.'
+finally {
+    if ($transcriptStarted) { Stop-Transcript | Out-Null }
+}
+exit $exitCode

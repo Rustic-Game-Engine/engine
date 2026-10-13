@@ -35,6 +35,7 @@ WizardStyle=modern
 MinVersion=10.0
 CloseApplications=yes
 RestartApplications=no
+SetupLogging=yes
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -93,111 +94,78 @@ Filename: "{app}\rustic-agent-backend.exe"; Parameters: "--install-user-integrat
 Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [Code]
-function IsLanguageToolchainInstalled(Language: String): Boolean;
+procedure AddSelectedLanguage(Component, Language: String; var Languages: String);
+begin
+  if WizardIsComponentSelected(Component) then
+  begin
+    if Languages <> '' then Languages := Languages + ',';
+    Languages := Languages + Language;
+  end;
+end;
+
+procedure InstallSelectedLanguageToolchains();
 var
+  Languages: String;
+  Failure: String;
+  Started: Boolean;
   ResultCode: Integer;
 begin
-  Result := ExecAsOriginalUser(
-    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NoProfile -ExecutionPolicy Bypass -File "' +
-      ExpandConstant('{app}\tools\manage-language-toolchains.ps1') +
-      '" -Languages "' + Language + '" -CheckOnly',
-    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode
-  ) and (ResultCode = 0);
-end;
+  Languages := '';
+  AddSelectedLanguage('languages\python', 'Python', Languages);
+  AddSelectedLanguage('languages\csharp', 'CSharp', Languages);
+  AddSelectedLanguage('languages\ccpp', 'CCpp', Languages);
+  AddSelectedLanguage('languages\java', 'Java', Languages);
+  AddSelectedLanguage('languages\php', 'Php', Languages);
+  if Languages = '' then Exit;
 
-function SelectedLanguageCount(): Integer;
-begin
-  Result := 0;
-  if WizardIsComponentSelected('languages\python') and not IsLanguageToolchainInstalled('Python') then Result := Result + 1;
-  if WizardIsComponentSelected('languages\csharp') and not IsLanguageToolchainInstalled('CSharp') then Result := Result + 1;
-  if WizardIsComponentSelected('languages\ccpp') and not IsLanguageToolchainInstalled('CCpp') then Result := Result + 1;
-  if WizardIsComponentSelected('languages\java') and not IsLanguageToolchainInstalled('Java') then Result := Result + 1;
-  if WizardIsComponentSelected('languages\php') and not IsLanguageToolchainInstalled('Php') then Result := Result + 1;
-end;
-
-function AnyOptionalLanguageSelected(): Boolean;
-begin
-  Result :=
-    WizardIsComponentSelected('languages\python') or
-    WizardIsComponentSelected('languages\csharp') or
-    WizardIsComponentSelected('languages\ccpp') or
-    WizardIsComponentSelected('languages\java') or
-    WizardIsComponentSelected('languages\php');
-end;
-
-procedure InstallLanguageToolchain(Language, DisplayName: String;
-  var CompletedCount: Integer; TotalCount: Integer; var Failures: String);
-var
-  ResultCode: Integer;
-begin
-  WizardForm.StatusLabel.Caption := Format(
-    'Installing %s (%d of %d)...', [DisplayName, CompletedCount + 1, TotalCount]);
-  WizardForm.ProgressGauge.Position := CompletedCount;
+  WizardForm.StatusLabel.Caption := 'Checking and installing selected gameplay language toolchains...';
   WizardForm.Refresh;
 
-  if not ExecAsOriginalUser(
-    ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-    '-NoProfile -ExecutionPolicy Bypass -File "' +
-      ExpandConstant('{app}\tools\manage-language-toolchains.ps1') +
-      '" -Languages "' + Language + '" -LogPath "' +
-      ExpandConstant('{localappdata}\Rustic Game Engine\logs\toolchain-install.log') + '"',
-    ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode
-  ) or (ResultCode <> 0) then
-  begin
-    if Failures <> '' then Failures := Failures + ', ';
-    Failures := Failures + DisplayName;
+  // The manager checks installed packages itself. Launch it once, rather than
+  // starting a new PowerShell host for each check and each installation.
+  Log('Selected optional language toolchains: ' + Languages);
+  Failure := '';
+  ResultCode := -1;
+  try
+    Started := ExecAsOriginalUser(
+      ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+      '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
+        ExpandConstant('{app}\tools\manage-language-toolchains.ps1') +
+        '" -Languages "' + Languages + '" -Setup',
+      ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode
+    );
+    if not Started then
+      Failure := Format('Could not start PowerShell: Windows error %d (%s).',
+        [ResultCode, SysErrorMessage(ResultCode)])
+    else if ResultCode <> 0 then
+      Failure := Format('Language Toolchain Manager exited with code %d (0x%.8x).',
+        [ResultCode, ResultCode]);
+  except
+    Failure := 'Could not start Language Toolchain Manager: ' + GetExceptionMessage;
   end;
 
-  CompletedCount := CompletedCount + 1;
-  WizardForm.ProgressGauge.Position := CompletedCount;
+  if Failure <> '' then
+  begin
+    Log(Failure);
+    WizardForm.StatusLabel.Caption := 'Rustic is installed; optional toolchain installation needs attention.';
+    // Keep the engine usable and report one failure, including host failures
+    // that occur before PowerShell can create its own transcript.
+    SuppressibleMsgBox(
+      'Rustic Game Engine was installed, but optional language toolchain installation did not finish.' + #13#10 + #13#10 +
+      Failure + #13#10 + #13#10 +
+      'You can retry from Language Toolchain Manager in the Start menu.' + #13#10 +
+      'Setup log: ' + ExpandConstant('{log}') + #13#10 +
+      'Toolchain log (if PowerShell started): %LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log',
+      mbError, MB_OK, IDOK);
+  end;
+  if Failure = '' then
+    WizardForm.StatusLabel.Caption := 'Selected gameplay language toolchains are installed.';
   WizardForm.Refresh;
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
-var
-  CompletedCount: Integer;
-  TotalCount: Integer;
-  Failures: String;
 begin
-  if CurStep = ssPostInstall then
-  begin
-    TotalCount := SelectedLanguageCount();
-    if TotalCount > 0 then
-    begin
-      CompletedCount := 0;
-      Failures := '';
-      WizardForm.ProgressGauge.Min := 0;
-      WizardForm.ProgressGauge.Max := TotalCount;
-      WizardForm.ProgressGauge.Position := 0;
-
-      if WizardIsComponentSelected('languages\python') and not IsLanguageToolchainInstalled('Python') then
-        InstallLanguageToolchain('Python', 'Python 3.14', CompletedCount, TotalCount, Failures);
-      if WizardIsComponentSelected('languages\csharp') and not IsLanguageToolchainInstalled('CSharp') then
-        InstallLanguageToolchain('CSharp', '.NET SDK 10 for C#', CompletedCount, TotalCount, Failures);
-      if WizardIsComponentSelected('languages\ccpp') and not IsLanguageToolchainInstalled('CCpp') then
-        InstallLanguageToolchain('CCpp', 'LLVM for C and C++', CompletedCount, TotalCount, Failures);
-      if WizardIsComponentSelected('languages\java') and not IsLanguageToolchainInstalled('Java') then
-        InstallLanguageToolchain('Java', 'Microsoft OpenJDK 21', CompletedCount, TotalCount, Failures);
-      if WizardIsComponentSelected('languages\php') and not IsLanguageToolchainInstalled('Php') then
-        InstallLanguageToolchain('Php', 'PHP 8.4 CLI', CompletedCount, TotalCount, Failures);
-
-      WizardForm.StatusLabel.Caption := 'Finished installing gameplay language toolchains.';
-      WizardForm.Refresh;
-
-      if Failures <> '' then
-        MsgBox(Format(
-          'Rustic Game Engine was installed, but these optional language toolchains could not be installed: %s.' + #13#10 + #13#10 +
-          'You can retry from Language Toolchain Manager in the Start menu.' + #13#10 +
-          'Details: %s', [Failures, ExpandConstant('{localappdata}\Rustic Game Engine\logs\toolchain-install.log')]),
-          mbError, MB_OK);
-    end;
-    if (TotalCount = 0) and AnyOptionalLanguageSelected() then
-    begin
-      WizardForm.StatusLabel.Caption := 'Selected gameplay language toolchains are already installed.';
-      WizardForm.Refresh;
-    end;
-  end;
+  if CurStep = ssPostInstall then InstallSelectedLanguageToolchains();
 end;
 
 function NeedsAddPath(Param: string): Boolean;
