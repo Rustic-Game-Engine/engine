@@ -70,6 +70,10 @@ removed through Windows Installed Apps. Because it is a desktop application, its
 folder is not added to `PATH` by default; pass `-InstallDirectoryOnPath` to select that
 installer option by default.
 
+The builder validates the installer script with Inno Setup before compiling the
+engine. This preflight omits the unbuilt binaries and disables output; it cannot
+produce a distributable installer.
+
 Setup checks and installs all selected optional toolchains in one hidden,
 noninteractive PowerShell process as the original user. Already-installed toolchains
 are skipped. If PowerShell cannot start, or WinGet returns an initialization failure

@@ -72,12 +72,14 @@ Source: "..\licenses\ogg-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ig
 Source: "..\licenses\opus-pure-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\opus-pure-ATTRIBUTION.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\Audio-Decoders-NOTICE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+#ifndef InstallerPreflight
 Source: "..\target\distribution\rustic-luau-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-agent-backend.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-project-manager.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-editor.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-runtime.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-asset-worker.exe"; DestDir: "{app}"; Flags: ignoreversion
+#endif
 Source: "..\tools\manage-language-toolchains.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
@@ -135,11 +137,9 @@ begin
       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode
     );
     if not Started then
-      Failure := Format('Could not start PowerShell: Windows error %d (%s).',
-        [ResultCode, SysErrorMessage(ResultCode)])
+      Failure := Format('Could not start PowerShell: Windows error %d (%s).', [ResultCode, SysErrorMessage(ResultCode)])
     else if ResultCode <> 0 then
-      Failure := Format('Language Toolchain Manager exited with code %d (0x%.8x).',
-        [ResultCode, ResultCode]);
+      Failure := Format('Language Toolchain Manager exited with code %d (0x%.8x).', [ResultCode, ResultCode]);
   except
     Failure := 'Could not start Language Toolchain Manager: ' + GetExceptionMessage;
   end;
