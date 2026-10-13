@@ -132,7 +132,9 @@ try {
             Write-Host "WinGet exit code: $packageExitCode"
             Assert-WinGetInitialized $packageExitCode
             if ($packageExitCode -ne 0) {
-                $failures.Add("$($entry.Name) (WinGet exit code $packageExitCode)")
+                $failure = "$($entry.Name) (WinGet exit code $packageExitCode)"
+                Write-Host "Failed: $failure"
+                $failures.Add($failure)
             }
         }
 

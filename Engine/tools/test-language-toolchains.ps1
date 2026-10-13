@@ -81,7 +81,10 @@ function Invoke-ManagerCase([string]$Mode, [string]$Languages, [int]$ExpectedCod
     }
     else {
         $text = Get-Content -LiteralPath $log -Raw
-        if (-not $text.Contains($ExpectedLog)) { throw "$Mode transcript did not contain '$ExpectedLog'" }
+        if (-not $text.Contains($ExpectedLog)) {
+            Write-Host $text
+            throw "$Mode transcript did not contain '$ExpectedLog'"
+        }
     }
     Write-Host "PASS: $Mode ($Languages)"
 }
