@@ -25,7 +25,7 @@ mod tests {
         let mut text = String::new();
         // Warm up hit testing before checking the hovered response.
         for _ in 0..2 {
-            let _ = ctx.run(
+            let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -39,22 +39,21 @@ mod tests {
                     })],
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        let (_, viewport) = ui.allocate_exact_size(
-                            egui::vec2(200.0, 200.0),
-                            egui::Sense::click_and_drag(),
-                        );
-                        let field = ui.text_edit_singleline(&mut text);
-                        match focus {
-                            Focus::None => {}
-                            Focus::Viewport => viewport.request_focus(),
-                            Focus::Text => field.request_focus(),
-                        }
-                        active = super::active(&viewport);
-                    });
+                |ui| {
+                    let (_, viewport) = ui.allocate_exact_size(
+                        egui::vec2(200.0, 200.0),
+                        egui::Sense::click_and_drag(),
+                    );
+                    let field = ui.text_edit_singleline(&mut text);
+                    match focus {
+                        Focus::None => {}
+                        Focus::Viewport => viewport.request_focus(),
+                        Focus::Text => field.request_focus(),
+                    }
+                    active = super::active(&viewport);
                 },
             );
+            output.textures_delta.clear();
         }
         active
     }
