@@ -8,18 +8,25 @@ end
 local function inactive() return {pressed=false,released=false,held=false,axis=0} end
 local function objectPath(source, assetPath)
     assetPath = assetPath or ''
-    return setmetatable({__source=source}, {__index=function(_, name)
+    return setmetatable({__source=source,__file_path=assetPath}, {__index=function(_, name)
+        if __rustic_path_method then
+            local method=__rustic_path_method(_,name)
+            if method then return method end
+        end
         if name=='EditAttribute' or name=='edit_attribute' then
             return function(_, attribute, value) push('edit_attribute',{source=source,name=attribute,value=value}) end
         end
-        if name=='load' or name=='play' or name=='stop' or name=='pause' or name=='resume' or name=='Unload' or name=='unload' then
+        if string.sub(source,1,11)~='game.scene.' and (name=='load' or name=='play' or name=='stop' or name=='pause' or name=='resume' or name=='Unload' or name=='unload') then
             local audio=__rustic_audio_object(assetPath)
             for key,value in pairs(audio) do rawset(_,key,value) end
             return audio[name]
         end
-        return objectPath(source .. '.' .. name, assetPath=='' and name or assetPath .. '/' .. name)
+        local child=objectPath(source .. '.' .. name, assetPath=='' and name or assetPath .. '/' .. name)
+        if string.sub(source,1,17)=='game.rustic.files' then rawset(_,name,child) end
+        return child
     end})
 end
+__rustic_object_path=objectPath
 rustic = {game=objectPath('rustic.game')}
 function rustic.entity_id() return state.entity_id end
 function rustic.delta_time() return state.delta_time end

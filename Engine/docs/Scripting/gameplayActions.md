@@ -1,5 +1,9 @@
 # Shared gameplay actions (API 1.1)
 
+Use the [canonical API paths](/docs/guides/api-paths) to call object APIs on
+`game.scene.SceneName.ObjectPath`, global APIs on `game.rustic`, and file APIs
+on `game.rustic.files.ExplorerPath`. Existing calls below remain supported.
+
 The engine now owns an action scheduler shared by scripting languages. Easing,
 interpolation, path traversal, composition, and lifetime cleanup run in Rust. The
 script only starts an action and handles its callbacks. You do not edit JSON or

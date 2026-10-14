@@ -95,6 +95,7 @@ def _entity(obj):
     if obj is None: return rustic.entity_id()
     if isinstance(obj,ObjectPath): obj=obj.source
     elif hasattr(obj,"id"): obj=obj.id
+    if str(obj).startswith("game.scene."): return rustic.query({"op":"scene_object","source":str(obj)})
     result = Game.scene.Find(str(obj))
     if result: return result
     uuid.UUID(str(obj))
@@ -397,3 +398,222 @@ class World:
     def find_by_tag(name): return rustic.query({"op":"world_find_by_tag",'name':name})
     @staticmethod
     def find_in_radius(center,radius): return rustic.query({"op":"world_find_in_radius",'center':center,'radius':radius})
+
+# Canonical API paths.
+from inspect import signature, Signature
+_path_methods={'scene': {'tweenTo': ['Tween', 'to', 0],
+           'tweenMove': ['Tween', 'move', 0],
+           'tweenRotate': ['Tween', 'rotate', 0],
+           'tweenScale': ['Tween', 'scale', 0],
+           'tweenAction': ['Tween', 'action', 0],
+           'tweenToOptions': ['Tween', 'toOptions', 0],
+           'movementMoveTo': ['Movement', 'moveTo', 0],
+           'movementMove': ['Movement', 'move', 0],
+           'movementRotateTo': ['Movement', 'rotateTo', 0],
+           'movementLookAt': ['Movement', 'lookAt', 0],
+           'movementFollow': ['Movement', 'follow', 0],
+           'movementOrbit': ['Movement', 'orbit', 0],
+           'movementMoveToOptions': ['Movement', 'moveToOptions', 0],
+           'pathFollow': ['Path', 'follow', 0],
+           'effectsFade': ['Effects', 'fade', 0],
+           'effectsFlash': ['Effects', 'flash', 0],
+           'effectsShake': ['Effects', 'shake', 0],
+           'effectsPulse': ['Effects', 'pulse', 0],
+           'cameraMoveTo': ['Camera', 'moveTo', 0],
+           'cameraZoom': ['Camera', 'zoom', 0],
+           'cameraFov': ['Camera', 'fov', 0],
+           'cameraFollow': ['Camera', 'follow', 0],
+           'cameraOrbit': ['Camera', 'orbit', 0],
+           'cameraLookAt': ['Camera', 'lookAt', 0],
+           'cameraShake': ['Camera', 'shake', 0],
+           'cameraTransition': ['Camera', 'transition', 0],
+           'physicsImpulse': ['Physics', 'impulse', 0],
+           'physicsForce': ['Physics', 'force', 0],
+           'physicsLaunch': ['Physics', 'launch', 0],
+           'physicsKnockback': ['Physics', 'knockback', 0],
+           'animationRegister': ['Animation', 'register', 0],
+           'animationRegisterClip': ['Animation', 'registerClip', 0],
+           'animationClips': ['Animation', 'clips', 0],
+           'animationAction': ['Animation', 'action', 0],
+           'animationPlay': ['Animation', 'play', 0],
+           'animationBlend': ['Animation', 'blend', 0],
+           'animationTransition': ['Animation', 'transition', 0],
+           'animationIk': ['Animation', 'ik', 0],
+           'animationFootPlacement': ['Animation', 'footPlacement', 0],
+           'animationLookAt': ['Animation', 'lookAt', 0],
+           'animationHeadTracking': ['Animation', 'headTracking', 0],
+           'animationRecoil': ['Animation', 'recoil', 0],
+           'animationAddMarker': ['Animation', 'addMarker', 0],
+           'eventsConnect': ['Events', 'connect', 0],
+           'tagsAdd': ['Tags', 'add', 0],
+           'tagsRemove': ['Tags', 'remove', 0],
+           'groupsAdd': ['Groups', 'add', 1],
+           'hierarchySetParent': ['Hierarchy', 'set_parent', 0],
+           'hierarchyGetChildren': ['Hierarchy', 'get_children', 0],
+           'hierarchyDetach': ['Hierarchy', 'detach', 0],
+           'entityDestroy': ['Entity', 'destroy', 0],
+           'entityDestroyAfter': ['Entity', 'destroy_after', 0],
+           'entityIsValid': ['Entity', 'is_valid', 0],
+           'componentsHas': ['Components', 'has', 0],
+           'componentsGetAll': ['Components', 'get_all', 0],
+           'componentsFindInChildren': ['Components', 'find_in_children', 0],
+           'tween': ['Tween', 'to', 0],
+           'moveTo': ['Movement', 'moveTo', 0],
+           'move': ['Movement', 'move', 0],
+           'rotateTo': ['Movement', 'rotateTo', 0],
+           'lookAt': ['Movement', 'lookAt', 0],
+           'follow': ['Movement', 'follow', 0],
+           'orbit': ['Movement', 'orbit', 0],
+           'fade': ['Effects', 'fade', 0],
+           'flash': ['Effects', 'flash', 0],
+           'shake': ['Effects', 'shake', 0],
+           'pulse': ['Effects', 'pulse', 0],
+           'impulse': ['Physics', 'impulse', 0],
+           'force': ['Physics', 'force', 0],
+           'launch': ['Physics', 'launch', 0],
+           'knockback': ['Physics', 'knockback', 0],
+           'playAnimation': ['Animation', 'play', 0],
+           'destroy': ['Entity', 'destroy', 0],
+           'destroyAfter': ['Entity', 'destroy_after', 0],
+           'isValid': ['Entity', 'is_valid', 0],
+           'addTag': ['Tags', 'add', 0],
+           'removeTag': ['Tags', 'remove', 0],
+           'setParent': ['Hierarchy', 'set_parent', 0],
+           'getChildren': ['Hierarchy', 'get_children', 0],
+           'detach': ['Hierarchy', 'detach', 0],
+           'hasComponent': ['Components', 'has', 0],
+           'getComponents': ['Components', 'get_all', 0],
+           'findInChildren': ['Components', 'find_in_children', 0],
+           'followPath': ['Path', 'follow', 0]},
+ 'global': {'tweenValue': ['Tween', 'value', 0],
+            'timerAfter': ['Timer', 'after', 0],
+            'timerEvery': ['Timer', 'every', 0],
+            'smoothLerp': ['Smooth', 'lerp', 0],
+            'smoothSlerp': ['Smooth', 'slerp', 0],
+            'smoothInverseLerp': ['Smooth', 'inverseLerp', 0],
+            'smoothRemap': ['Smooth', 'remap', 0],
+            'smoothSmoothDamp': ['Smooth', 'smoothDamp', 0],
+            'physicsRaycast': ['Physics', 'raycast', 0],
+            'physicsSphereCast': ['Physics', 'sphereCast', 0],
+            'physicsOverlap': ['Physics', 'overlap', 0],
+            'physicsExplosion': ['Physics', 'explosion', 0],
+            'clockTimeScale': ['Clock', 'timeScale', 0],
+            'clockPause': ['Clock', 'pause', 0],
+            'clockResume': ['Clock', 'resume', 0],
+            'clockState': ['Clock', 'state', 0],
+            'pathCreate': ['Path', 'create', 0],
+            'sequenceNew': ['Sequence', 'new', 0],
+            'sequenceCreate': ['Sequence', 'create', 0],
+            'timelineNew': ['Timeline', 'new', 0],
+            'timelineCreate': ['Timeline', 'create', 0],
+            'eventsOn': ['Events', 'on', 0],
+            'eventsOnce': ['Events', 'once', 0],
+            'eventsEmit': ['Events', 'emit', 0],
+            'eventsDisconnect': ['Events', 'disconnect', 0],
+            'audioGetOutputDevices': ['Audio', 'get_output_devices', 0],
+            'audioGetInputDevices': ['Audio', 'get_input_devices', 0],
+            'audioSetOutputDevice': ['Audio', 'set_output_device', 0],
+            'audioSetInputDevice': ['Audio', 'set_input_device', 0],
+            'audioVolume': ['Audio', 'volume', 0],
+            'audioPitch': ['Audio', 'pitch', 0],
+            'audioFadeIn': ['Audio', 'fadeIn', 0],
+            'audioFadeOut': ['Audio', 'fadeOut', 0],
+            'audioCrossfade': ['Audio', 'crossfade', 0],
+            'audioStop': ['Audio', 'stop', 0],
+            'audioPause': ['Audio', 'pause', 0],
+            'audioResume': ['Audio', 'resume', 0],
+            'animationValue': ['Animation', 'value', 0],
+            'animationStop': ['Animation', 'stop', 0],
+            'animationPause': ['Animation', 'pause', 0],
+            'animationSpeed': ['Animation', 'speed', 0],
+            'animationLoop': ['Animation', 'loop', 0],
+            'cameraCurrent': ['Camera', 'current', 0],
+            'tagsFindAll': ['Tags', 'find_all', 0],
+            'groupsCreate': ['Groups', 'create', 0],
+            'groupsGetMembers': ['Groups', 'get_members', 0],
+            'worldFindByTag': ['World', 'find_by_tag', 0],
+            'worldFindInRadius': ['World', 'find_in_radius', 0],
+            'after': ['Timer', 'after', 0],
+            'every': ['Timer', 'every', 0],
+            'lerp': ['Smooth', 'lerp', 0],
+            'slerp': ['Smooth', 'slerp', 0],
+            'inverseLerp': ['Smooth', 'inverseLerp', 0],
+            'remap': ['Smooth', 'remap', 0],
+            'smoothDamp': ['Smooth', 'smoothDamp', 0],
+            'raycast': ['Physics', 'raycast', 0],
+            'sphereCast': ['Physics', 'sphereCast', 0],
+            'overlap': ['Physics', 'overlap', 0],
+            'explosion': ['Physics', 'explosion', 0],
+            'timeScale': ['Clock', 'timeScale', 0],
+            'pause': ['Clock', 'pause', 0],
+            'resume': ['Clock', 'resume', 0],
+            'createPath': ['Path', 'create', 0],
+            'sequence': ['Sequence', 'new', 0],
+            'timeline': ['Timeline', 'new', 0],
+            'on': ['Events', 'on', 0],
+            'once': ['Events', 'once', 0],
+            'emit': ['Events', 'emit', 0],
+            'disconnect': ['Events', 'disconnect', 0],
+            'currentCamera': ['Camera', 'current', 0],
+            'getOutputDevices': ['Audio', 'get_output_devices', 0],
+            'getInputDevices': ['Audio', 'get_input_devices', 0],
+            'setOutputDevice': ['Audio', 'set_output_device', 0],
+            'setInputDevice': ['Audio', 'set_input_device', 0]},
+ 'file': {'audioPlay': ['Audio', 'play', 0],
+          'audioPlayAt': ['Audio', 'playAt', 0],
+          'audioLoad': ['Audio', 'load', 0],
+          'animationLoad': ['Animation', 'load', 1],
+          'play': ['Audio', 'play', 0],
+          'playAt': ['Audio', 'playAt', 0],
+          'load': ['Audio', 'load', 0],
+          'loadAnimation': ['Animation', 'load', 1],
+          'add': ['instance', 'add', 0],
+          'clone': ['instance', 'clone', 0],
+          'setSkyTexture': ['scene', 'setSkyTexture', 0]}}
+_path_methods['global'].update({'get_output_devices':_path_methods['global']['getOutputDevices'],'get_input_devices':_path_methods['global']['getInputDevices'],'set_output_device':_path_methods['global']['setOutputDevice'],'set_input_device':_path_methods['global']['setInputDevice']})
+_path_methods['scene'].update({'clone':['instance','clone',0],'add':['instance','add',0],'setCurrentCamera':['Game','setCurrentCamera',0],'emit':['Events','emit',2]})
+class ApiPath:
+    def __init__(self,source,category,file_path=None):
+        self.source=source; self.category=category; self.file_path=file_path; self.children={}
+    def __getitem__(self,name):
+        name=str(name)
+        if name not in self.children:
+            self.children[name]=ApiPath(self.source+'.'+name,self.category,(self.file_path+'/' if self.file_path else '')+name if self.category=='file' else None)
+        return self.children[name]
+    def __getattr__(self,name):
+        if name in ('EditAttribute','edit_attribute'):
+            return lambda attribute,value: ObjectPath(self.source).EditAttribute(attribute,value)
+        binding=_path_methods[self.category].get(name)
+        if binding:
+            family,method,index=binding
+            owner=Game.scene if family=='scene' else globals()[family]
+            fn=getattr(owner,method,None)
+            if fn is None: raise AttributeError('API unavailable: '+name)
+            parameters=list(signature(fn).parameters.values())
+            target_name=parameters[index].name
+            receiver_signature=Signature(parameters[:index]+parameters[index+1:])
+            def argument(value):
+                if isinstance(value,ApiPath): return value.file_path if value.category=='file' else value.source
+                return value
+            def call(*args,**kwargs):
+                bound=receiver_signature.bind(*[argument(a) for a in args],**{k:argument(v) for k,v in kwargs.items()})
+                bound.arguments[target_name]=self.file_path if self.category=='file' else self.source
+                return fn(**bound.arguments)
+            return call
+        return self[name]
+class GlobalApi:
+    def __init__(self): self.files=ApiPath('game.rustic.files','file','')
+    def __getattr__(self,name):
+        binding=_path_methods['global'].get(name)
+        if binding:
+            family,method,_=binding
+            if family in ('Sequence','Timeline') and method=='new': method='new'
+            fn=getattr(globals()[family],method,None)
+            if fn is None: raise AttributeError('API unavailable: '+name)
+            return fn
+        if name in ('getEnvironment','setEnvironment'): return getattr(Game.scene,name)
+        if name=='setCurrentCamera': return lambda obj: Game.setCurrentCamera(obj.source if isinstance(obj,ApiPath) else obj)
+        return getattr(rustic,name)
+class CanonicalGame:
+    def __init__(self): self.scene=ApiPath('game.scene','scene'); self.rustic=GlobalApi()
+game=CanonicalGame()

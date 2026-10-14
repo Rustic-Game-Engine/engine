@@ -27,6 +27,7 @@ local function entity(object)
     if object==nil then return rustic.entity_id() end
     if type(object)=='table' then object=rawget(object,'__source') or rawget(object,'id') end
     assert(type(object)=='string','expected an entity ID or scene path')
+    if string.sub(object,1,11)=='game.scene.' then return rustic.query({op='scene_object',source=object}) end
     local id=rustic.find_entity and rustic.find_entity(object) or Game.scene.Find(object)
     -- Stable UUIDs are already handles, not paths.
     if not id and string.match(object,'^%x%x%x%x%x%x%x%x%-') then id=object end
@@ -369,3 +370,222 @@ function Components.find_in_children(entity,name) return rustic.query({op="compo
 World={}
 function World.find_by_tag(name) return rustic.query({op="world_find_by_tag",name=name}) end
 function World.find_in_radius(center,radius) return rustic.query({op="world_find_in_radius",center=center,radius=radius}) end
+
+-- Canonical API paths.
+local sceneMethods={
+    ['tweenTo']={Tween.to,0},
+    ['tweenMove']={Tween.move,0},
+    ['tweenRotate']={Tween.rotate,0},
+    ['tweenScale']={Tween.scale,0},
+    ['tweenAction']={Tween.action,0},
+    ['movementMoveTo']={Movement.moveTo,0},
+    ['movementMove']={Movement.move,0},
+    ['movementRotateTo']={Movement.rotateTo,0},
+    ['movementLookAt']={Movement.lookAt,0},
+    ['movementFollow']={Movement.follow,0},
+    ['movementOrbit']={Movement.orbit,0},
+    ['pathFollow']={Path.follow,0},
+    ['effectsFade']={Effects.fade,0},
+    ['effectsFlash']={Effects.flash,0},
+    ['effectsShake']={Effects.shake,0},
+    ['effectsPulse']={Effects.pulse,0},
+    ['cameraMoveTo']={Camera.moveTo,0},
+    ['cameraZoom']={Camera.zoom,0},
+    ['cameraFov']={Camera.fov,0},
+    ['cameraFollow']={Camera.follow,0},
+    ['cameraOrbit']={Camera.orbit,0},
+    ['cameraLookAt']={Camera.lookAt,0},
+    ['cameraShake']={Camera.shake,0},
+    ['cameraTransition']={Camera.transition,0},
+    ['physicsImpulse']={Physics.impulse,0},
+    ['physicsForce']={Physics.force,0},
+    ['physicsLaunch']={Physics.launch,0},
+    ['physicsKnockback']={Physics.knockback,0},
+    ['animationRegister']={Animation.register,0},
+    ['animationClips']={Animation.clips,0},
+    ['animationAction']={Animation.action,0},
+    ['animationPlay']={Animation.play,0},
+    ['animationBlend']={Animation.blend,0},
+    ['animationTransition']={Animation.transition,0},
+    ['animationIk']={Animation.ik,0},
+    ['animationFootPlacement']={Animation.footPlacement,0},
+    ['animationLookAt']={Animation.lookAt,0},
+    ['animationHeadTracking']={Animation.headTracking,0},
+    ['animationRecoil']={Animation.recoil,0},
+    ['animationAddMarker']={Animation.addMarker,0},
+    ['eventsConnect']={Events.connect,0},
+    ['tagsAdd']={Tags.add,0},
+    ['tagsRemove']={Tags.remove,0},
+    ['groupsAdd']={Groups.add,1},
+    ['hierarchySetParent']={Hierarchy.set_parent,0},
+    ['hierarchyGetChildren']={Hierarchy.get_children,0},
+    ['hierarchyDetach']={Hierarchy.detach,0},
+    ['entityDestroy']={Entity.destroy,0},
+    ['entityDestroyAfter']={Entity.destroy_after,0},
+    ['entityIsValid']={Entity.is_valid,0},
+    ['componentsHas']={Components.has,0},
+    ['componentsGetAll']={Components.get_all,0},
+    ['componentsFindInChildren']={Components.find_in_children,0},
+    ['tween']={Tween.to,0},
+    ['moveTo']={Movement.moveTo,0},
+    ['move']={Movement.move,0},
+    ['rotateTo']={Movement.rotateTo,0},
+    ['lookAt']={Movement.lookAt,0},
+    ['follow']={Movement.follow,0},
+    ['orbit']={Movement.orbit,0},
+    ['fade']={Effects.fade,0},
+    ['flash']={Effects.flash,0},
+    ['shake']={Effects.shake,0},
+    ['pulse']={Effects.pulse,0},
+    ['impulse']={Physics.impulse,0},
+    ['force']={Physics.force,0},
+    ['launch']={Physics.launch,0},
+    ['knockback']={Physics.knockback,0},
+    ['playAnimation']={Animation.play,0},
+    ['destroy']={Entity.destroy,0},
+    ['destroyAfter']={Entity.destroy_after,0},
+    ['isValid']={Entity.is_valid,0},
+    ['addTag']={Tags.add,0},
+    ['removeTag']={Tags.remove,0},
+    ['setParent']={Hierarchy.set_parent,0},
+    ['getChildren']={Hierarchy.get_children,0},
+    ['detach']={Hierarchy.detach,0},
+    ['hasComponent']={Components.has,0},
+    ['getComponents']={Components.get_all,0},
+    ['findInChildren']={Components.find_in_children,0},
+    ['followPath']={Path.follow,0},
+}
+sceneMethods.clone={instance.clone,0}
+sceneMethods.add={instance.add,0}
+sceneMethods.setCurrentCamera={Game.setCurrentCamera,0}
+sceneMethods.emit={Events.emit,2}
+local globalMethods={
+    ['tweenValue']={Tween.value,0},
+    ['timerAfter']={Timer.after,0},
+    ['timerEvery']={Timer.every,0},
+    ['smoothLerp']={Smooth.lerp,0},
+    ['smoothSlerp']={Smooth.slerp,0},
+    ['smoothInverseLerp']={Smooth.inverseLerp,0},
+    ['smoothRemap']={Smooth.remap,0},
+    ['smoothSmoothDamp']={Smooth.smoothDamp,0},
+    ['physicsRaycast']={Physics.raycast,0},
+    ['physicsSphereCast']={Physics.sphereCast,0},
+    ['physicsOverlap']={Physics.overlap,0},
+    ['physicsExplosion']={Physics.explosion,0},
+    ['clockTimeScale']={Clock.timeScale,0},
+    ['clockPause']={Clock.pause,0},
+    ['clockResume']={Clock.resume,0},
+    ['clockState']={Clock.state,0},
+    ['pathCreate']={Path.create,0},
+    ['sequenceNew']={Sequence.new,0},
+    ['timelineNew']={Timeline.new,0},
+    ['eventsOn']={Events.on,0},
+    ['eventsOnce']={Events.once,0},
+    ['eventsEmit']={Events.emit,0},
+    ['eventsDisconnect']={Events.disconnect,0},
+    ['audioGetOutputDevices']={Audio.get_output_devices,0},
+    ['audioGetInputDevices']={Audio.get_input_devices,0},
+    ['audioSetOutputDevice']={Audio.set_output_device,0},
+    ['audioSetInputDevice']={Audio.set_input_device,0},
+    ['audioVolume']={Audio.volume,0},
+    ['audioPitch']={Audio.pitch,0},
+    ['audioFadeIn']={Audio.fadeIn,0},
+    ['audioFadeOut']={Audio.fadeOut,0},
+    ['audioCrossfade']={Audio.crossfade,0},
+    ['animationValue']={Animation.value,0},
+    ['animationStop']={Animation.stop,0},
+    ['animationPause']={Animation.pause,0},
+    ['animationSpeed']={Animation.speed,0},
+    ['animationLoop']={Animation.loop,0},
+    ['cameraCurrent']={Camera.current,0},
+    ['tagsFindAll']={Tags.find_all,0},
+    ['groupsCreate']={Groups.create,0},
+    ['groupsGetMembers']={Groups.get_members,0},
+    ['worldFindByTag']={World.find_by_tag,0},
+    ['worldFindInRadius']={World.find_in_radius,0},
+    ['after']={Timer.after,0},
+    ['every']={Timer.every,0},
+    ['lerp']={Smooth.lerp,0},
+    ['slerp']={Smooth.slerp,0},
+    ['inverseLerp']={Smooth.inverseLerp,0},
+    ['remap']={Smooth.remap,0},
+    ['smoothDamp']={Smooth.smoothDamp,0},
+    ['raycast']={Physics.raycast,0},
+    ['sphereCast']={Physics.sphereCast,0},
+    ['overlap']={Physics.overlap,0},
+    ['explosion']={Physics.explosion,0},
+    ['timeScale']={Clock.timeScale,0},
+    ['pause']={Clock.pause,0},
+    ['resume']={Clock.resume,0},
+    ['createPath']={Path.create,0},
+    ['sequence']={Sequence.new,0},
+    ['timeline']={Timeline.new,0},
+    ['on']={Events.on,0},
+    ['once']={Events.once,0},
+    ['emit']={Events.emit,0},
+    ['disconnect']={Events.disconnect,0},
+    ['currentCamera']={Camera.current,0},
+    ['getOutputDevices']={Audio.get_output_devices,0},
+    ['getInputDevices']={Audio.get_input_devices,0},
+    ['setOutputDevice']={Audio.set_output_device,0},
+    ['setInputDevice']={Audio.set_input_device,0},
+}
+local fileMethods={
+    ['animationLoad']={Animation.load,1},
+    ['loadAnimation']={Animation.load,1},
+    ['add']={instance.add,0},
+    ['clone']={instance.clone,0},
+    ['setSkyTexture']={Game.scene.setSkyTexture,0},
+}
+local function argument(value)
+    if type(value)=='table' and rawget(value,'__source') and string.sub(value.__source,1,18)=='game.rustic.files.' then
+        return rawget(value,'__file_path')
+    end
+    return value
+end
+function __rustic_path_method(proxy,name)
+    local source=rawget(proxy,'__source')
+    local methods
+    local target=proxy
+    if string.sub(source,1,11)=='game.scene.' then methods=sceneMethods
+    elseif string.sub(source,1,18)=='game.rustic.files.' then
+        methods=fileMethods;target=rawget(proxy,'__file_path')
+    else return nil end
+    if methods==fileMethods and (name=='startRecording' or name=='start_recording') then
+        local method=function(_,opts) return rustic.game:startRecording(target,opts) end
+        rawset(proxy,name,method);return method
+    end
+    local binding=methods[name]
+    if not binding then return nil end
+    local method=function(self,...)
+        assert(self==proxy,'call path APIs with :')
+        local args=table.pack(...)
+        for i=1,args.n do args[i]=argument(args[i]) end
+        args.n=math.max(args.n,binding[2])
+        for i=args.n+1,binding[2]+2,-1 do args[i]=args[i-1] end
+        args[binding[2]+1]=target;args.n=args.n+1
+        return binding[1](table.unpack(args,1,args.n))
+    end
+    rawset(proxy,name,method)
+    return method
+end
+game={scene=__rustic_object_path('game.scene'),rustic={files=__rustic_object_path('game.rustic.files')}}
+globalMethods.get_output_devices=globalMethods.getOutputDevices
+globalMethods.get_input_devices=globalMethods.getInputDevices
+globalMethods.set_output_device=globalMethods.setOutputDevice
+globalMethods.set_input_device=globalMethods.setInputDevice
+for name,binding in pairs(globalMethods) do
+    game.rustic[name]=function(_,...) return binding[1](...) end
+end
+for name,fn in pairs(rustic) do
+    if type(fn)=='function' then game.rustic[name]=function(_,...) return fn(...) end end
+end
+for _,name in ipairs({'getEnvironment','setEnvironment'}) do
+    game.rustic[name]=function(_,...) return Game.scene[name](...) end
+end
+function game.rustic:setCurrentCamera(object)
+    return Game.setCurrentCamera(entity(object))
+end
+for _,name in ipairs({'startRecording','stopRecording','startHotMic','stopHotMic','start_recording','stop_recording','start_hot_mic','stop_hot_mic'}) do
+    game.rustic[name]=function(_,...) return rustic.game[name](rustic.game,...) end
+end

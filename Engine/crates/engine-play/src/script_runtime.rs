@@ -962,6 +962,15 @@ impl GameplayHost for RuntimeHost {
             .get("op")
             .and_then(serde_json::Value::as_str)
             .ok_or("query operation is missing")?;
+        if op == "scene_object" {
+            let source = query
+                .get("source")
+                .and_then(serde_json::Value::as_str)
+                .ok_or("scene object source is missing")?;
+            return Ok(serde_json::Value::String(
+                self.object_entity(source)?.to_string(),
+            ));
+        }
         if crate::entity_services::handles(op) {
             let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
             return crate::entity_services::query(&mut world, query);
@@ -1646,7 +1655,7 @@ impl GameplayHost for RuntimeHost {
             .map_err(|error| error.to_string())
     }
     fn find_entity(&self, query: &str) -> Result<Option<EntityId>, String> {
-        if query.starts_with("rustic.game.") {
+        if query.starts_with("rustic.game.") || query.starts_with("game.scene.") {
             return self.object_entity(query).map(Some);
         }
         let world = self
@@ -1689,6 +1698,7 @@ impl GameplayHost for RuntimeHost {
                 paths.insert(path.clone(), id);
                 paths.insert(format!("Game.scene.{path}"), id);
                 paths.insert(format!("rustic.game.{}.{path}", self.scene_name), id);
+                paths.insert(format!("game.scene.{}.{path}", self.scene_name), id);
             }
         }
         paths
@@ -1956,7 +1966,10 @@ impl GameplayHost for RuntimeHost {
 
 impl RuntimeHost {
     fn object_entity(&self, source: &str) -> Result<EntityId, String> {
-        if let Some(rest) = source.strip_prefix("rustic.game.") {
+        if let Some(rest) = source
+            .strip_prefix("game.scene.")
+            .or_else(|| source.strip_prefix("rustic.game."))
+        {
             let prefix = format!("{}.", self.scene_name);
             let path = rest.strip_prefix(&prefix).ok_or_else(|| {
                 format!(
@@ -1986,6 +1999,9 @@ impl RuntimeHost {
     }
 
     fn resolve_entity(&self, source: &str) -> Result<Option<EntityId>, String> {
+        if source.starts_with("game.scene.") || source.starts_with("rustic.game.") {
+            return self.object_entity(source).map(Some);
+        }
         let world = self
             .world
             .lock()
@@ -2309,14 +2325,15 @@ mod tests {
             br#"
             local crash
             return {Start=function()
-                local ok,err=pcall(function() rustic.game.assets.sounds["crash.wav"]:play() end)
+                local ok,err=pcall(function() game.rustic.files.assets.sounds["crash.wav"]:play() end)
                 assert(not ok and string.find(err,'load',1,true))
                 assert(not pcall(function() Audio.load('assets/missing.wav') end))
-                assert(not pcall(function() rustic.game.assets["../outside.wav"]:load() end))
-                local asset=rustic.game.assets.sounds["crash.wav"]
+                assert(not pcall(function() game.rustic.files.assets["../outside.wav"]:load() end))
+                local asset=game.rustic.files.assets.sounds["crash.wav"]
                 crash=asset:load()
                 assert(crash:load()==crash)
-                asset:play({loop=true})
+                assert(game.rustic.files.assets.sounds['crash.wav']:load()==crash)
+                game.rustic.files.assets.sounds['crash.wav']:play({loop=true})
                 crash:Unload()
                 assert(not pcall(function() crash:play() end))
                 assert(crash:load()==crash)
@@ -2648,6 +2665,8 @@ mod tests {
         for source in [
             "rustic.game.Other.Room.Player",
             "rustic.game.Demo.Room.Missing",
+            "game.scene.Other.Room.Player",
+            "game.scene.Demo.Room.Missing",
         ] {
             assert!(
                 host.edit_object_attribute(source, "Anchored", EngineValue::Boolean(false))
@@ -2677,6 +2696,15 @@ mod tests {
                 .unwrap(),
             Some(EngineValue::String("Renamed".into()))
         );
+        assert_eq!(
+            host.object_attribute("game.scene.Demo.Room.Renamed", "Name")
+                .unwrap(),
+            Some(EngineValue::String("Renamed".into()))
+        );
+        assert!(
+            host.object_attribute("game.scene.Demo.Room.Player", "Name")
+                .is_err()
+        );
         let duplicate = EntitySnapshot {
             name: Some("Renamed".into()),
             parent: target.parent,
@@ -2689,6 +2717,11 @@ mod tests {
             .unwrap();
         assert!(
             host.object_attribute("rustic.game.Demo.Room.Renamed", "Name")
+                .unwrap_err()
+                .contains("ambiguous")
+        );
+        assert!(
+            host.object_attribute("game.scene.Demo.Room.Renamed", "Name")
                 .unwrap_err()
                 .contains("ambiguous")
         );
@@ -4220,5 +4253,161 @@ run({'on_start':start})
                 .iter()
                 .any(|(_, m)| m == "value 2.0" || m == "value 2")
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        clippy::float_cmp,
+        reason = "Complete cross-language fixtures compare exactly representable scene values"
+    )]
+    fn canonical_api_paths_target_live_objects_in_all_available_sdks() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54,"paths.lua",br"return {Start=function()
+    game.scene.Demo.Room.Player:EditAttribute('Name','Renamed')
+    assert(game.rustic:groupsCreate('selected'))
+    assert(game.scene.Demo.Room.Renamed:groupsAdd('selected'))
+    game.scene.Demo.Room.Renamed:tween('Position',{8,0,0},2,'InQuad')
+    game.rustic:after(0.5,function() game.rustic:log('info','timer') end)
+    game.rustic.files.assets['night.hdr']:setSkyTexture()
+end}"),
+            (ScriptLanguage::Luau,"paths.luau",br"return {Start=function()
+    game.scene.Demo.Room.Player:EditAttribute('Name','Renamed')
+    assert(game.rustic:groupsCreate('selected'))
+    assert(game.scene.Demo.Room.Renamed:groupsAdd('selected'))
+    game.scene.Demo.Room.Renamed:tween('Position',{8,0,0},2,'InQuad')
+    game.rustic:after(0.5,function() game.rustic:log('info','timer') end)
+    game.rustic.files.assets['night.hdr']:setSkyTexture()
+end}"),
+            (ScriptLanguage::JavaScript,"paths.js",br"globalThis.behavior={Start(){
+    game.scene.Demo.Room.Player.EditAttribute('Name','Renamed');
+    game.rustic.groupsCreate('selected');
+    game.scene.Demo.Room.Renamed.groupsAdd('selected');
+    game.scene.Demo.Room.Renamed.tween('Position',[8,0,0],2,'InQuad');
+    game.rustic.after(0.5,()=>game.rustic.log('info','timer'));
+    game.rustic.files.assets['night.hdr'].setSkyTexture();
+}};"),
+            (ScriptLanguage::Web,"paths.html",br"<!doctype html><html><body><script>globalThis.behavior={Start(){
+    game.scene.Demo.Room.Player.EditAttribute('Name','Renamed');
+    game.rustic.groupsCreate('selected');
+    game.scene.Demo.Room.Renamed.groupsAdd('selected');
+    game.scene.Demo.Room.Renamed.tween('Position',[8,0,0],2,'InQuad');
+    game.rustic.after(0.5,()=>game.rustic.log('info','timer'));
+    game.rustic.files.assets['night.hdr'].setSkyTexture();
+}};</script></body></html>"),
+            (ScriptLanguage::Python,"paths.py",br"from rustic import game,run
+def on_start():
+    game.scene.Demo.Room.Player.EditAttribute('Name','Renamed')
+    assert game.rustic.groupsCreate('selected')
+    assert game.scene.Demo.Room.Renamed.groupsAdd(name='selected')
+    game.scene.Demo.Room.Renamed.tween(property='Position',to=[8,0,0],duration=2,easing='InQuad')
+    game.rustic.after(0.5,lambda:game.rustic.log('info','timer'))
+    game.rustic.files.assets['night.hdr'].setSkyTexture()
+run(globals())"),
+            (ScriptLanguage::Cpp,"paths.cpp",br#"#include "rustic.hpp"
+void start(){game.scene["Demo"]["Room"]["Player"].EditAttribute("Name","Renamed");game.rustic.groupsCreate("selected");game.scene["Demo"]["Room"]["Renamed"].groupsAdd("selected");game.scene["Demo"]["Room"]["Renamed"].tween("Position",RusticValue::Array{8,0,0},2.0,"InQuad");game.rustic.after(0.5,[]{game.rustic.log("info","timer");});game.rustic.files["assets"]["night.hdr"].setSkyTexture();}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
+            (ScriptLanguage::C,"paths.c",br#"#include "rustic.h"
+void timer(void){game.rustic.log("info","timer");}
+void start(void){RusticScenePath original=game.scene("Demo","Room.Player");original.EditAttribute(original,"Name",(RusticValue){.type=RUSTIC_STRING,.string="Renamed"});RusticScenePath player=game.scene("Demo","Room.Renamed");game.rustic.groupsCreate("selected");player.groupsAdd(player,"selected");player.tween(player,"Position",(RusticValue){.type=RUSTIC_VECTOR,.vector={8,0,0},.length=3},2,"InQuad",NULL);game.rustic.after(0.5,timer);RusticFilePath sky=game.rustic.files("assets/night.hdr");sky.setSkyTexture(sky);}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
+            (ScriptLanguage::CSharp,"paths.cs",br#"using static Rustic;
+Run((callback,dt)=>{if(callback=="on_start"){game.scene["Demo"]["Room"]["Player"].EditAttribute("Name","Renamed");game.rustic.groupsCreate("selected");game.scene["Demo"]["Room"]["Renamed"].groupsAdd("selected");game.scene["Demo"]["Room"]["Renamed"].tween("Position",new double[]{8,0,0},2,"InQuad");game.rustic.after(0.5,()=>game.rustic.log("info","timer"));game.rustic.files["assets"]["night.hdr"].setSkyTexture();}});"#),
+            (ScriptLanguage::Java,"RusticBehavior.java",br#"class RusticBehavior extends Rustic {
+public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){game.scene.scene("Demo").object("Room.Player").EditAttribute("Name","Renamed");game.rustic.groupsCreate("selected");game.scene.scene("Demo").object("Room.Renamed").groupsAdd("selected");game.scene.scene("Demo").object("Room.Renamed").tween("Position",new double[]{8,0,0},2,"InQuad");game.rustic.after(0.5,()->game.rustic.log("info","timer"));game.rustic.files.object("assets/night.hdr").setSkyTexture();}});}}"#),
+            (ScriptLanguage::Php,"paths.php",br#"<?php
+require __DIR__."/rustic.php";
+function on_start():void{global $game;$game->scene->Demo->Room->Player->EditAttribute("Name","Renamed");$game->rustic->groupsCreate("selected");$game->scene->Demo->Room->Renamed->groupsAdd(name:"selected");$game->scene->Demo->Room->Renamed->tween("Position",[8,0,0],2,"InQuad");$game->rustic->after(0.5,fn()=>$game->rustic->log("info","timer"));$game->rustic->files->assets->{"night.hdr"}->setSkyTexture();}
+rustic_run(["on_start"=>"on_start"]);"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !matches!(language, ScriptLanguage::Lua54 | ScriptLanguage::JavaScript)
+                && !engine_scripting::probe_language_toolchain(*language).available
+            {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_SDKS").is_none(),
+                    "{} toolchain is required",
+                    language.display_name()
+                );
+                continue;
+            }
+            eprintln!("Checking canonical API paths: {}", language.display_name());
+            let room = EntitySnapshot {
+                name: Some("Room".into()),
+                ..Default::default()
+            };
+            let player = EntitySnapshot {
+                name: Some("Player".into()),
+                parent: Some(room.id),
+                ..Default::default()
+            };
+            let controller = EntitySnapshot {
+                name: Some("Controller".into()),
+                ..Default::default()
+            };
+            let mut scene = SceneDocument::new("Demo");
+            scene.entities = vec![room, player.clone(), controller.clone()];
+            let world = Arc::new(Mutex::new(scene.create_world().unwrap()));
+            let gameplay = Arc::new(Mutex::new(GameplayContext::default()));
+            let logs = Arc::new(Mutex::new(VecDeque::new()));
+            let host = RuntimeHost {
+                gameplay: Arc::clone(&gameplay),
+                owner_script: ScriptId::new(),
+                entity_bound: true,
+                scene_name: "Demo".into(),
+                world: Arc::clone(&world),
+                entity: controller.id,
+                input_keys: Arc::new(Mutex::new(BTreeSet::new())),
+                snapshot_root: PathBuf::new(),
+                properties: Arc::new(Mutex::new(BTreeMap::new())),
+                logs: Arc::clone(&logs),
+                dropped_logs: Arc::new(Mutex::new(0)),
+                enabled: true,
+            };
+            let mut behavior =
+                RuntimeBehavior::load(*language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap_or_else(|e| panic!("{} load: {e}", language.display_name()));
+            behavior
+                .on_start()
+                .unwrap_or_else(|e| panic!("{} Start: {e}", language.display_name()));
+            {
+                let mut context = gameplay.lock().unwrap();
+                let mut live = world.lock().unwrap();
+                context
+                    .runtime
+                    .tick(
+                        1.0,
+                        &mut crate::gameplay_world::GameplayScene(
+                            &mut live,
+                            &mut engine_core::gameplay::audio::Mixer::default(),
+                        ),
+                    )
+                    .unwrap();
+                assert_eq!(
+                    live.local_transform(player.id).unwrap().translation.x,
+                    2.0,
+                    "{}",
+                    language.display_name()
+                );
+                assert_eq!(
+                    live.local_transform(controller.id)
+                        .unwrap()
+                        .translation
+                        .to_array(),
+                    [0.; 3]
+                );
+                assert_eq!(live.environment().sky_image, "assets/night.hdr");
+                assert_eq!(live.group_members("selected").unwrap(), vec![player.id]);
+            }
+            behavior.update(1.0).unwrap();
+            assert!(
+                logs.lock()
+                    .unwrap()
+                    .iter()
+                    .any(|(_, message)| message == "timer"),
+                "{} timer",
+                language.display_name()
+            );
+        }
     }
 }

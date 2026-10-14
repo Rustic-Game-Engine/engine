@@ -17,7 +17,13 @@ const BRIDGE: &str = r#"
   }});
   const rustic = Object.freeze({
     game: objectAt("rustic.game"),
-    query: request => JSON.parse(__rustic_query(JSON.stringify(request))),
+    query: request => {
+      if(request.op==='scene_object') {
+        const pending=commands;commands=[];
+        request={...request,__commands:pending};
+      }
+      return JSON.parse(__rustic_query(JSON.stringify(request)));
+    },
     gameplay: request => commands.push({op:"gameplay",request}),
     gameplay_connections: () => state.gameplay_connections || [],
     gameplay_states: () => state.gameplay_states || [],
@@ -182,12 +188,24 @@ impl JavaScriptBehavior {
                         ctx.clone(),
                         move |request: String| -> rquickjs::Result<String> {
                             let response = (|| -> Result<serde_json::Value, String> {
-                                let request =
+                                let mut request: serde_json::Value =
                                     serde_json::from_str(&request).map_err(|e| e.to_string())?;
-                                query_host
-                                    .lock()
-                                    .map_err(|_| "gameplay lock poisoned")?
-                                    .gameplay_query(request)
+                                let mut host =
+                                    query_host.lock().map_err(|_| "gameplay lock poisoned")?;
+                                if request.get("op").and_then(serde_json::Value::as_str)
+                                    == Some("scene_object")
+                                    && let Some(pending) = request
+                                        .as_object_mut()
+                                        .and_then(|fields| fields.remove("__commands"))
+                                {
+                                    let commands: Vec<Command> = serde_json::from_value(pending)
+                                        .map_err(|e| e.to_string())?;
+                                    for command in commands {
+                                        apply_command(host.as_mut(), command)
+                                            .map_err(|e| e.to_string())?;
+                                    }
+                                }
+                                host.gameplay_query(request)
                             })();
                             match response {
                                 Ok(value) => serde_json::to_string(&value)

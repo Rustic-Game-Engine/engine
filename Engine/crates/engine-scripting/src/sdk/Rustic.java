@@ -11,6 +11,7 @@ class Rustic {
     static final RusticApi rustic = new RusticApi();
     static final InstanceApi instance = new InstanceApi();
     static final GameApi Game = new GameApi();
+    static final CanonicalGame game = new CanonicalGame();
 
     static class Tags {
         static boolean add(String entity,String name){return (Boolean)query(args("tags_add","entity",Gameplay.entity(entity),"name",name));}
@@ -102,7 +103,7 @@ class Rustic {
         static final Map<String,java.util.function.Consumer<Object[]>> callbacks=new LinkedHashMap<>();
         static final Set<String> once=new HashSet<>(),connections=new HashSet<>();
         static final Map<String,Handle> handles=new LinkedHashMap<>();
-        static String entity(String id){return id==null?rustic.entity_id():Optional.ofNullable(Game.scene.Find(id)).orElse(id);}
+        static String entity(String id){return id==null?rustic.entity_id():id.startsWith("game.scene.")?(String)query(args("scene_object","source",id)):Optional.ofNullable(Game.scene.Find(id)).orElse(id);}
         static String register(java.util.function.Consumer<Object[]> fn,boolean single){String id=UUID.randomUUID().toString();callbacks.put(id,fn);if(single)once.add(id);return id;}
         static void send(Object request){command("gameplay","request",request);}
         static void release(Handle h){for(String token:h.tokens){callbacks.remove(token);once.remove(token);}handles.remove(h.id);callbacks.remove(h.id);once.remove(h.id);}
@@ -365,5 +366,279 @@ class Rustic {
             int start=at;while(at<text.length()&&!Character.isWhitespace(text.charAt(at))&&",]}".indexOf(text.charAt(at))<0)at++;String n=text.substring(start,at);
             switch(n){case "null":return null;case "true":return true;case "false":return false;default:if(n.indexOf('.')<0&&n.indexOf('e')<0&&n.indexOf('E')<0)return Long.valueOf(n);return Double.valueOf(n);}
         }
+    }
+    // Canonical API paths.
+    static class CanonicalScenePath {
+        final String source;
+        CanonicalScenePath(String source){this.source=source;}
+        CanonicalScenePath scene(String name){return new CanonicalScenePath(source+"."+name);}
+        CanonicalScenePath object(String path){return new CanonicalScenePath(source+"."+path);}
+        void clone(String parent){instance.clone(source,parent);}
+        void add(String parent){instance.add(source,parent);}
+        void setCurrentCamera(){Game.setCurrentCamera(source);}
+        void emit(String name,Object[] arguments){Events.emit(name,arguments,source);}
+        void EditAttribute(String name,Object value){command("edit_attribute","source",this.source,"name",name,"value",value);}
+        void edit_attribute(String name,Object value){EditAttribute(name,value);}
+        Gameplay.Handle tweenTo(String p,Object to,MotionOptions opts){return Tween.to(this.source,p,to,opts);}
+        Gameplay.Handle tweenTo(String property,Object value,double duration){return Tween.to(this.source,property,value,duration);}
+        Gameplay.Handle tweenTo(String property,Object value,double duration,String easing){return Tween.to(this.source,property,value,duration,easing);}
+        Gameplay.Handle tweenMove(double[] p,MotionOptions opts){return Tween.move(this.source,p,opts);}
+        Gameplay.Handle tweenMove(double[] p,double duration){return Tween.move(this.source,p,duration);}
+        Gameplay.Handle tweenMove(double[] p,double duration,String easing){return Tween.move(this.source,p,duration,easing);}
+        Gameplay.Handle tweenRotate(double[] p,MotionOptions opts){return Tween.rotate(this.source,p,opts);}
+        Gameplay.Handle tweenRotate(double[] q,double duration){return Tween.rotate(this.source,q,duration);}
+        Gameplay.Handle tweenRotate(double[] q,double duration,String easing){return Tween.rotate(this.source,q,duration,easing);}
+        Gameplay.Handle tweenScale(double[] p,double duration){return Tween.scale(this.source,p,duration);}
+        Gameplay.Handle tweenScale(double[] p,double duration,String easing){return Tween.scale(this.source,p,duration,easing);}
+        Map<String,Object> tweenAction(String p,Object to,MotionOptions opts){return Tween.action(this.source,p,to,opts);}
+        Map<String,Object> tweenAction(String property,Object to,double duration,String easing){return Tween.action(this.source,property,to,duration,easing);}
+        Gameplay.Handle movementMoveTo(double[] p,MotionOptions opts){return Movement.moveTo(this.source,p,opts);}
+        Gameplay.Handle movementMoveTo(double[] p,double d){return Movement.moveTo(this.source,p,d);}
+        Gameplay.Handle movementMoveTo(double[] p,double d,String easing){return Movement.moveTo(this.source,p,d,easing);}
+        Gameplay.Handle movementMove(double[] offset,double duration){return Movement.move(this.source,offset,duration);}
+        Gameplay.Handle movementMove(double[] offset,double duration,String easing){return Movement.move(this.source,offset,duration,easing);}
+        Gameplay.Handle movementRotateTo(double[] p,MotionOptions opts){return Movement.rotateTo(this.source,p,opts);}
+        Gameplay.Handle movementRotateTo(double[] q,double d){return Movement.rotateTo(this.source,q,d);}
+        Gameplay.Handle movementRotateTo(double[] q,double d,String easing){return Movement.rotateTo(this.source,q,d,easing);}
+        Gameplay.Handle movementLookAt(double[] position,double duration){return Movement.lookAt(this.source,position,duration);}
+        Gameplay.Handle movementLookAt(double[] position,double duration,String easing){return Movement.lookAt(this.source,position,duration,easing);}
+        Gameplay.Handle movementFollow(String target,double duration,String easing,double[] offset){return Movement.follow(this.source,target,duration,easing,offset);}
+        Gameplay.Handle movementOrbit(double[] center,double radius,double turns,double duration){return Movement.orbit(this.source,center,radius,turns,duration);}
+        Gameplay.Handle movementOrbit(double[] center,double radius,double turns,double duration,String easing){return Movement.orbit(this.source,center,radius,turns,duration,easing);}
+        Gameplay.Handle pathFollow(Path.Curve path,double duration,String easing,boolean loop,boolean pingPong,boolean orientToPath){return Path.follow(this.source,path,duration,easing,loop,pingPong,orientToPath);}
+        Gameplay.Handle pathFollowSpeed(Path.Curve path,double speed,String easing,boolean loop,boolean pingPong,boolean orientToPath){return Path.followSpeed(this.source,path,speed,easing,loop,pingPong,orientToPath);}
+        Gameplay.Handle effectsFade(double opacity,double duration){return Effects.fade(this.source,opacity,duration);}
+        Gameplay.Handle effectsFade(double opacity,double duration,String easing){return Effects.fade(this.source,opacity,duration,easing);}
+        Gameplay.Handle effectsFlash(double[] color,double duration){return Effects.flash(this.source,color,duration);}
+        Gameplay.Handle effectsFlash(double[] color,double duration,String easing){return Effects.flash(this.source,color,duration,easing);}
+        Gameplay.Handle effectsShake(double strength,double duration){return Effects.shake(this.source,strength,duration);}
+        Gameplay.Handle effectsShake(double strength,double duration,String easing){return Effects.shake(this.source,strength,duration,easing);}
+        Gameplay.Handle effectsPulse(double[] scale,double duration){return Effects.pulse(this.source,scale,duration);}
+        Gameplay.Handle effectsPulse(double[] scale,double duration,String easing){return Effects.pulse(this.source,scale,duration,easing);}
+        Gameplay.Handle cameraMoveTo(double[] p,double d){return Camera.moveTo(this.source,p,d);}
+        Gameplay.Handle cameraMoveTo(double[] p,double d,String ease){return Camera.moveTo(this.source,p,d,ease);}
+        Gameplay.Handle cameraZoom(double f,double d){return Camera.zoom(this.source,f,d);}
+        Gameplay.Handle cameraZoom(double f,double d,String ease){return Camera.zoom(this.source,f,d,ease);}
+        Gameplay.Handle cameraFov(double f,double d){return Camera.fov(this.source,f,d);}
+        Gameplay.Handle cameraFov(double f,double d,String ease){return Camera.fov(this.source,f,d,ease);}
+        Gameplay.Handle cameraFollow(String target,double d){return Camera.follow(this.source,target,d);}
+        Gameplay.Handle cameraFollow(String target,double d,String ease){return Camera.follow(this.source,target,d,ease);}
+        Gameplay.Handle cameraOrbit(double[] c,double r,double turns,double d){return Camera.orbit(this.source,c,r,turns,d);}
+        Gameplay.Handle cameraOrbit(double[] c,double r,double turns,double d,String ease){return Camera.orbit(this.source,c,r,turns,d,ease);}
+        Gameplay.Handle cameraLookAt(double[] p,double d){return Camera.lookAt(this.source,p,d);}
+        Gameplay.Handle cameraLookAt(double[] p,double d,String ease){return Camera.lookAt(this.source,p,d,ease);}
+        Gameplay.Handle cameraShake(double s,double d){return Camera.shake(this.source,s,d);}
+        Gameplay.Handle cameraShake(double s,double d,String ease){return Camera.shake(this.source,s,d,ease);}
+        Gameplay.Handle cameraTransition(double[] p,double[] r,double f,double d){return Camera.transition(this.source,p,r,f,d);}
+        Gameplay.Handle cameraTransition(double[] p,double[] r,double f,double d,String ease){return Camera.transition(this.source,p,r,f,d,ease);}
+        void physicsImpulse(double[] v){Physics.impulse(this.source,v);}
+        void physicsForce(double[] v,double dt){Physics.force(this.source,v,dt);}
+        void physicsLaunch(double[] v){Physics.launch(this.source,v);}
+        void physicsKnockback(double[] v){Physics.knockback(this.source,v);}
+        void animationRegister(Animation.Clip clip){Animation.register(this.source,clip);}
+        Object animationClips(){return Animation.clips(this.source);}
+        Map<String,Object> animationAction(String name,Animation.Options opts,String marker,Object source){return Animation.action(this.source,name,opts,marker,source);}
+        Gameplay.Handle animationPlay(String name){return Animation.play(this.source,name);}
+        Gameplay.Handle animationPlay(String name,Animation.Options opts){return Animation.play(this.source,name,opts);}
+        Gameplay.Handle animationBlend(String from,String to,double duration){return Animation.blend(this.source,from,to,duration);}
+        Gameplay.Handle animationBlend(String from,String to,double duration,String ease){return Animation.blend(this.source,from,to,duration,ease);}
+        Gameplay.Handle animationTransition(String from,String to,double duration){return Animation.transition(this.source,from,to,duration);}
+        Gameplay.Handle animationTransition(String from,String to,double duration,String ease){return Animation.transition(this.source,from,to,duration,ease);}
+        Gameplay.Handle animationIk(String middle,String tip,double[] target,double duration,String easing,double weight,double[] pole){return Animation.ik(this.source,middle,tip,target,duration,easing,weight,pole);}
+        Gameplay.Handle animationFootPlacement(String middle,String tip,double[] target,double duration){return Animation.footPlacement(this.source,middle,tip,target,duration);}
+        Gameplay.Handle animationFootPlacement(String middle,String tip,double[] target,double duration,String ease){return Animation.footPlacement(this.source,middle,tip,target,duration,ease);}
+        Gameplay.Handle animationLookAt(double[] target,double d,String ease){return Animation.lookAt(this.source,target,d,ease);}
+        Gameplay.Handle animationLookAt(double[] target,double d){return Animation.lookAt(this.source,target,d);}
+        Gameplay.Handle animationHeadTracking(double[] target,double duration){return Animation.headTracking(this.source,target,duration);}
+        Gameplay.Handle animationHeadTracking(double[] target,double duration,String ease){return Animation.headTracking(this.source,target,duration,ease);}
+        Gameplay.Handle animationRecoil(double[] rotation,double duration){return Animation.recoil(this.source,rotation,duration);}
+        Gameplay.Handle animationRecoil(double[] rotation,double duration,String ease){return Animation.recoil(this.source,rotation,duration,ease);}
+        void animationAddMarker(String clip,double time,String name){Animation.addMarker(this.source,clip,time,name);}
+        Events.Connection eventsConnect(String name,java.util.function.Consumer<Object[]> fn){return Events.connect(this.source,name,fn);}
+        boolean tagsAdd(String name){return Tags.add(this.source,name);}
+        boolean tagsRemove(String name){return Tags.remove(this.source,name);}
+        boolean groupsAdd(String name){return Groups.add(name,source);}
+        void hierarchySetParent(String parent,boolean keep_world){Hierarchy.set_parent(this.source,parent,keep_world);}
+        void hierarchySetParent(String parent){Hierarchy.set_parent(this.source,parent);}
+        String[] hierarchyGetChildren(){return Hierarchy.get_children(this.source);}
+        void hierarchyDetach(boolean keep_world){Hierarchy.detach(this.source,keep_world);}
+        void hierarchyDetach(){Hierarchy.detach(this.source);}
+        void entityDestroy(){Entity.destroy(this.source);}
+        void entityDestroyAfter(double delay){Entity.destroy_after(this.source,delay);}
+        boolean entityIsValid(){return Entity.is_valid(this.source);}
+        boolean componentsHas(String name){return Components.has(this.source,name);}
+        String[] componentsGetAll(){return Components.get_all(this.source);}
+        String[] componentsFindInChildren(String name){return Components.find_in_children(this.source,name);}
+        Gameplay.Handle tween(String p,Object to,MotionOptions opts){return Tween.to(this.source,p,to,opts);}
+        Gameplay.Handle tween(String property,Object value,double duration){return Tween.to(this.source,property,value,duration);}
+        Gameplay.Handle tween(String property,Object value,double duration,String easing){return Tween.to(this.source,property,value,duration,easing);}
+        Gameplay.Handle moveTo(double[] p,MotionOptions opts){return Movement.moveTo(this.source,p,opts);}
+        Gameplay.Handle moveTo(double[] p,double d){return Movement.moveTo(this.source,p,d);}
+        Gameplay.Handle moveTo(double[] p,double d,String easing){return Movement.moveTo(this.source,p,d,easing);}
+        Gameplay.Handle move(double[] offset,double duration){return Movement.move(this.source,offset,duration);}
+        Gameplay.Handle move(double[] offset,double duration,String easing){return Movement.move(this.source,offset,duration,easing);}
+        Gameplay.Handle rotateTo(double[] p,MotionOptions opts){return Movement.rotateTo(this.source,p,opts);}
+        Gameplay.Handle rotateTo(double[] q,double d){return Movement.rotateTo(this.source,q,d);}
+        Gameplay.Handle rotateTo(double[] q,double d,String easing){return Movement.rotateTo(this.source,q,d,easing);}
+        Gameplay.Handle lookAt(double[] position,double duration){return Movement.lookAt(this.source,position,duration);}
+        Gameplay.Handle lookAt(double[] position,double duration,String easing){return Movement.lookAt(this.source,position,duration,easing);}
+        Gameplay.Handle follow(String target,double duration,String easing,double[] offset){return Movement.follow(this.source,target,duration,easing,offset);}
+        Gameplay.Handle orbit(double[] center,double radius,double turns,double duration){return Movement.orbit(this.source,center,radius,turns,duration);}
+        Gameplay.Handle orbit(double[] center,double radius,double turns,double duration,String easing){return Movement.orbit(this.source,center,radius,turns,duration,easing);}
+        Gameplay.Handle fade(double opacity,double duration){return Effects.fade(this.source,opacity,duration);}
+        Gameplay.Handle fade(double opacity,double duration,String easing){return Effects.fade(this.source,opacity,duration,easing);}
+        Gameplay.Handle flash(double[] color,double duration){return Effects.flash(this.source,color,duration);}
+        Gameplay.Handle flash(double[] color,double duration,String easing){return Effects.flash(this.source,color,duration,easing);}
+        Gameplay.Handle shake(double strength,double duration){return Effects.shake(this.source,strength,duration);}
+        Gameplay.Handle shake(double strength,double duration,String easing){return Effects.shake(this.source,strength,duration,easing);}
+        Gameplay.Handle pulse(double[] scale,double duration){return Effects.pulse(this.source,scale,duration);}
+        Gameplay.Handle pulse(double[] scale,double duration,String easing){return Effects.pulse(this.source,scale,duration,easing);}
+        void impulse(double[] v){Physics.impulse(this.source,v);}
+        void force(double[] v,double dt){Physics.force(this.source,v,dt);}
+        void launch(double[] v){Physics.launch(this.source,v);}
+        void knockback(double[] v){Physics.knockback(this.source,v);}
+        Gameplay.Handle playAnimation(String name){return Animation.play(this.source,name);}
+        Gameplay.Handle playAnimation(String name,Animation.Options opts){return Animation.play(this.source,name,opts);}
+        void destroy(){Entity.destroy(this.source);}
+        void destroyAfter(double delay){Entity.destroy_after(this.source,delay);}
+        boolean isValid(){return Entity.is_valid(this.source);}
+        boolean addTag(String name){return Tags.add(this.source,name);}
+        boolean removeTag(String name){return Tags.remove(this.source,name);}
+        void setParent(String parent,boolean keep_world){Hierarchy.set_parent(this.source,parent,keep_world);}
+        void setParent(String parent){Hierarchy.set_parent(this.source,parent);}
+        String[] getChildren(){return Hierarchy.get_children(this.source);}
+        void detach(boolean keep_world){Hierarchy.detach(this.source,keep_world);}
+        void detach(){Hierarchy.detach(this.source);}
+        boolean hasComponent(String name){return Components.has(this.source,name);}
+        String[] getComponents(){return Components.get_all(this.source);}
+        String[] findInChildren(String name){return Components.find_in_children(this.source,name);}
+        Gameplay.Handle followPath(Path.Curve path,double duration,String easing,boolean loop,boolean pingPong,boolean orientToPath){return Path.follow(this.source,path,duration,easing,loop,pingPong,orientToPath);}
+    }
+    static class CanonicalFilePath {
+        final String filePath;
+        CanonicalFilePath(String filePath){this.filePath=filePath;}
+        CanonicalFilePath object(String path){return new CanonicalFilePath(filePath.isEmpty()?path:filePath+"/"+path);}
+        Audio.Voice audioPlay(double volume,double pitch,boolean loop){return Audio.play(filePath,volume,pitch,loop);}
+        Audio.Voice audioPlayAt(double[] position,double volume,double pitch,boolean loop){return Audio.playAt(filePath,position,volume,pitch,loop);}
+        Object animationLoad(String e){return Animation.load(e,filePath);}
+        Audio.Voice play(double volume,double pitch,boolean loop){return Audio.play(filePath,volume,pitch,loop);}
+        Audio.Voice playAt(double[] position,double volume,double pitch,boolean loop){return Audio.playAt(filePath,position,volume,pitch,loop);}
+        Object loadAnimation(String e){return Animation.load(e,filePath);}
+        void add(String parent){instance.add(filePath,parent);}
+        void clone(String parent){instance.clone(filePath,parent);}
+        Object setSkyTexture(){return Game.scene.setSkyTexture(filePath);}
+    }
+    static class CanonicalGlobalApi {
+        final CanonicalFilePath files=new CanonicalFilePath("");
+        Gameplay.Handle tweenValue(Object from,Object to,double duration,java.util.function.Consumer<Object> sample){return Tween.value(from,to,duration,sample);}
+        Gameplay.Handle tweenValue(Object from,Object to,double duration,java.util.function.Consumer<Object> sample,String easing){return Tween.value(from,to,duration,sample,easing);}
+        Gameplay.Handle timerAfter(double delay,Runnable fn){return Timer.after(delay,fn);}
+        Gameplay.Handle timerEvery(double interval,Runnable fn){return Timer.every(interval,fn);}
+        Gameplay.Handle timerEvery(double interval,Runnable fn,Integer count){return Timer.every(interval,fn,count);}
+        Object smoothLerp(Object a,Object b,double t){return Smooth.lerp(a,b,t);}
+        Object smoothLerp(Object a,Object b,double t,String ease){return Smooth.lerp(a,b,t,ease);}
+        double[] smoothSlerp(double[] a,double[] b,double t){return Smooth.slerp(a,b,t);}
+        double[] smoothSlerp(double[] a,double[] b,double t,String ease){return Smooth.slerp(a,b,t,ease);}
+        double smoothInverseLerp(double a,double b,double v){return Smooth.inverseLerp(a,b,v);}
+        double smoothRemap(double v,double a,double b,double c,double d){return Smooth.remap(v,a,b,c,d);}
+        double[] smoothSmoothDamp(double c,double t,double v,double s,double dt){return Smooth.smoothDamp(c,t,v,s,dt);}
+        Object physicsRaycast(double[] origin,double[] direction,double distance){return Physics.raycast(origin,direction,distance);}
+        Object physicsSphereCast(double[] origin,double[] direction,double distance,double radius){return Physics.sphereCast(origin,direction,distance,radius);}
+        Object physicsOverlap(double[] center,double radius){return Physics.overlap(center,radius);}
+        Object physicsExplosion(double[] center,double radius,double strength){return Physics.explosion(center,radius,strength);}
+        double clockTimeScale(double scale){return Clock.timeScale(scale);}
+        void clockPause(){Clock.pause();}
+        void clockResume(){Clock.resume();}
+        Path.Curve pathCreate(double[][] points,String kind){return Path.create(points,kind);}
+        Path.Curve pathCreate(List<Path.Point> points,String kind){return Path.create(points,kind);}
+        Sequence.Builder sequenceNew(){return Sequence.create();}
+        Sequence.Builder sequenceCreate(){return Sequence.create();}
+        Sequence.Builder timelineNew(){return Sequence.create();}
+        Sequence.Builder timelineCreate(){return Sequence.create();}
+        Events.Connection eventsOn(String name,java.util.function.Consumer<Object[]> fn){return Events.on(name,fn);}
+        Events.Connection eventsOnce(String name,java.util.function.Consumer<Object[]> fn){return Events.once(name,fn);}
+        void eventsEmit(String name,Object[] arguments,String source){Events.emit(name,arguments,source);}
+        void eventsDisconnect(Events.Connection c){Events.disconnect(c);}
+        Object audioGetOutputDevices(){return Audio.get_output_devices();}
+        Object audioGetInputDevices(){return Audio.get_input_devices();}
+        void audioSetOutputDevice(String device){Audio.set_output_device(device);}
+        void audioSetInputDevice(String device){Audio.set_input_device(device);}
+        void audioVolume(Audio.Voice v,double value){Audio.volume(v,value);}
+        void audioPitch(Audio.Voice v,double value){Audio.pitch(v,value);}
+        Gameplay.Handle audioFadeIn(Audio.Voice v,double d){return Audio.fadeIn(v,d);}
+        Gameplay.Handle audioFadeIn(Audio.Voice v,double d,String ease){return Audio.fadeIn(v,d,ease);}
+        Gameplay.Handle audioFadeOut(Audio.Voice v,double d){return Audio.fadeOut(v,d);}
+        Gameplay.Handle audioFadeOut(Audio.Voice v,double d,String ease){return Audio.fadeOut(v,d,ease);}
+        Gameplay.Handle audioCrossfade(Audio.Voice a,Audio.Voice b,double d){return Audio.crossfade(a,b,d);}
+        Gameplay.Handle audioCrossfade(Audio.Voice a,Audio.Voice b,double d,String ease){return Audio.crossfade(a,b,d,ease);}
+        Gameplay.Handle animationValue(List<Animation.Key> keys,java.util.function.Consumer<Object> sample){return Animation.value(keys,sample);}
+        void animationStop(Gameplay.Handle h){Animation.stop(h);}
+        void animationPause(Gameplay.Handle h){Animation.pause(h);}
+        void animationSpeed(Gameplay.Handle h,double v){Animation.speed(h,v);}
+        void animationLoop(Gameplay.Handle h,boolean v){Animation.loop(h,v);}
+        String cameraCurrent(){return Camera.current();}
+        String[] tagsFindAll(String name){return Tags.find_all(name);}
+        boolean groupsCreate(String name){return Groups.create(name);}
+        String[] groupsGetMembers(String name){return Groups.get_members(name);}
+        String[] worldFindByTag(String name){return World.find_by_tag(name);}
+        String[] worldFindInRadius(double[] center,double radius){return World.find_in_radius(center,radius);}
+        Gameplay.Handle after(double delay,Runnable fn){return Timer.after(delay,fn);}
+        Gameplay.Handle every(double interval,Runnable fn){return Timer.every(interval,fn);}
+        Gameplay.Handle every(double interval,Runnable fn,Integer count){return Timer.every(interval,fn,count);}
+        Object lerp(Object a,Object b,double t){return Smooth.lerp(a,b,t);}
+        Object lerp(Object a,Object b,double t,String ease){return Smooth.lerp(a,b,t,ease);}
+        double[] slerp(double[] a,double[] b,double t){return Smooth.slerp(a,b,t);}
+        double[] slerp(double[] a,double[] b,double t,String ease){return Smooth.slerp(a,b,t,ease);}
+        double inverseLerp(double a,double b,double v){return Smooth.inverseLerp(a,b,v);}
+        double remap(double v,double a,double b,double c,double d){return Smooth.remap(v,a,b,c,d);}
+        double[] smoothDamp(double c,double t,double v,double s,double dt){return Smooth.smoothDamp(c,t,v,s,dt);}
+        Object raycast(double[] origin,double[] direction,double distance){return Physics.raycast(origin,direction,distance);}
+        Object sphereCast(double[] origin,double[] direction,double distance,double radius){return Physics.sphereCast(origin,direction,distance,radius);}
+        Object overlap(double[] center,double radius){return Physics.overlap(center,radius);}
+        Object explosion(double[] center,double radius,double strength){return Physics.explosion(center,radius,strength);}
+        double timeScale(double scale){return Clock.timeScale(scale);}
+        void pause(){Clock.pause();}
+        void resume(){Clock.resume();}
+        Path.Curve createPath(double[][] points,String kind){return Path.create(points,kind);}
+        Path.Curve createPath(List<Path.Point> points,String kind){return Path.create(points,kind);}
+        Sequence.Builder sequence(){return Sequence.create();}
+        Sequence.Builder timeline(){return Sequence.create();}
+        Events.Connection on(String name,java.util.function.Consumer<Object[]> fn){return Events.on(name,fn);}
+        Events.Connection once(String name,java.util.function.Consumer<Object[]> fn){return Events.once(name,fn);}
+        void emit(String name,Object[] arguments,String source){Events.emit(name,arguments,source);}
+        void disconnect(Events.Connection c){Events.disconnect(c);}
+        String currentCamera(){return Camera.current();}
+        Object getOutputDevices(){return Audio.get_output_devices();}
+        Object get_output_devices(){return Audio.get_output_devices();}
+        Object getInputDevices(){return Audio.get_input_devices();}
+        Object get_input_devices(){return Audio.get_input_devices();}
+        void setOutputDevice(String device){Audio.set_output_device(device);}
+        void set_output_device(String device){Audio.set_output_device(device);}
+        void setInputDevice(String device){Audio.set_input_device(device);}
+        void set_input_device(String device){Audio.set_input_device(device);}
+        Object getEnvironment(){return Game.scene.getEnvironment();}
+        Object setEnvironment(Map<String,Object> settings){return Game.scene.setEnvironment(settings);}
+        void setCurrentCamera(String path){Game.setCurrentCamera(path);}
+        String entity_id(){return rustic.entity_id();}
+        double delta_time(){return rustic.delta_time();}
+        double fixed_delta_time(){return rustic.fixed_delta_time();}
+        double[] get_translation(){return rustic.get_translation();}
+        void set_translation(double x,double y,double z){rustic.set_translation(x,y,z);}
+        Object get_property(String n){return rustic.get_property(n);}
+        void set_property(String n,Object v){rustic.set_property(n,v);}
+        Object get_attribute(String n){return rustic.get_attribute(n);}
+        Object GetAttribute(String n){return rustic.GetAttribute(n);}
+        void edit_attribute(String n,Object v){rustic.edit_attribute(n,v);}
+        void EditAttribute(String n,Object v){rustic.EditAttribute(n,v);}
+        ActionState input(String n){return rustic.input(n);}
+        ActionState key(String n){return rustic.key(n);}
+        List<KeyEvent> key_events(){return rustic.key_events();}
+        boolean any_key_pressed(){return rustic.any_key_pressed();}
+        void log(String l,String m){rustic.log(l,m);}
+        void set_enabled(boolean e){rustic.set_enabled(e);}
+    }
+    static class CanonicalGame {
+        final CanonicalScenePath scene=new CanonicalScenePath("game.scene");
+        final CanonicalGlobalApi rustic=new CanonicalGlobalApi();
     }
 }
