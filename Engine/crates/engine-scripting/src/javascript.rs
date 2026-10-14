@@ -9,21 +9,28 @@ const BRIDGE: &str = r#"
 (() => {
   let state = Object.create(null);
   let commands = [];
-  const objectAt = source => new Proxy(Object.create(null), {get: (_, key) => {
+  const objectAt = (source,assetPath="") => new Proxy(Object.create(null), {get: (_, key) => {
+    if (Object.hasOwn(_,key)) return _[key];
     if (key === "__source") return source;
+    if (source === "rustic.game" && ["startRecording","stopRecording","startHotMic","stopHotMic"].includes(key)) return (...args) => RusticCapture[key](...args);
+    if (["load","play","stop","pause","resume","Unload","unload"].includes(key) && source.startsWith("rustic.game.assets.")) {
+      const audio=new RusticLoadedAudio(assetPath);
+      for (const method of ["load","play","stop","pause","resume","Unload","unload"]) _[method]=audio[method].bind(audio);
+      return _[key];
+    }
+    if (key === "GetAttribute" || key === "get_attribute") return name => rustic.query({op:"object_attribute",source,name});
     if (key === "EditAttribute" || key === "edit_attribute") return (name, value) => commands.push({op:"edit_attribute", source, name, value});
     if (typeof key !== "string") return undefined;
-    return objectAt(source + "." + key);
+    return objectAt(source + "." + key, assetPath ? assetPath + "/" + key : key);
   }});
   const rustic = Object.freeze({
     game: objectAt("rustic.game"),
     query: request => {
-      if(request.op==='scene_object') {
-        const pending=commands;commands=[];
-        request={...request,__commands:pending};
-      }
-      return JSON.parse(__rustic_query(JSON.stringify(request)));
+      const pending=commands; commands=[];
+      return JSON.parse(__rustic_query(JSON.stringify({query:request,commands:pending})));
     },
+    find_entity: source => rustic.query({op:"find_entity",source}),
+    get_object_attribute: (source,name) => rustic.query({op:"object_attribute",source,name}),
     gameplay: request => commands.push({op:"gameplay",request}),
     gameplay_connections: () => state.gameplay_connections || [],
     gameplay_states: () => state.gameplay_states || [],
@@ -44,6 +51,8 @@ const BRIDGE: &str = r#"
     key: key => Object.freeze(state.keys[String(key)] || {pressed:false, released:false, held:false, axis:0}),
     key_events: () => Object.freeze(state.key_events.map(event => Object.freeze({...event}))),
     any_key_pressed: () => state.any_key_pressed,
+    print: (...values) => rustic.log("info",values.map(String).join(" ")),
+    warn: (...values) => rustic.log("warn",values.map(String).join(" ")),
     log: (level, message) => commands.push({op:"log", level:String(level), message:String(message)}),
     set_enabled: enabled => commands.push({op:"set_enabled", enabled:Boolean(enabled)})
   });
@@ -61,7 +70,7 @@ const BRIDGE: &str = r#"
     debug: writeLog("debug")
   }), writable:false, configurable:false});
   const scene = new Proxy(Object.create(null), {get: (_, key) => {
-    if (key === "getEnvironment") return () => rustic.query({op:"scene_environment"});
+    if (key === "getEnvironment") return field => rustic.query(field===undefined?{op:"scene_environment"}:{op:"scene_environment_field",field});
     if (key === "setEnvironment") return settings => {
       if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new TypeError("environment settings must be an object");
       return rustic.query({op:"scene_environment", settings});
@@ -71,10 +80,10 @@ const BRIDGE: &str = r#"
       return rustic.query({op:"scene_environment", settings:{sky_image:path}});
     };
     if (key === "Find") return path => state.scene_paths[path];
-    if (key === "List") return () => Object.keys(state.scene_paths);
+    if (key === "List") return (path="Game.scene") => Object.entries(state.scene_paths).filter(([name])=>name.startsWith((path||"Game.scene").replace(/[./]+$/,"")+".")).map(([,id])=>id);
     return state.scene_paths[String(key)];
   }});
-  Object.defineProperty(globalThis, "Game", {value:Object.freeze({scene, setCurrentCamera: source => {
+  Object.defineProperty(globalThis, "Game", {value:Object.freeze({scene, startRecording:(...a)=>RusticCapture.startRecording(...a),stopRecording:(...a)=>RusticCapture.stopRecording(...a),startHotMic:()=>RusticCapture.startHotMic(),stopHotMic:(...a)=>RusticCapture.stopHotMic(...a), setCurrentCamera: source => {
     if (typeof source !== "string") throw new TypeError("expected a camera path or entity ID");
     commands.push({op:"set_current_camera", source});
   }}), writable:false, configurable:false});
@@ -188,24 +197,18 @@ impl JavaScriptBehavior {
                         ctx.clone(),
                         move |request: String| -> rquickjs::Result<String> {
                             let response = (|| -> Result<serde_json::Value, String> {
-                                let mut request: serde_json::Value =
+                                let envelope: serde_json::Value =
                                     serde_json::from_str(&request).map_err(|e| e.to_string())?;
+                                let commands: Vec<Command> =
+                                    serde_json::from_value(envelope["commands"].clone())
+                                        .map_err(|e| e.to_string())?;
                                 let mut host =
                                     query_host.lock().map_err(|_| "gameplay lock poisoned")?;
-                                if request.get("op").and_then(serde_json::Value::as_str)
-                                    == Some("scene_object")
-                                    && let Some(pending) = request
-                                        .as_object_mut()
-                                        .and_then(|fields| fields.remove("__commands"))
-                                {
-                                    let commands: Vec<Command> = serde_json::from_value(pending)
+                                for command in commands {
+                                    apply_command(host.as_mut(), command)
                                         .map_err(|e| e.to_string())?;
-                                    for command in commands {
-                                        apply_command(host.as_mut(), command)
-                                            .map_err(|e| e.to_string())?;
-                                    }
                                 }
-                                host.gameplay_query(request)
+                                host.gameplay_query(envelope["query"].clone())
                             })();
                             match response {
                                 Ok(value) => serde_json::to_string(&value)

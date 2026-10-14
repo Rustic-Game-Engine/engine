@@ -126,6 +126,8 @@ jobs:
   language-adapters:
     name: Language adapter conformance
     runs-on: ubuntu-latest
+    env:
+      RUSTIC_REQUIRE_ALL_API_ADAPTERS: '1'
     timeout-minutes: 40
     defaults:
       run:
@@ -156,6 +158,8 @@ jobs:
       - run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-scripting external_runtime -- --nocapture
       - name: Scene environment scripting across all adapters
         run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play environment -- --nocapture
+      - name: Audio, capture and live reads across all adapters
+        run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play audio_capture_and_live_reads_conform -- --nocapture
       - name: Entity foundations across all adapters
         env:
           RUSTIC_REQUIRE_ALL_ENTITY_ADAPTERS: '1'
@@ -181,6 +185,11 @@ jobs:
           if (-not (Get-ChildItem 'dist/RusticGameEngine-Setup-*.exe' -ErrorAction SilentlyContinue)) {
             throw 'No fresh Windows installer was produced.'
           }
+      - name: Test toolchain failures and packaged Setup
+        run: |
+          $installer = Get-ChildItem 'dist/RusticGameEngine-Setup-*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/test-language-toolchains.ps1 -InstallerPath $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: windows-installer

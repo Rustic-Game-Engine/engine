@@ -78,11 +78,23 @@ struct RusticVector3 { double x=0,y=0,z=0; };
 struct RusticActionState { bool pressed=false,released=false,held=false; double axis=0; };
 struct RusticKeyEvent { std::string key,state; bool repeat=false; };
 
+struct RusticCaptureHandle {
+    std::string id; bool recording;
+    RusticValue read();
+    void unload();
+    void stop();
+};
 class ObjectPath {
     std::vector<RusticValue>** commands; std::string source;
 public:
     ObjectPath(std::vector<RusticValue>** commands,std::string source="rustic.game"):commands(commands),source(std::move(source)){}
     ObjectPath operator[](const std::string& name)const{return ObjectPath(commands,source+"."+name);}
+    RusticValue GetAttribute(const std::string& name) const;
+    RusticValue get_attribute(const std::string& name) const{return GetAttribute(name);}
+    RusticCaptureHandle startRecording(const RusticValue& path=nullptr,const std::string& source="game") const;
+    void stopRecording(const RusticCaptureHandle* handle=nullptr) const;
+    RusticCaptureHandle startHotMic() const;
+    void stopHotMic(const RusticCaptureHandle* handle=nullptr) const;
     void EditAttribute(const std::string& name,RusticValue value){(*commands)->push_back(rustic_detail::object({{"op","edit_attribute"},{"source",source},{"name",name},{"value",std::move(value)}}));}
     void edit_attribute(const std::string& name,RusticValue value){EditAttribute(name,std::move(value));}
 };
@@ -93,11 +105,13 @@ class RusticApi {
 public:
     ObjectPath game{&commands};
     RusticValue query(RusticValue request){std::cout<<rustic_detail::dump(rustic_detail::object({{"query",std::move(request)},{"commands",*commands}}))<<std::endl;commands->clear();std::string line;if(!std::getline(std::cin,line))throw std::runtime_error("query host exited");auto response=rustic_detail::Parser(line).parse();auto& object=response.object();if(auto error=object.find("error");error!=object.end())throw std::runtime_error(error->second.string());return response.at("result");}
-    void edit_object_attribute(const std::string& source,const std::string& name,RusticValue value){commands->push_back(rustic_detail::object({{"op","edit_attribute"},{"source",source},{"name",name},{"value",std::move(value)}}));}
     void gameplay(RusticValue request){commands->push_back(rustic_detail::object({{"op","gameplay"},{"request",std::move(request)}}));}
     RusticValue gameplay_connections()const{return state->at("gameplay_connections");}
     RusticValue gameplay_states()const{return state->at("gameplay_states");}
     RusticValue gameplay_callbacks()const{return state->at("gameplay_callbacks");}
+    std::optional<std::string> find_entity(const std::string& source){auto v=query(rustic_detail::object({{"op","find_entity"},{"source",source}}));return v.is_null()?std::nullopt:std::optional(v.string());}
+    void edit_object_attribute(const std::string& source,const std::string& name,RusticValue value){commands->push_back(rustic_detail::object({{"op","edit_attribute"},{"source",source},{"name",name},{"value",std::move(value)}}));}
+    RusticValue get_object_attribute(const std::string& source,const std::string& name){return query(rustic_detail::object({{"op","object_attribute"},{"source",source},{"name",name}}));}
     std::string entity_id() const{return state->at("entity_id").string();} double delta_time() const{return state->at("delta_time").number();} double fixed_delta_time() const{return state->at("fixed_delta_time").number();}
     RusticVector3 get_translation() const{auto&a=state->at("translation").array();return{a[0].number(),a[1].number(),a[2].number()};}
     void set_translation(double x,double y,double z){commands->push_back(rustic_detail::object({{"op","set_translation"},{"value",RusticValue::Array{x,y,z}}}));}
@@ -106,15 +120,34 @@ public:
     void EditAttribute(const std::string& n,RusticValue v){commands->push_back(rustic_detail::object({{"op","edit_attribute"},{"name",n},{"value",std::move(v)}}));} void edit_attribute(const std::string& n,RusticValue v){EditAttribute(n,std::move(v));}
     RusticActionState input(const std::string& n)const{return action(lookup("actions",n));} RusticActionState key(const std::string& n)const{return action(lookup("keys",n));}
     std::vector<RusticKeyEvent> key_events()const{std::vector<RusticKeyEvent> out;for(auto&v:state->at("key_events").array()){auto&o=v.object();out.push_back({o.at("key").string(),o.at("state").string(),o.at("repeat").boolean()});}return out;}
-    bool any_key_pressed()const{return state->at("any_key_pressed").boolean();} void log(const std::string& l,const std::string&m){commands->push_back(rustic_detail::object({{"op","log"},{"level",l},{"message",m}}));} void set_enabled(bool e){commands->push_back(rustic_detail::object({{"op","set_enabled"},{"enabled",e}}));}
+    bool any_key_pressed()const{return state->at("any_key_pressed").boolean();} void print(const std::string& message){log("info",message);}void warn(const std::string& message){log("warn",message);}void log(const std::string& l,const std::string&m){commands->push_back(rustic_detail::object({{"op","log"},{"level",l},{"message",m}}));} void set_enabled(bool e){commands->push_back(rustic_detail::object({{"op","set_enabled"},{"enabled",e}}));}
 };
 class InstanceApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;void push(const char*op,const std::string&s,const std::optional<std::string>&p){commands->push_back(rustic_detail::object({{"op",op},{"source",s},{"parent",p?RusticValue(*p):RusticValue()}}));}public:void add(const std::string&s,std::optional<std::string>p={}){push("add_instance",s,p);}void clone(const std::string&s,std::optional<std::string>p={}){push("clone_instance",s,p);}};
 class SceneApi {public:
+    RusticValue getEnvironment(const std::string& field) const;
     RusticValue getEnvironment() const;
     RusticValue setEnvironment(RusticValue::Object settings) const;
     RusticValue setSkyTexture(const std::string& path) const;
-private:friend int rustic_run(const struct RusticBehavior&);const RusticValue*state=nullptr;public:std::optional<std::string> Find(const std::string&p)const{auto&o=state->object();auto i=o.find(p);return i==o.end()?std::nullopt:std::optional(i->second.string());}std::vector<std::string> List(const std::string&p="Game.scene")const{std::vector<std::string>r;std::string prefix=p=="Game.scene"?"":p+".";for(auto&[n,v]:state->object())if(prefix.empty()||n.starts_with(prefix))r.push_back(v.string());return r;}};
-class GameApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;public:SceneApi scene;void setCurrentCamera(const std::string&source){commands->push_back(rustic_detail::object({{"op","set_current_camera"},{"source",source}}));}}; inline RusticApi rustic; inline InstanceApi instance; inline GameApi Game;
+private:friend int rustic_run(const struct RusticBehavior&);const RusticValue*state=nullptr;public:std::optional<std::string> Find(const std::string&p)const{auto&o=state->object();auto i=o.find(p);return i==o.end()?std::nullopt:std::optional(i->second.string());}std::vector<std::string> List(const std::string&p="Game.scene")const{std::vector<std::string>r;std::string prefix=(p.empty()?"Game.scene":p)+".";for(auto&[n,v]:state->object())if(prefix.empty()||n.starts_with(prefix))r.push_back(v.string());return r;}};
+class GameApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;public:SceneApi scene;
+    RusticCaptureHandle startRecording(const RusticValue& path=nullptr,const std::string& source="game") const;
+    void stopRecording(const RusticCaptureHandle* handle=nullptr) const;
+    RusticCaptureHandle startHotMic() const;
+    void stopHotMic(const RusticCaptureHandle* handle=nullptr) const;
+    void setCurrentCamera(const std::string&source){commands->push_back(rustic_detail::object({{"op","set_current_camera"},{"source",source}}));}}; inline RusticApi rustic; inline InstanceApi instance; inline GameApi Game;
+inline RusticValue RusticCaptureHandle::read(){return rustic.query(rustic_detail::object({{"op","capture_read"},{"id",id}}));}
+inline void RusticCaptureHandle::unload(){rustic.query(rustic_detail::object({{"op","capture_unload"},{"id",id}}));}
+inline void RusticCaptureHandle::stop(){rustic.query(rustic_detail::object({{"op",recording?"capture_recording_stop":"capture_mic_stop"},{"id",id}}));}
+inline RusticCaptureHandle GameApi::startRecording(const RusticValue& path,const std::string& source) const{return {rustic.query(rustic_detail::object({{"op","capture_recording_start"},{"path",path},{"source",source}})).string(),true};}
+inline void GameApi::stopRecording(const RusticCaptureHandle* handle) const{rustic.query(rustic_detail::object({{"op","capture_recording_stop"},{"id",handle?RusticValue(handle->id):RusticValue{}}}));}
+inline RusticCaptureHandle GameApi::startHotMic() const{return {rustic.query(rustic_detail::object({{"op","capture_mic_start"}})).string(),false};}
+inline void GameApi::stopHotMic(const RusticCaptureHandle* handle) const{rustic.query(rustic_detail::object({{"op","capture_mic_stop"},{"id",handle?RusticValue(handle->id):RusticValue{}}}));}
+inline RusticValue ObjectPath::GetAttribute(const std::string& name) const{return rustic.get_object_attribute(source,name);}
+inline RusticCaptureHandle ObjectPath::startRecording(const RusticValue& path,const std::string& source) const{return Game.startRecording(path,source);}
+inline void ObjectPath::stopRecording(const RusticCaptureHandle* handle) const{Game.stopRecording(handle);}
+inline RusticCaptureHandle ObjectPath::startHotMic() const{return Game.startHotMic();}
+inline void ObjectPath::stopHotMic(const RusticCaptureHandle* handle) const{Game.stopHotMic(handle);}
+inline RusticValue SceneApi::getEnvironment(const std::string& field) const{return rustic.query(rustic_detail::object({{"op","scene_environment_field"},{"field",field}}));}
 inline RusticValue SceneApi::getEnvironment() const {return rustic.query(rustic_detail::object({{"op","scene_environment"}}));}
 inline RusticValue SceneApi::setEnvironment(RusticValue::Object settings) const {return rustic.query(rustic_detail::object({{"op","scene_environment"},{"settings",std::move(settings)}}));}
 inline RusticValue SceneApi::setSkyTexture(const std::string& path) const {return setEnvironment({{"sky_image",path}});}
@@ -256,7 +289,7 @@ inline auto flash(const std::string&e,RusticVector3 color,double d,const std::st
 inline auto pulse(const std::string&e,RusticVector3 scale,double d,const std::string& ease="Linear"){return Gameplay::start(Tween::action(e,"Scale",Physics::vec(scale),d,ease),false,1,true);}
 inline auto shake(const std::string&e,double strength,double duration,const std::string& easing="Linear"){return Gameplay::start(rustic_detail::object({{"kind","shake"},{"entity",Gameplay::entity(e)},{"strength",strength},{"duration",duration},{"easing",easing}}));}
 }
-namespace Clock{inline void timeScale(double v){rustic.query(rustic_detail::object({{"op","clock"},{"scale",v}}));}inline void pause(){rustic.query(rustic_detail::object({{"op","clock"},{"paused",true}}));}inline void resume(){rustic.query(rustic_detail::object({{"op","clock"},{"paused",false}}));}}
+namespace Clock{inline RusticValue state(){return rustic.query(rustic_detail::object({{"op","clock"}}));}inline double timeScale(){return state().at("scale").number();}inline double timeScale(double v){return rustic.query(rustic_detail::object({{"op","clock"},{"scale",v}})).at("scale").number();}inline void pause(){rustic.query(rustic_detail::object({{"op","clock"},{"paused",true}}));}inline void resume(){rustic.query(rustic_detail::object({{"op","clock"},{"paused",false}}));}}
 namespace Camera{inline std::string current(){return rustic.query(rustic_detail::object({{"op","camera_current"}})).string();}
 using Movement::moveTo;using Movement::follow;using Movement::lookAt;using Movement::orbit;using Effects::shake;
 inline auto zoom(const std::string&e,double f,double d,const std::string& ease="Linear"){return Tween::to(e,"Fov",f,d,ease);}
@@ -277,6 +310,20 @@ inline RusticValue get_input_devices(){return rustic.query(rustic_detail::object
 inline void set_output_device(const RusticValue& device=nullptr){rustic.query(rustic_detail::object({{"op","audio_set_output_device"},{"device",device}}));}
 inline void set_input_device(const RusticValue& device=nullptr){rustic.query(rustic_detail::object({{"op","audio_set_input_device"},{"device",device}}));}
 struct Voice{std::string id;void stop(){rustic.query(rustic_detail::object({{"op","audio_stop"},{"entity",id}}));}void pause(){rustic.query(rustic_detail::object({{"op","audio_pause"},{"entity",id}}));}void resume(){rustic.query(rustic_detail::object({{"op","audio_resume"},{"entity",id}}));}};
+class LoadedAudio {
+    std::string source; std::shared_ptr<std::optional<std::string>> id=std::make_shared<std::optional<std::string>>();
+    const std::string& loaded()const{if(!*id)throw std::runtime_error("audio is not loaded; call load() before play()");return **id;}
+public:
+    explicit LoadedAudio(std::string source):source(std::move(source)){}
+    LoadedAudio& load(){if(!*id)*id=rustic.query(rustic_detail::object({{"op","audio_load"},{"source",source}})).string();return *this;}
+    Voice play(double volume=1,double pitch=1,bool loop=false,std::optional<RusticVector3> position={}){return {rustic.query(rustic_detail::object({{"op","audio_loaded_play"},{"entity",loaded()},{"volume",volume},{"pitch",pitch},{"loop",loop},{"position",position?Physics::vec(*position):RusticValue{}}})).string()};}
+    void stop(){rustic.query(rustic_detail::object({{"op","audio_loaded_stop"},{"entity",loaded()}}));}
+    void pause(){rustic.query(rustic_detail::object({{"op","audio_loaded_pause"},{"entity",loaded()}}));}
+    void resume(){rustic.query(rustic_detail::object({{"op","audio_loaded_resume"},{"entity",loaded()}}));}
+    void unload(){if(*id){rustic.query(rustic_detail::object({{"op","audio_unload"},{"entity",**id}}));id->reset();}}
+    void Unload(){unload();}
+};
+inline LoadedAudio load(const std::string&source){LoadedAudio audio(source);audio.load();return audio;}
 inline Voice play(const std::string&source,double volume=1,double pitch=1,bool loop=false){return {rustic.query(rustic_detail::object({{"op","audio_play"},{"source",source},{"volume",volume},{"pitch",pitch},{"loop",loop}})).string()};}
 inline Voice playAt(const std::string&source,RusticVector3 position,double volume=1,double pitch=1,bool loop=false){return {rustic.query(rustic_detail::object({{"op","audio_play"},{"source",source},{"position",Physics::vec(position)},{"volume",volume},{"pitch",pitch},{"loop",loop}})).string()};}
 inline void volume(const Voice&v,double value){rustic.query(rustic_detail::object({{"op","audio_volume"},{"entity",v.id},{"value",value}}));}inline void pitch(const Voice&v,double value){rustic.query(rustic_detail::object({{"op","audio_pitch"},{"entity",v.id},{"value",value}}));}

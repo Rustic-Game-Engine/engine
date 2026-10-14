@@ -32,6 +32,11 @@ jobs:
             !/Engine/dist/
       - name: Build Windows installer
         run: ./tools/build-windows-installer.ps1
+      - name: Test toolchain failures and packaged Setup
+        run: |
+          $installer = Get-ChildItem 'dist/RusticGameEngine-Setup-*.exe' | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          powershell -NoProfile -ExecutionPolicy Bypass -File ./tools/test-language-toolchains.ps1 -InstallerPath $installer.FullName
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload installer
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:

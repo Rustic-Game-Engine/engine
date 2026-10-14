@@ -18,6 +18,15 @@ typedef struct { size_t count; const char **items; } RusticList;
 typedef struct { const char *id,*name; } RusticAudioDevice;
 typedef struct { size_t count; RusticAudioDevice *items; } RusticAudioDevices;
 typedef struct { size_t count; RusticKeyEvent *items; } RusticKeyEvents;
+typedef struct {char id[64];bool recording;} RusticCaptureHandle;
+typedef struct {size_t count;double *samples;unsigned sampleRate,channels;bool active;size_t droppedSamples;} RusticCaptureData;
+static RusticCaptureHandle r_recording_start(const char*,const char*);
+static void r_recording_stop(const RusticCaptureHandle*);
+static RusticCaptureHandle r_mic_start(void);
+static void r_mic_stop(const RusticCaptureHandle*);
+static RusticValue r_object_attribute(const char*,const char*);
+static const char *r_find_live(const char*);
+static void r_edit_object_path(const char*,const char*,RusticValue);
 typedef struct {
     void (*on_create)(void), (*on_start)(void), (*on_enable)(void), (*on_disable)(void), (*on_destroy)(void), (*on_stop)(void);
     void (*fixed_update)(double), (*update)(double);
@@ -126,6 +135,8 @@ static RusticActionState r_input(const char *n) {return r_action("actions",n);}
 static RusticActionState r_key(const char *n) {return r_action("keys",n);}
 static bool r_any(void) {return r_bool(r_field(0,"any_key_pressed"));}
 static void r_log(const char *l,const char *m) {r_command("log");r_append(",\"level\":");r_quote(l);r_append(",\"message\":");r_quote(m);r_append("}");}
+static void r_print(const char *message){r_log("info",message);}
+static void r_warn(const char *message){r_log("warn",message);}
 static void r_enabled(bool e) {r_command("set_enabled");r_append(e?",\"enabled\":true}":",\"enabled\":false}");}
 static void r_instance(const char *op,const char *s,const char *p) {r_command(op);r_append(",\"source\":");r_quote(s);r_append(",\"parent\":");r_quote(p);r_append("}");}
 static void r_add(const char *s,const char *p) {r_instance("add_instance",s,p);}
@@ -134,8 +145,9 @@ static void r_camera(const char *s) {r_command("set_current_camera");r_append(",
 static const char *r_find(const char *s) {return r_string(r_field(r_field(0,"scene_paths"),s));}
 static RusticList r_list(const char *path) {
     static const char *items[65536]; RusticList out={0,items}; size_t o=r_field(0,"scene_paths"); if(o>=r_count)return out;
-    size_t n=path?strlen(path):0;bool all=!path||!*path||strcmp(path,"Game.scene")==0;
-    for(size_t i=o+1;i<r_tokens[o].next;i=r_tokens[i+1].next) {const char *name=r_string(i);if(all||(strncmp(name,path,n)==0&&name[n]=='.'))items[out.count++]=r_string(i+1);}
+    if(!path||!*path){path="Game.scene";}
+    size_t n=strlen(path);
+    for(size_t i=o+1;i<r_tokens[o].next;i=r_tokens[i+1].next) {const char *name=r_string(i);if(strncmp(name,path,n)==0&&name[n]=='.')items[out.count++]=r_string(i+1);}
     return out;
 }
 static RusticKeyEvents r_events(void) {
@@ -144,27 +156,35 @@ static RusticKeyEvents r_events(void) {
     return out;
 }
 static const struct {
-    struct {void (*EditAttribute)(const char*,const char*,const char*,RusticValue);} game;
+    struct {void (*EditAttribute)(const char*,const char*,const char*,RusticValue);
+    RusticValue (*GetAttribute)(const char*,const char*);
+    RusticCaptureHandle (*startRecording)(const char*,const char*);
+    void (*stopRecording)(const RusticCaptureHandle*);
+    RusticCaptureHandle (*startHotMic)(void);void (*stopHotMic)(const RusticCaptureHandle*);} game;
     const char *(*entity_id)(void); double (*delta_time)(void),(*fixed_delta_time)(void);
     RusticVector3 (*get_translation)(void); void (*set_translation)(double,double,double);
     RusticValue (*get_property)(const char*),(*get_attribute)(const char*);
     void (*set_property)(const char*,RusticValue),(*edit_attribute)(const char*,RusticValue);
     RusticActionState (*input)(const char*),(*key)(const char*);RusticKeyEvents (*key_events)(void);
     bool (*any_key_pressed)(void);void (*log)(const char*,const char*),(*set_enabled)(bool);
-} rustic={{r_edit_object_attribute},r_entity_id,r_delta_time,r_fixed_delta_time,r_translation,r_set_translation,r_property,r_attribute,r_set_property,r_edit_attribute,r_input,r_key,r_events,r_any,r_log,r_enabled};
+    const char *(*find_entity)(const char*);RusticValue (*get_object_attribute)(const char*,const char*);void (*edit_object_attribute)(const char*,const char*,RusticValue);void (*print)(const char*),(*warn)(const char*);
+} rustic={{r_edit_object_attribute,r_object_attribute,r_recording_start,r_recording_stop,r_mic_start,r_mic_stop},r_entity_id,r_delta_time,r_fixed_delta_time,r_translation,r_set_translation,r_property,r_attribute,r_set_property,r_edit_attribute,r_input,r_key,r_events,r_any,r_log,r_enabled,r_find_live,r_object_attribute,r_edit_object_path,r_print,r_warn};
 static const struct {void (*add)(const char*,const char*),(*clone)(const char*,const char*);} instance={r_add,r_clone};
 
 static RusticValue r_environment_get(const char *field);
 static void r_environment_set(const char *field,RusticValue value);
 static void r_environment_sky(const char *path);
-static const struct {struct {RusticValue (*getEnvironment)(const char*);void (*setEnvironment)(const char*,RusticValue);void (*setSkyTexture)(const char*);const char *(*Find)(const char*);RusticList (*List)(const char*);} scene;void (*setCurrentCamera)(const char*);} Game={{r_environment_get,r_environment_set,r_environment_sky,r_find,r_list},r_camera};
+static const struct {struct {RusticValue (*getEnvironment)(const char*);void (*setEnvironment)(const char*,RusticValue);void (*setSkyTexture)(const char*);const char *(*Find)(const char*);RusticList (*List)(const char*);} scene;void (*setCurrentCamera)(const char*);
+RusticCaptureHandle (*startRecording)(const char*,const char*);void (*stopRecording)(const RusticCaptureHandle*);
+RusticCaptureHandle (*startHotMic)(void);void (*stopHotMic)(const RusticCaptureHandle*);} Game={{r_environment_get,r_environment_set,r_environment_sky,r_find,r_list},r_camera,r_recording_start,r_recording_stop,r_mic_start,r_mic_stop};
 
 /* Queries preserve the lifecycle snapshot while flushing earlier writes in order. */
 typedef struct {char *source,*pending;RToken *tokens;size_t count,at;bool audio_devices;} RQuerySave;
 typedef struct {bool hit;char entity[64];RusticVector3 point,normal;double distance;} RusticHit;
 typedef struct {double value,velocity;} RusticDamping;
 typedef struct {bool found;char status[16],error[256];} RusticOperationState;
-typedef struct {RusticOperationState operation;RusticValue value;RusticHit hit;RusticDamping damping;char *json;RusticList list;RusticAudioDevices devices;} RQueryResult;
+typedef struct {double scale;bool paused;} RusticClockState;
+typedef struct {RusticClockState clock;RusticOperationState operation;RusticValue value;RusticHit hit;RusticDamping damping;char *json;RusticList list;RusticAudioDevices devices;RusticCaptureData capture;} RQueryResult;
 static char *r_query_owned[8192];static size_t r_query_owned_count;
 static char *r_owned(const char *s,size_t length){if(r_query_owned_count>=8192)r_fail("Rustic C: query allocation budget");char *copy=(char*)malloc(length+1);if(!copy)r_fail("Rustic C: allocation failed");if(s)memcpy(copy,s,length);else memset(copy,0,length);copy[length]=0;r_query_owned[r_query_owned_count++]=copy;return copy;}
 static RQuerySave r_query_begin(const char *op){
@@ -187,6 +207,15 @@ static RQueryResult r_query_end(RQuerySave saved){
     size_t result=r_field(0,"result");RQueryResult out={0};
     if(result<r_count){out.json=r_owned(r_source+r_tokens[result].start,r_tokens[result].end-r_tokens[result].start);
         if(r_tokens[result].kind=='{'){
+            out.clock.scale=r_number(r_field(result,"scale"));out.clock.paused=r_bool(r_field(result,"paused"));
+            size_t samples=r_field(result,"samples");
+            if(samples<r_count&&r_tokens[samples].kind=='['){
+                for(size_t i=samples+1;i<r_tokens[samples].next;i=r_tokens[i].next)out.capture.count++;
+                out.capture.samples=(double*)r_owned(NULL,out.capture.count*sizeof(double));
+                size_t n=0;for(size_t i=samples+1;i<r_tokens[samples].next;i=r_tokens[i].next)out.capture.samples[n++]=r_number(i);
+                out.capture.sampleRate=(unsigned)r_number(r_field(result,"sampleRate"));out.capture.channels=(unsigned)r_number(r_field(result,"channels"));
+                out.capture.active=r_bool(r_field(result,"active"));out.capture.droppedSamples=(size_t)r_number(r_field(result,"droppedSamples"));
+            }
             size_t status=r_field(result,"status");if(status<r_count){out.operation.found=true;snprintf(out.operation.status,sizeof out.operation.status,"%s",r_string(status));const char *message=r_string(r_field(result,"error"));if(message)snprintf(out.operation.error,sizeof out.operation.error,"%s",message);}
             size_t entity=r_field(result,"entity");if(entity<r_count){out.hit.hit=true;snprintf(out.hit.entity,sizeof out.hit.entity,"%s",r_string(entity));out.hit.point=r_as_vec(r_value(r_field(result,"point")));out.hit.normal=r_as_vec(r_value(r_field(result,"normal")));out.hit.distance=r_number(r_field(result,"distance"));}
             out.damping.value=r_number(r_field(result,"value"));out.damping.velocity=r_number(r_field(result,"velocity"));
@@ -211,6 +240,25 @@ static RQueryResult r_query_end(RQuerySave saved){
     strcpy(r_source,saved.source);memcpy(r_tokens,saved.tokens,saved.count*sizeof(RToken));r_count=saved.count;r_at=saved.at;
     free(saved.source);free(saved.pending);free(saved.tokens);r_written=r_commands=0;r_output[0]=0;r_append("{\"format_version\":1,\"commands\":[");return out;
 }
+static void r_edit_object_path(const char *source,const char *name,RusticValue value){r_command("edit_attribute");r_append(",\"source\":");r_quote(source);r_append(",\"name\":");r_quote(name);r_append(",\"value\":");r_write_value(value);r_append("}");}
+static RusticValue r_object_attribute(const char *source,const char *name){RQuerySave q=r_query_begin("object_attribute");r_q_string("source",source);r_q_string("name",name);return r_query_end(q).value;}
+static const char *r_find_live(const char *source){RQuerySave q=r_query_begin("find_entity");r_q_string("source",source);return r_query_end(q).value.string;}
+static RusticCaptureHandle r_capture_start(bool recording,const char *path,const char *source){
+ RQuerySave q=r_query_begin(recording?"capture_recording_start":"capture_mic_start");
+ if(recording){r_q_string("path",path);r_q_string("source",source?source:"game");}
+ RQueryResult result=r_query_end(q);RusticCaptureHandle h={{0},recording};
+ if(result.value.type!=RUSTIC_STRING)r_fail("Rustic C: invalid capture handle");
+ snprintf(h.id,sizeof h.id,"%s",result.value.string);return h;
+}
+static RusticCaptureHandle r_recording_start(const char *path,const char *source){return r_capture_start(true,path,source);}
+static RusticCaptureHandle r_mic_start(void){return r_capture_start(false,NULL,NULL);}
+static void r_capture_stop_kind(const RusticCaptureHandle *h,bool recording){RQuerySave q=r_query_begin(recording?"capture_recording_stop":"capture_mic_stop");r_q_string("id",h?h->id:NULL);(void)r_query_end(q);}
+static void r_recording_stop(const RusticCaptureHandle *h){r_capture_stop_kind(h,true);}
+static void r_mic_stop(const RusticCaptureHandle *h){r_capture_stop_kind(h,false);}
+static void r_capture_stop(RusticCaptureHandle h){r_capture_stop_kind(&h,h.recording);}
+static void r_capture_unload(RusticCaptureHandle h){RQuerySave q=r_query_begin("capture_unload");r_q_string("id",h.id);(void)r_query_end(q);}
+static RusticCaptureData r_capture_read(RusticCaptureHandle h){RQuerySave q=r_query_begin("capture_read");r_q_string("id",h.id);return r_query_end(q).capture;}
+static const struct {RusticCaptureData(*read)(RusticCaptureHandle);void(*stop)(RusticCaptureHandle),(*unload)(RusticCaptureHandle);} Capture={r_capture_read,r_capture_stop,r_capture_unload};
 /* Entity services: returned lists/strings live until the next callback. */
 static const char *r_resolve(const char *e){
     if(e && !strncmp(e,"game.scene.",11)){RQuerySave saved=r_query_begin("scene_object");r_q_string("source",e);return r_query_end(saved).value.string;}
@@ -372,6 +420,15 @@ static RusticGameplayHandle r_camera_zoom(const char *e,double fov,double durati
 static RusticGameplayHandle r_camera_transition(const char *e,RusticVector3 p,RusticValue rotation,double fov,double duration,const char *ease,void(*fn)(void)){RusticSequence b=r_sequence_new();r_sequence_to(&b,e,"Position",r_vec(p),duration,ease);r_sequence_to(&b,e,"Rotation",rotation,duration,ease);r_sequence_to(&b,e,"Fov",(RusticValue){.type=RUSTIC_NUMBER,.number=fov},duration,ease);RusticGameplayHandle h=r_run_action(r_sequence_action(&b,"parallel"),fn);r_sequence_destroy(&b);return h;}
 typedef struct {char id[64];} RusticAudioVoice;
 typedef struct {double volume,pitch;bool loop;} RusticAudioOptions;
+typedef struct {char id[64];} RusticLoadedAudio;
+static RusticLoadedAudio r_audio_load(const char *source){RQuerySave q=r_query_begin("audio_load");r_q_string("source",source);RQueryResult result=r_query_end(q);RusticLoadedAudio h={{0}};if(result.value.type!=RUSTIC_STRING)r_fail("Rustic C: invalid loaded audio handle");snprintf(h.id,sizeof h.id,"%s",result.value.string);return h;}
+static RusticAudioVoice r_audio_loaded_play(RusticLoadedAudio h,const RusticAudioOptions *opts){RQuerySave q=r_query_begin("audio_loaded_play");r_q_string("entity",h.id);r_q_number("volume",opts?opts->volume:1);r_q_number("pitch",opts?opts->pitch:1);r_append(",\"loop\":");r_append(opts&&opts->loop?"true":"false");RQueryResult result=r_query_end(q);RusticAudioVoice v={{0}};if(result.value.type!=RUSTIC_STRING)r_fail("Rustic C: invalid voice");snprintf(v.id,sizeof v.id,"%s",result.value.string);return v;}
+static void r_audio_loaded_control(RusticLoadedAudio h,const char *op){RQuerySave q=r_query_begin(op);r_q_string("entity",h.id);(void)r_query_end(q);}
+static void r_audio_loaded_stop(RusticLoadedAudio h){r_audio_loaded_control(h,"audio_loaded_stop");}
+static void r_audio_loaded_pause(RusticLoadedAudio h){r_audio_loaded_control(h,"audio_loaded_pause");}
+static void r_audio_loaded_resume(RusticLoadedAudio h){r_audio_loaded_control(h,"audio_loaded_resume");}
+static void r_audio_unload(RusticLoadedAudio *h){if(h->id[0]){r_audio_loaded_control(*h,"audio_unload");h->id[0]=0;}}
+static const struct {RusticAudioVoice(*play)(RusticLoadedAudio,const RusticAudioOptions*);void(*stop)(RusticLoadedAudio),(*pause)(RusticLoadedAudio),(*resume)(RusticLoadedAudio);void(*unload)(RusticLoadedAudio*);} LoadedAudio={r_audio_loaded_play,r_audio_loaded_stop,r_audio_loaded_pause,r_audio_loaded_resume,r_audio_unload};
 static RusticAudioDevices r_audio_get_output_devices(void){RQuerySave s=r_query_begin("audio_get_output_devices");return r_query_end(s).devices;}
 static RusticAudioDevices r_audio_get_input_devices(void){RQuerySave s=r_query_begin("audio_get_input_devices");return r_query_end(s).devices;}
 static void r_audio_set_output_device(const char *device){RQuerySave s=r_query_begin("audio_set_output_device");r_q_string("device",device);(void)r_query_end(s);}
@@ -426,21 +483,23 @@ static RusticGameplayHandle r_tween_value(RusticValue from,RusticValue to,double
 static void r_clock_scale(double value){RQuerySave s=r_query_begin("clock");r_q_number("scale",value);(void)r_query_end(s);}
 static void r_clock_pause(void){RQuerySave s=r_query_begin("clock");r_append(",\"paused\":true");(void)r_query_end(s);}
 static void r_clock_resume(void){RQuerySave s=r_query_begin("clock");r_append(",\"paused\":false");(void)r_query_end(s);}
-static const struct{void(*timeScale)(double),(*pause)(void),(*resume)(void);} Clock={r_clock_scale,r_clock_pause,r_clock_resume};
-static const struct {RusticAudioVoice(*play)(const char*,const RusticAudioOptions*),(*playAt)(const char*,RusticVector3,const RusticAudioOptions*);void(*stop)(RusticAudioVoice),(*pause)(RusticAudioVoice),(*resume)(RusticAudioVoice),(*volume)(RusticAudioVoice,double),(*pitch)(RusticAudioVoice,double);RusticGameplayHandle(*fadeIn)(RusticAudioVoice,double,const char*,void(*)(void)),(*fadeOut)(RusticAudioVoice,double,const char*,void(*)(void)),(*crossfade)(RusticAudioVoice,RusticAudioVoice,double,const char*,void(*)(void));RusticAudioDevices(*get_output_devices)(void),(*get_input_devices)(void);void(*set_output_device)(const char*),(*set_input_device)(const char*);} Audio={r_audio_play,r_audio_at,r_audio_stop,r_audio_pause,r_audio_resume,r_audio_volume,r_audio_pitch,r_audio_fade_in,r_audio_fade_out,r_audio_crossfade,r_audio_get_output_devices,r_audio_get_input_devices,r_audio_set_output_device,r_audio_set_input_device};
+static RusticClockState r_clock_state(void){RQuerySave q=r_query_begin("clock");return r_query_end(q).clock;}
+static const struct{void(*timeScale)(double),(*pause)(void),(*resume)(void);RusticClockState(*state)(void);} Clock={r_clock_scale,r_clock_pause,r_clock_resume,r_clock_state};
+static const struct {RusticAudioVoice(*play)(const char*,const RusticAudioOptions*),(*playAt)(const char*,RusticVector3,const RusticAudioOptions*);void(*stop)(RusticAudioVoice),(*pause)(RusticAudioVoice),(*resume)(RusticAudioVoice),(*volume)(RusticAudioVoice,double),(*pitch)(RusticAudioVoice,double);RusticGameplayHandle(*fadeIn)(RusticAudioVoice,double,const char*,void(*)(void)),(*fadeOut)(RusticAudioVoice,double,const char*,void(*)(void)),(*crossfade)(RusticAudioVoice,RusticAudioVoice,double,const char*,void(*)(void));RusticAudioDevices(*get_output_devices)(void),(*get_input_devices)(void);void(*set_output_device)(const char*),(*set_input_device)(const char*);RusticLoadedAudio(*load)(const char*);} Audio={r_audio_play,r_audio_at,r_audio_stop,r_audio_pause,r_audio_resume,r_audio_volume,r_audio_pitch,r_audio_fade_in,r_audio_fade_out,r_audio_crossfade,r_audio_get_output_devices,r_audio_get_input_devices,r_audio_set_output_device,r_audio_set_input_device,r_audio_load};
 static const struct {void(*addMarker)(const char*,const char*,double,const char*);RusticGameplayHandle(*value)(const RusticKeyframe*,size_t,void(*)(RusticValue),void(*)(void));RusticAnimationOptions(*defaults)(void);RusticList(*load)(const char*,const char*),(*clips)(const char*);void(*registerClip)(const char*,RusticAnimationClip);RusticGameplayHandle(*play)(const char*,const char*,const RusticAnimationOptions*,void(*)(void));void(*onMarker)(RusticGameplayHandle,const char*,void(*)(void)),(*stop)(RusticGameplayHandle),(*pause)(RusticGameplayHandle),(*speed)(RusticGameplayHandle,double),(*loop)(RusticGameplayHandle,bool);RusticGameplayHandle(*blend)(const char*,const char*,const char*,double,const char*,void(*)(void)),(*transition)(const char*,const char*,const char*,double,const char*,void(*)(void)),(*ik)(const char*,const char*,const char*,RusticVector3,RusticVector3,double,double,const char*,void(*)(void)),(*footPlacement)(const char*,const char*,const char*,RusticVector3,RusticVector3,double,double,const char*,void(*)(void)),(*lookAt)(const char*,RusticVector3,double,const char*,void(*)(void)),(*headTracking)(const char*,RusticVector3,double,const char*,void(*)(void)),(*recoil)(const char*,RusticValue,double,const char*,void(*)(void));} Animation={r_animation_add_marker,r_animation_value,r_animation_defaults,r_animation_load,r_animation_refs,r_animation_register,r_animation_play,r_animation_marker,r_gameplay_cancel,r_gameplay_pause,r_gameplay_speed,r_gameplay_loop,r_animation_blend,r_animation_blend,r_animation_ik,r_animation_ik,r_look_at,r_look_at,r_recoil};
 static const struct {RusticConnection(*on)(const char*,void(*)(const RusticValue*,size_t)),(*once)(const char*,void(*)(const RusticValue*,size_t)),(*connect)(const char*,const char*,void(*)(const RusticValue*,size_t),bool);void(*emit)(const char*,const RusticValue*,size_t,const char*),(*disconnect)(RusticConnection);} Events={r_events_on,r_events_once,r_events_connect,r_events_emit,r_events_disconnect};
 typedef struct {double duration,speed;bool useSpeed;const char *easing;} RusticMotionOptions;
 static RusticGameplayHandle r_tween_options(const char *e,const char *p,RusticValue to,RusticMotionOptions opts,void(*fn)(void)){const char *id=r_resolve(e);RActionSave s=r_action_begin();r_append("{\"kind\":\"tween\",\"target\":{\"entity\":");r_quote(id);r_q_string("property",p);r_append("}");r_q_value("to",to);r_q_number(opts.useSpeed?"speed":"duration",opts.useSpeed?opts.speed:opts.duration);r_q_string("easing",opts.easing?opts.easing:"Linear");r_append("}");return r_run_action(r_action_end(s),fn);}
 static RusticGameplayHandle r_move_options(const char *e,RusticVector3 p,RusticMotionOptions opts,void(*fn)(void)){return r_tween_options(e,"Position",r_vec(p),opts,fn);}
 static const struct {RusticGameplayHandle (*to)(const char*,const char*,RusticValue,double,const char*,void(*)(void));RusticGameplayHandle (*move)(const char*,RusticVector3,double,const char*,void(*)(void));RusticGameplayHandle(*rotate)(const char*,RusticValue,double,const char*,void(*)(void)),(*scale)(const char*,RusticVector3,double,const char*,void(*)(void));RusticAction(*action)(const char*,const char*,RusticValue,double,const char*);RusticGameplayHandle(*value)(RusticValue,RusticValue,double,const char*,void(*)(RusticValue),void(*)(void));RusticGameplayHandle(*toOptions)(const char*,const char*,RusticValue,RusticMotionOptions,void(*)(void));} Tween={r_tween_to,r_tween_move,r_rotate_to,r_scale_to,r_action_tween,r_tween_value,r_tween_options};
+static const char *r_camera_current(void){RQuerySave q=r_query_begin("camera_current");return r_query_end(q).value.string;}
 static const struct {RusticGameplayHandle(*moveTo)(const char*,RusticVector3,double,const char*,void(*)(void)),(*move)(const char*,RusticVector3,double,const char*,void(*)(void)),(*rotateTo)(const char*,RusticValue,double,const char*,void(*)(void)),(*lookAt)(const char*,RusticVector3,double,const char*,void(*)(void)),(*follow)(const char*,const char*,RusticVector3,double,const char*,void(*)(void)),(*orbit)(const char*,RusticVector3,double,double,double,const char*,void(*)(void));RusticGameplayHandle(*moveToOptions)(const char*,RusticVector3,RusticMotionOptions,void(*)(void));} Movement={r_tween_move,r_move_relative,r_rotate_to,r_look_at,r_follow,r_orbit,r_move_options};
 static const struct {RusticGameplayHandle (*after)(double,void(*)(void)),(*every)(double,void(*)(void),unsigned);} Timer={r_timer_after,r_timer_every};
 #define R_SEQUENCE_API {r_sequence_new,r_sequence_to,r_sequence_move,r_sequence_wait,r_sequence_call,r_sequence_parallel,r_sequence_play,r_sequence_destroy,r_sequence_animation}
 static const struct {RusticSequence(*create)(void);RusticSequence*(*to)(RusticSequence*,const char*,const char*,RusticValue,double,const char*),*(*move)(RusticSequence*,const char*,RusticVector3,double,const char*),*(*wait)(RusticSequence*,double),*(*call)(RusticSequence*,void(*)(void)),*(*parallel)(RusticSequence*,RusticSequence*,size_t);RusticGameplayHandle(*play)(RusticSequence*,void(*)(void));void(*destroy)(RusticSequence*);RusticSequence*(*animation)(RusticSequence*,const char*,const char*,const RusticAnimationOptions*);} Sequence=R_SEQUENCE_API,Timeline=R_SEQUENCE_API;
 static const struct {RusticPath(*create)(const RusticPathPoint*,size_t,const char*);RusticGameplayHandle(*follow)(const char*,RusticPath,double,double,const char*,bool,bool,bool,void(*)(void));void(*destroy)(RusticPath*);} Path={r_path_create,r_path_follow,r_path_destroy};
 static const struct {RusticGameplayHandle(*fade)(const char*,double,double,const char*,void(*)(void)),(*flash)(const char*,RusticVector3,double,const char*,void(*)(void)),(*pulse)(const char*,RusticVector3,double,const char*,void(*)(void)),(*shake)(const char*,double,double,const char*,void(*)(void));} Effects={r_fade,r_flash,r_pulse,r_shake};
-static const struct {RusticGameplayHandle(*moveTo)(const char*,RusticVector3,double,const char*,void(*)(void)),(*zoom)(const char*,double,double,const char*,void(*)(void)),(*fov)(const char*,double,double,const char*,void(*)(void)),(*follow)(const char*,const char*,RusticVector3,double,const char*,void(*)(void)),(*lookAt)(const char*,RusticVector3,double,const char*,void(*)(void)),(*orbit)(const char*,RusticVector3,double,double,double,const char*,void(*)(void)),(*shake)(const char*,double,double,const char*,void(*)(void)),(*transition)(const char*,RusticVector3,RusticValue,double,double,const char*,void(*)(void));} Camera={r_tween_move,r_camera_zoom,r_camera_zoom,r_follow,r_look_at,r_orbit,r_shake,r_camera_transition};
+static const struct {RusticGameplayHandle(*moveTo)(const char*,RusticVector3,double,const char*,void(*)(void)),(*zoom)(const char*,double,double,const char*,void(*)(void)),(*fov)(const char*,double,double,const char*,void(*)(void)),(*follow)(const char*,const char*,RusticVector3,double,const char*,void(*)(void)),(*lookAt)(const char*,RusticVector3,double,const char*,void(*)(void)),(*orbit)(const char*,RusticVector3,double,double,double,const char*,void(*)(void)),(*shake)(const char*,double,double,const char*,void(*)(void)),(*transition)(const char*,RusticVector3,RusticValue,double,double,const char*,void(*)(void));const char *(*current)(void);} Camera={r_tween_move,r_camera_zoom,r_camera_zoom,r_follow,r_look_at,r_orbit,r_shake,r_camera_transition,r_camera_current};
 static const struct {RusticOperationState(*state)(RusticGameplayHandle);void (*pause)(RusticGameplayHandle),(*resume)(RusticGameplayHandle),(*cancel)(RusticGameplayHandle),(*reverse)(RusticGameplayHandle),(*onFinished)(RusticGameplayHandle,void(*)(void)),(*speed)(RusticGameplayHandle,double),(*loop)(RusticGameplayHandle,bool);} Gameplay={r_gameplay_state,r_gameplay_pause,r_gameplay_resume,r_gameplay_cancel,r_gameplay_reverse,r_gameplay_finished,r_gameplay_speed,r_gameplay_loop};
 static const struct {const char *Linear,*InSine,*OutSine,*InOutSine,*InQuad,*OutQuad,*InOutQuad,*InCubic,*OutCubic,*InOutCubic,*InQuart,*OutQuart,*InOutQuart,*InQuint,*OutQuint,*InOutQuint,*InExpo,*OutExpo,*InOutExpo,*InCirc,*OutCirc,*InOutCirc,*InBack,*OutBack,*InOutBack,*InElastic,*OutElastic,*InOutElastic,*InBounce,*OutBounce,*InOutBounce;} Ease={"Linear","InSine","OutSine","InOutSine","InQuad","OutQuad","InOutQuad","InCubic","OutCubic","InOutCubic","InQuart","OutQuart","InOutQuart","InQuint","OutQuint","InOutQuint","InExpo","OutExpo","InOutExpo","InCirc","OutCirc","InOutCirc","InBack","OutBack","InOutBack","InElastic","OutElastic","InOutElastic","InBounce","OutBounce","InOutBounce"};
 
@@ -551,7 +610,7 @@ static const struct {RusticScenePath(*scene)(const char*,const char*);struct {Ru
 
 static int rustic_run(RusticBehavior b) {
     /* Reference exported objects even in an empty behavior to support -Werror. */
-    (void)game;(void)Animation;(void)Audio;(void)Events;(void)Sequence;(void)Timeline;(void)Path;(void)Effects;(void)Clock;(void)Camera;(void)Smooth;(void)Interpolation;(void)Physics;(void)rustic;(void)instance;(void)Game;(void)Tween;(void)Movement;(void)Timer;(void)Gameplay;(void)Ease;
+    (void)game;(void)Capture;(void)LoadedAudio;(void)Animation;(void)Audio;(void)Events;(void)Sequence;(void)Timeline;(void)Path;(void)Effects;(void)Clock;(void)Camera;(void)Smooth;(void)Interpolation;(void)Physics;(void)rustic;(void)instance;(void)Game;(void)Tween;(void)Movement;(void)Timer;(void)Gameplay;(void)Ease;
     while(fgets(r_source,sizeof r_source,stdin)) {
         for(size_t i=0;i<r_query_owned_count;i++){free(r_query_owned[i]);}
         r_query_owned_count=0;

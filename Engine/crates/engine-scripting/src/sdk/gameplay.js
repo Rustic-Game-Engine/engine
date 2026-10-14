@@ -174,6 +174,33 @@ find_by_tag(name){return rustic.query({op:"world_find_by_tag",name:name});},
 find_in_radius(center,radius){return rustic.query({op:"world_find_in_radius",center:center,radius:radius});},
 };
 
+class RusticLoadedAudio {
+  constructor(source) { this.source=source; this.id=null; }
+  load() { if(this.id===null)this.id=rustic.query({op:'audio_load',source:this.source}); return this; }
+  requireLoaded() { if(this.id===null)throw new Error('audio is not loaded; call load() before play()'); return this.id; }
+  play(options={}) {
+    const id=rustic.query({...options,op:'audio_loaded_play',entity:this.requireLoaded()});
+    return {id,stop:()=>rustic.query({op:'audio_stop',entity:id}),pause:()=>rustic.query({op:'audio_pause',entity:id}),resume:()=>rustic.query({op:'audio_resume',entity:id})};
+  }
+  stop() { rustic.query({op:'audio_loaded_stop',entity:this.requireLoaded()}); }
+  pause() { rustic.query({op:'audio_loaded_pause',entity:this.requireLoaded()}); }
+  resume() { rustic.query({op:'audio_loaded_resume',entity:this.requireLoaded()}); }
+  unload() { if(this.id!==null){rustic.query({op:'audio_unload',entity:this.id});this.id=null;} }
+  Unload() { this.unload(); }
+}
+Audio.load=source=>new RusticLoadedAudio(source).load();
+const _rusticCapture=(id,recording)=>({id,
+  read:()=>rustic.query({op:'capture_read',id}),
+  unload:()=>rustic.query({op:'capture_unload',id}),
+  stop:()=>rustic.query({op:recording?'capture_recording_stop':'capture_mic_stop',id})
+});
+globalThis.RusticCapture={
+  startRecording:(path=null,options={})=>_rusticCapture(rustic.query({op:'capture_recording_start',path,source:options.source??'game'}),true),
+  stopRecording:(handle=null)=>rustic.query({op:'capture_recording_stop',id:handle?.id}),
+  startHotMic:()=>_rusticCapture(rustic.query({op:'capture_mic_start'}),false),
+  stopHotMic:(handle=null)=>rustic.query({op:'capture_mic_stop',id:handle?.id})
+};
+
 // Canonical API paths.
 (() => {
   const sceneMethods={

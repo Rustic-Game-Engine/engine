@@ -13,6 +13,7 @@ local function objectPath(source, assetPath)
             local method=__rustic_path_method(_,name)
             if method then return method end
         end
+        if name=='GetAttribute' or name=='get_attribute' then return function(_,attribute) return rustic.query({op='object_attribute',source=source,name=attribute}) end end
         if name=='EditAttribute' or name=='edit_attribute' then
             return function(_, attribute, value) push('edit_attribute',{source=source,name=attribute,value=value}) end
         end
@@ -28,6 +29,9 @@ local function objectPath(source, assetPath)
 end
 __rustic_object_path=objectPath
 rustic = {game=objectPath('rustic.game')}
+function rustic.find_entity(source) return rustic.query({op='find_entity',source=source}) end
+function rustic.edit_object_attribute(source,name,value) push("edit_attribute",{source=source,name=name,value=value}) end
+function rustic.get_object_attribute(source,name) return rustic.query({op='object_attribute',source=source,name=name}) end
 function rustic.entity_id() return state.entity_id end
 function rustic.delta_time() return state.delta_time end
 function rustic.fixed_delta_time() return state.fixed_delta_time end
@@ -60,7 +64,7 @@ Game = {scene={}}
 function Game.scene.Find(path) return state.scene_paths[path] end
 function Game.scene.List(path)
     local result = {}
-    local prefix = (not path or path=='' or path=='Game.scene') and '' or path .. '.'
+    local prefix = ((not path or path=='') and 'Game.scene' or path) .. '.'
     for name,id in pairs(state.scene_paths) do
         if string.sub(name,1,#prefix)==prefix then table.insert(result,id) end
     end

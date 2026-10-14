@@ -236,6 +236,18 @@ installs every selected item through Windows Package Manager. Lua, JavaScript, a
 HTML/CSS are bundled. Additional toolchains can be installed later using **Rustic Game
 Engine > Language Toolchain Manager** in the Start menu or by rerunning Setup.
 
+Setup checks all selected toolchains in one hidden PowerShell process, skipping
+already-installed tools. If PowerShell cannot start or WinGet reports initialization
+error `142` or `0xc0000142`, it stops the batch and reports the optional-toolchain
+failure once. Rustic remains installed with its bundled languages. These are distinct
+error codes; retain the full message and the failing executable when diagnosing them.
+The failure dialog shows the Setup log path (`Setup Log ...txt` in `%TEMP%` by default).
+Use `/LOG="C:\path\setup.log"` to choose a persistent log location. If PowerShell started,
+check the original user's `%LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log`
+for package details and WinGet output. Otherwise, the Setup log records the PowerShell
+startup failure. Repair the failing PowerShell or Microsoft App Installer installation
+before retrying **Language Toolchain Manager**. Setup does not require Windows Terminal.
+
 ## HTML/CSS content
 
 HTML/CSS/PHP UI content is confined to the project's `ui/` directory. `.html` and
@@ -290,3 +302,5 @@ use native member calls, subscripts, or path-selection methods. See
 [Edit scene objects](Scripting/sceneObjects.md) for exact attachment steps, all
 language examples, supported values, and current limitations. This does not
 invoke another script's custom functions or load another scene.
+
+See [APIs in every language](Scripting/apiLanguages.md) for API families shared by every gameplay binding, reusable audio, capture handles, and live object queries.

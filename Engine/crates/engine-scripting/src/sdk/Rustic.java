@@ -73,6 +73,7 @@ class Rustic {
         static double remap(double v,double a,double b,double c,double d){return ((Number)query(args("remap","value",v,"in_min",a,"in_max",b,"out_min",c,"out_max",d))).doubleValue();}
         static double[] smoothDamp(double c,double t,double v,double s,double dt){var r=(Map<?,?>)query(args("smooth_damp","current",c,"target",t,"velocity",v,"smooth_time",s,"delta",dt));return new double[]{((Number)r.get("value")).doubleValue(),((Number)r.get("velocity")).doubleValue()};}
     }
+    static class Interpolation extends Smooth {}
     static class Physics{
         static Object raycast(double[] origin,double[] direction,double distance){return query(args("physics_raycast","origin",origin,"direction",direction,"distance",distance));}
         static Object sphereCast(double[] origin,double[] direction,double distance,double radius){return query(args("physics_sphere_cast","origin",origin,"direction",direction,"distance",distance,"radius",radius));}
@@ -96,6 +97,14 @@ class Rustic {
         ObjectPath(String source){this.source=source;}
         ObjectPath scene(String name){return new ObjectPath(source+"."+name);}
         ObjectPath object(String path){return new ObjectPath(source+"."+path);}
+        Object GetAttribute(String name){return value(query(args("object_attribute","source",source,"name",name)));}
+        Object get_attribute(String name){return GetAttribute(name);}
+        CaptureHandle startRecording(){return Game.startRecording();}
+        CaptureHandle startRecording(String path){return Game.startRecording(path);}
+        CaptureHandle startRecording(String path,String source){return Game.startRecording(path,source);}
+        void stopRecording(CaptureHandle handle){Game.stopRecording(handle);}
+        CaptureHandle startHotMic(){return Game.startHotMic();}
+        void stopHotMic(CaptureHandle handle){Game.stopHotMic(handle);}
         void EditAttribute(String name,Object value){command("edit_attribute","source",source,"name",name,"value",value);}
         void edit_attribute(String name,Object value){EditAttribute(name,value);}
     }
@@ -200,7 +209,7 @@ class Rustic {
         static Gameplay.Handle shake(String e,double strength,double duration){return shake(e,strength,duration,"Linear");}
         static Gameplay.Handle shake(String e,double strength,double duration,String easing){return Gameplay.start(Map.of("kind","shake","entity",Gameplay.entity(e),"strength",strength,"duration",duration,"easing",easing));}
     }
-    static class Clock { static double timeScale(double scale){return ((Number)((Map<?,?>)query(args("clock","scale",scale))).get("scale")).doubleValue();} static void pause(){query(args("clock","paused",true));} static void resume(){query(args("clock","paused",false));} }
+    static class Clock { static Object state(){return query(args("clock"));} static double timeScale(){return ((Number)((Map<?,?>)state()).get("scale")).doubleValue();} static double timeScale(double scale){return ((Number)((Map<?,?>)query(args("clock","scale",scale))).get("scale")).doubleValue();} static void pause(){query(args("clock","paused",true));} static void resume(){query(args("clock","paused",false));} }
     static class Camera{
         static String current(){return (String)query(args("camera_current"));}
         static Gameplay.Handle moveTo(String e,double[] p,double d){return moveTo(e,p,d,"Linear");}
@@ -252,7 +261,29 @@ class Rustic {
         static Gameplay.Handle recoil(String e,double[] rotation,double duration){return recoil(e,rotation,duration,"Linear");}
         static Gameplay.Handle recoil(String e,double[] rotation,double duration,String ease){return Gameplay.start(Tween.action(e,"Rotation",rotation,duration,ease),false,1,true);}
     }
+    static class CaptureHandle {
+        final String id; final boolean recording;
+        CaptureHandle(String id,boolean recording){this.id=id;this.recording=recording;}
+        Object read(){return query(args("capture_read","id",id));}
+        void unload(){query(args("capture_unload","id",id));}
+        void stop(){query(args(recording?"capture_recording_stop":"capture_mic_stop","id",id));}
+    }
     static class Audio{
+        static class LoadedAudio {
+            final String source; String id;
+            LoadedAudio(String source){this.source=source;}
+            LoadedAudio load(){if(id==null)id=(String)query(args("audio_load","source",source));return this;}
+            String loaded(){if(id==null)throw new IllegalStateException("audio is not loaded; call load() before play()");return id;}
+            Voice play(){return play(1,1,false,null);}
+            Voice play(double volume,double pitch,boolean loop){return play(volume,pitch,loop,null);}
+            Voice play(double volume,double pitch,boolean loop,double[] position){return new Voice((String)query(args("audio_loaded_play","entity",loaded(),"volume",volume,"pitch",pitch,"loop",loop,"position",position)));}
+            void stop(){query(args("audio_loaded_stop","entity",loaded()));}
+            void pause(){query(args("audio_loaded_pause","entity",loaded()));}
+            void resume(){query(args("audio_loaded_resume","entity",loaded()));}
+            void unload(){if(id!=null){query(args("audio_unload","entity",id));id=null;}}
+            void Unload(){unload();}
+        }
+        static LoadedAudio load(String source){return new LoadedAudio(source).load();}
         static Object get_output_devices(){return query(args("audio_get_output_devices"));}
         static Object get_input_devices(){return query(args("audio_get_input_devices"));}
         static void set_output_device(String device){query(args("audio_set_output_device","device",device));}
@@ -312,6 +343,9 @@ class Rustic {
     }
     static class RusticApi {
         final ObjectPath game=new ObjectPath("rustic.game");
+        String find_entity(String source){return (String)query(args("find_entity","source",source));}
+        void edit_object_attribute(String source,String name,Object value){command("edit_attribute","source",source,"name",name,"value",value);}
+        Object get_object_attribute(String source,String name){return value(query(args("object_attribute","source",source,"name",name)));}
         String entity_id(){return (String)state.get("entity_id");}
         double delta_time(){return ((Number)state.get("delta_time")).doubleValue();}
         double fixed_delta_time(){return ((Number)state.get("fixed_delta_time")).doubleValue();}
@@ -327,6 +361,8 @@ class Rustic {
         ActionState key(String n){return new ActionState(field("keys",n));}
         List<KeyEvent> key_events(){var out=new ArrayList<KeyEvent>();for(Object v:(List<?>)state.get("key_events"))out.add(new KeyEvent((Map<?,?>)v));return out;}
         boolean any_key_pressed(){return Boolean.TRUE.equals(state.get("any_key_pressed"));}
+        void print(String message){log("info",message);}
+        void warn(String message){log("warn",message);}
         void log(String l,String m){command("log","level",l,"message",m);}
         void set_enabled(boolean e){command("set_enabled","enabled",e);}
     }
@@ -335,14 +371,24 @@ class Rustic {
         void clone(String s){clone(s,null);}void clone(String s,String p){command("clone_instance","source",s,"parent",p);}
     }
     static class SceneApi {
+        Object getEnvironment(String field){return query(args("scene_environment_field","field",field));}
         Object getEnvironment(){return query(args("scene_environment"));}
         Object setEnvironment(Map<String,Object> settings){return query(args("scene_environment","settings",settings));}
         Object setSkyTexture(String path){return setEnvironment(Map.of("sky_image",path));}
         String Find(String p){return (String)field("scene_paths",p);}
         List<String> List(){return List("Game.scene");}
-        List<String> List(String p){var out=new ArrayList<String>();for(var e:((Map<?,?>)state.get("scene_paths")).entrySet())if(p.isEmpty()||p.equals("Game.scene")||((String)e.getKey()).startsWith(p+"."))out.add((String)e.getValue());return out;}
+        List<String> List(String p){var out=new ArrayList<String>();for(var e:((Map<?,?>)state.get("scene_paths")).entrySet())if(((String)e.getKey()).startsWith((p.isEmpty()?"Game.scene":p)+"."))out.add((String)e.getValue());return out;}
     }
-    static class GameApi {final SceneApi scene=new SceneApi();void setCurrentCamera(String s){command("set_current_camera","source",s);} }
+    static class GameApi {
+        CaptureHandle startRecording(){return startRecording(null,"game");}
+        CaptureHandle startRecording(String path){return startRecording(path,"game");}
+        CaptureHandle startRecording(String path,String source){return new CaptureHandle((String)query(args("capture_recording_start","path",path,"source",source)),true);}
+        void stopRecording(){stopRecording(null);}
+        void stopRecording(CaptureHandle handle){query(args("capture_recording_stop","id",handle==null?null:handle.id));}
+        CaptureHandle startHotMic(){return new CaptureHandle((String)query(args("capture_mic_start")),false);}
+        void stopHotMic(){stopHotMic(null);}
+        void stopHotMic(CaptureHandle handle){query(args("capture_mic_stop","id",handle==null?null:handle.id));}
+        final SceneApi scene=new SceneApi();void setCurrentCamera(String s){command("set_current_camera","source",s);} }
     private static String quote(String s){StringBuilder b=new StringBuilder("\"");for(char c:s.toCharArray()){if(c<32||c=='"'||c=='\\')b.append(String.format("\\u%04x",(int)c));else b.append(c);}return b.append('"').toString();}
     private static String encode(Object v){
         if(v instanceof Record){var fields=new LinkedHashMap<String,Object>();try{for(var c:v.getClass().getRecordComponents())fields.put(c.getName(),c.getAccessor().invoke(v));}catch(ReflectiveOperationException e){throw new IllegalArgumentException(e);}return encode(fields);}

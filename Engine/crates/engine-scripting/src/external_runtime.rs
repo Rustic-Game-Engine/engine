@@ -1210,6 +1210,19 @@ mod tests {
         fn set_enabled(&mut self, _enabled: bool) {}
         fn gameplay_query(&mut self, query: Value) -> Result<Value, String> {
             match query["op"].as_str().unwrap_or("") {
+                "capture_mic_start" => Ok(json!("mic-1")),
+                "capture_read" => {
+                    assert_eq!(query["id"], "mic-1");
+                    Ok(
+                        json!({"samples":[0.25,-0.5],"sampleRate":48000,"channels":1,
+                        "active":true,"droppedSamples":7}),
+                    )
+                }
+                "capture_mic_stop" | "capture_unload" => {
+                    assert_eq!(query["id"], "mic-1");
+                    self.translation[0] += 1.0;
+                    Ok(Value::Null)
+                }
                 "audio_get_output_devices" => Ok(json!([
                     {"id":"output:1","name":"USB \"speaker\" \\ 雪"},
                     {"id":"output:2","name":"USB \"speaker\" \\ 雪"}
@@ -1231,6 +1244,88 @@ mod tests {
                 }
                 _ => Err("unsupported gameplay query".into()),
             }
+        }
+    }
+
+    #[test]
+    fn microphone_sdks_preserve_pcm_packets_and_route_handle_controls() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Python, "mic.py", br"from rustic import Game,run
+def on_start():
+    mic=Game.startHotMic()
+    p=mic.read()
+    assert p['samples']==[0.25,-0.5] and p['sampleRate']==48000 and p['channels']==1 and p['active'] and p['droppedSamples']==7
+    Game.stopHotMic(mic)
+    mic.unload()
+run(globals())
+"),
+            (ScriptLanguage::Luau, "mic.luau", br"return {Start=function()
+    local mic=Game.startHotMic()
+    local p=mic:read()
+    assert(#p.samples==2 and p.samples[1]==0.25 and p.samples[2]==-0.5 and p.sampleRate==48000 and p.channels==1 and p.active and p.droppedSamples==7)
+    Game.stopHotMic(mic)
+    mic:unload()
+end}
+"),
+            (ScriptLanguage::JavaScript, "mic.js", br"globalThis.behavior={Start(){
+    const mic=rustic.game.startHotMic();
+    const p=mic.read();
+    if(p.samples.length!==2||p.samples[0]!==0.25||p.samples[1]!==-0.5||p.sampleRate!==48000||p.channels!==1||!p.active||p.droppedSamples!==7)throw Error('PCM');
+    Game.stopHotMic(mic);mic.unload();
+}};
+"),
+            (ScriptLanguage::C, "mic.c", br#"#include "rustic.h"
+#include <assert.h>
+void start(void){RusticCaptureHandle mic=rustic.game.startHotMic();RusticCaptureData p=Capture.read(mic);assert(p.count==2&&p.samples[0]==0.25&&p.samples[1]==-0.5&&p.sampleRate==48000&&p.channels==1&&p.active&&p.droppedSamples==7);Game.stopHotMic(&mic);Capture.unload(mic);}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}
+"#),
+            (ScriptLanguage::Cpp, "mic.cpp", br#"#include "rustic.hpp"
+#include <cassert>
+void start(){auto mic=rustic.game.startHotMic();auto p=mic.read();assert(p.at("samples").array().size()==2&&p.at("samples").array()[0].number()==0.25&&p.at("samples").array()[1].number()==-0.5&&p.at("sampleRate").number()==48000&&p.at("channels").number()==1&&p.at("active").boolean()&&p.at("droppedSamples").number()==7);Game.stopHotMic(&mic);mic.unload();}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}
+"#),
+            (ScriptLanguage::CSharp, "mic.cs", br#"using static Rustic;
+class Program{static void Main()=>Rustic.Run((c,dt)=>{if(c!="on_start")return;var mic=rustic.game.startHotMic();var p=mic.read();var samples=p.GetProperty("samples");if(samples.GetArrayLength()!=2||samples[0].GetDouble()!=0.25||samples[1].GetDouble()!=-0.5||p.GetProperty("sampleRate").GetInt32()!=48000||p.GetProperty("channels").GetInt32()!=1||!p.GetProperty("active").GetBoolean()||p.GetProperty("droppedSamples").GetInt32()!=7)throw new System.Exception("PCM");Game.stopHotMic(mic);mic.unload();});}
+"#),
+            (ScriptLanguage::Java, "mic.java", br#"class RusticBehavior extends Rustic{public static void main(String[] args)throws Exception{run((c,dt)->{if(!c.equals("on_start"))return;var mic=rustic.game.startHotMic();var p=(java.util.Map<?,?>)mic.read();var samples=(java.util.List<?>)p.get("samples");if(samples.size()!=2||((Number)samples.get(0)).doubleValue()!=0.25||((Number)samples.get(1)).doubleValue()!=-0.5||((Number)p.get("sampleRate")).intValue()!=48000||((Number)p.get("channels")).intValue()!=1||!(Boolean)p.get("active")||((Number)p.get("droppedSamples")).intValue()!=7)throw new AssertionError("PCM");Game.stopHotMic(mic);mic.unload();});}}
+"#),
+            (ScriptLanguage::Php, "mic.php", br"<?php
+require_once 'rustic.php';
+rustic_run(['on_start'=>function(){global $rustic,$Game;$mic=$rustic->game->startHotMic();$p=$mic->read();if($p['samples']!==[0.25,-0.5]||$p['sampleRate']!==48000||$p['channels']!==1||!$p['active']||$p['droppedSamples']!==7)throw new Exception('PCM');$Game->stopHotMic($mic);$mic->unload();}]);
+"),
+        ];
+        for &(language, name, source) in fixtures {
+            if language != ScriptLanguage::JavaScript
+                && !probe_language_toolchain(language).available
+            {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_API_ADAPTERS").is_none(),
+                    "{} toolchain required for capture conformance",
+                    language.display_name()
+                );
+                continue;
+            }
+            let host: Box<dyn GameplayHost> = Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            });
+            let host = if language == ScriptLanguage::JavaScript {
+                let mut behavior =
+                    JavaScriptBehavior::load(ScriptId::new(), source, name, host, 100_000).unwrap();
+                behavior.on_start().unwrap();
+                behavior.host()
+            } else {
+                let mut behavior =
+                    ExternalBehavior::load(ScriptId::new(), language, source, name, host).unwrap();
+                behavior.on_start().unwrap();
+                behavior.host()
+            };
+            assert_eq!(
+                host.lock().unwrap().translation(),
+                [2.0, 0.0, 0.0],
+                "{}",
+                language.display_name()
+            );
         }
     }
 

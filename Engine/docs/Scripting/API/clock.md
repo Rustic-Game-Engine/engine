@@ -17,7 +17,7 @@ The signatures and complete example below use JavaScript. Attach a JavaScript Ob
 
 ## Parameters
 
-Scale is finite non-negative; 1 is normal rate and 0.5 is half speed. JavaScript state returns the current scale and paused flag. Native getter/state availability varies; C/C++/Java timeScale requires a value.
+Scale is finite non-negative; 1 is normal rate and 0.5 is half speed. Clock.state() returns the current scale and paused flag in every gameplay language. C returns RusticClockState; C++ returns RusticValue; C# returns JsonElement; Java returns a map. C sets time scale with Clock.timeScale(value) and reads it with Clock.state().scale.
 
 ## Return and timing
 

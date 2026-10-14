@@ -1,5 +1,5 @@
 -- Thin Lua binding: Rust owns all progress, curves, paths, and composition.
-function Game.scene.getEnvironment() return rustic.query({op='scene_environment'}) end
+function Game.scene.getEnvironment(field) return rustic.query(field and {op='scene_environment_field',field=field} or {op='scene_environment'}) end
 function Game.scene.setEnvironment(settings)
     assert(type(settings)=='table','environment settings must be a table')
     if next(settings)==nil then return Game.scene.getEnvironment() end
@@ -370,6 +370,17 @@ function Components.find_in_children(entity,name) return rustic.query({op="compo
 World={}
 function World.find_by_tag(name) return rustic.query({op="world_find_by_tag",name=name}) end
 function World.find_in_radius(center,radius) return rustic.query({op="world_find_in_radius",center=center,radius=radius}) end
+
+-- Game mirrors the existing rustic.game capture methods.
+function Game.startRecording(path,options) return rustic.game:startRecording(path,options) end
+function Game.stopRecording(handle) return rustic.game:stopRecording(handle) end
+function Game.startHotMic() return rustic.game:startHotMic() end
+function Game.stopHotMic(handle) return rustic.game:stopHotMic(handle) end
+
+function rustic.get_object_attribute(source,name) return rustic.query({op='object_attribute',source=source,name=name}) end
+
+function rustic.print(...) print(...) end
+function rustic.warn(...) warn(...) end
 
 -- Canonical API paths.
 local sceneMethods={

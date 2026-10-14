@@ -11,8 +11,12 @@ instance = InstanceApi()
 
 class ObjectPath:
     def __init__(self, source="rustic.game"): self.source = source
-    def __getattr__(self, name): return ObjectPath(self.source + "." + name)
+    def __getattr__(self, name):
+        if self.source=="rustic.game" and name in ("startRecording","stopRecording","startHotMic","stopHotMic"): return getattr(Game,name)
+        return ObjectPath(self.source + "." + name)
     def __getitem__(self, name): return ObjectPath(self.source + "." + str(name))
+    def GetAttribute(self,name): return rustic.query(dict(op="object_attribute",source=self.source,name=name))
+    get_attribute=GetAttribute
     def EditAttribute(self, name, value):
         instance.commands.append({"op":"edit_attribute", "source":self.source, "name":name, "value":value})
     edit_attribute = EditAttribute
@@ -30,6 +34,9 @@ class RusticApi:
     def gameplay_connections(self): return self.state.get("gameplay_connections",[])
     def gameplay_states(self): return self.state.get("gameplay_states", [])
     def gameplay_callbacks(self): return self.state.get("gameplay_callbacks", [])
+    def find_entity(self,source): return self.query(dict(op="find_entity",source=source))
+    def edit_object_attribute(self,source,name,value): self.commands.append(dict(op="edit_attribute",source=source,name=name,value=value))
+    def get_object_attribute(self,source,name): return self.query(dict(op="object_attribute",source=source,name=name))
     def entity_id(self): return self.state["entity_id"]
     def delta_time(self): return self.state["delta_time"]
     def fixed_delta_time(self): return self.state["fixed_delta_time"]
@@ -45,18 +52,20 @@ class RusticApi:
     def key(self, name): return self.state["keys"].get(name, {"pressed":False,"released":False,"held":False,"axis":0})
     def key_events(self): return self.state["key_events"][:]
     def any_key_pressed(self): return self.state["any_key_pressed"]
+    def print(self,*values): self.log("info","\t".join(map(str,values)))
+    def warn(self,*values): self.log("warn","\t".join(map(str,values)))
     def log(self, level, message): self.commands.append({"op":"log","level":str(level),"message":str(message)})
     def set_enabled(self, enabled): self.commands.append({"op":"set_enabled","enabled":bool(enabled)})
 
 class SceneApi:
-    def getEnvironment(self): return rustic.query({"op":"scene_environment"})
+    def getEnvironment(self,field=None): return rustic.query({"op":"scene_environment"} if field is None else dict(op="scene_environment_field",field=field))
     def setEnvironment(self, settings): return rustic.query({"op":"scene_environment", "settings":settings})
     def setSkyTexture(self, path): return self.setEnvironment({"sky_image":path})
     def __init__(self): self.state = {}
     def Find(self, path): return self.state.get(path)
     def List(self, path="Game.scene"):
-        prefix = "" if path in ("", "Game.scene") else path.rstrip("./") + "."
-        return [entity for name, entity in self.state.items() if not prefix or name.startswith(prefix)]
+        prefix = (path or "Game.scene").rstrip("./") + "."
+        return [entity for name, entity in self.state.items() if name.startswith(prefix)]
 
 class GameApi:
     def setCurrentCamera(self, source):
@@ -398,6 +407,33 @@ class World:
     def find_by_tag(name): return rustic.query({"op":"world_find_by_tag",'name':name})
     @staticmethod
     def find_in_radius(center,radius): return rustic.query({"op":"world_find_in_radius",'center':center,'radius':radius})
+
+class LoadedAudio:
+    def __init__(self, source): self.source=source; self.id=None
+    def load(self):
+        if self.id is None: self.id=rustic.query(dict(op="audio_load",source=self.source))
+        return self
+    def _loaded(self):
+        if self.id is None: raise RuntimeError("audio is not loaded; call load() before play()")
+        return self.id
+    def play(self, options=None): return AudioVoice(rustic.query(dict(options or {},op="audio_loaded_play",entity=self._loaded())))
+    def stop(self): rustic.query(dict(op="audio_loaded_stop",entity=self._loaded()))
+    def pause(self): rustic.query(dict(op="audio_loaded_pause",entity=self._loaded()))
+    def resume(self): rustic.query(dict(op="audio_loaded_resume",entity=self._loaded()))
+    def unload(self):
+        if self.id is not None: rustic.query(dict(op="audio_unload",entity=self.id)); self.id=None
+    Unload=unload
+Audio.load=staticmethod(lambda source:LoadedAudio(source).load())
+class CaptureHandle:
+    def __init__(self,id,recording): self.id=id; self.recording=recording
+    def read(self): return rustic.query(dict(op="capture_read",id=self.id))
+    def unload(self): rustic.query(dict(op="capture_unload",id=self.id))
+    def stop(self): rustic.query(dict(op="capture_recording_stop" if self.recording else "capture_mic_stop",id=self.id))
+def _start_recording(path=None,options=None): return CaptureHandle(rustic.query(dict(op="capture_recording_start",path=path,source=(options or {}).get("source","game"))),True)
+Game.startRecording=_start_recording
+Game.stopRecording=lambda handle=None:rustic.query(dict(op="capture_recording_stop",id=None if handle is None else handle.id))
+Game.startHotMic=lambda:CaptureHandle(rustic.query(dict(op="capture_mic_start")),False)
+Game.stopHotMic=lambda handle=None:rustic.query(dict(op="capture_mic_stop",id=None if handle is None else handle.id))
 
 # Canonical API paths.
 from inspect import signature, Signature

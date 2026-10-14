@@ -44,7 +44,7 @@ globalThis.behavior = {
 
 - Create/select an active perspective camera before Play. It reaches the given position, identity rotation and 45-degree FOV in two seconds.
 - Lua/Luau/JavaScript additionally allow moveTo(position, duration, easing) and zoom(fov, duration, easing) for the current camera. Explicit targets work across all bindings.
-- C has no Camera.current helper: resolve an explicit camera ID. Other native bindings expose current.
+- Camera.current is available in every gameplay language, including C; it returns the active camera ID.
 - LookAt samples when starting; follow re-reads its target only during the finite duration. Orbit uses local XZ. Shake restores its initial position.
 - Check script attachment, enabled state and the Console when an operation fails. Asynchronous errors also appear in operation state. Callback exceptions disable the owner and clean up its actions.
 - Owner destruction, disable, successful reload or Stop cleans up owned actions and subscriptions. Failed reload retains the previous behavior's operations. See [Operation handles](/docs/api/operation-handles) for controls and lifetime details.

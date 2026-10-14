@@ -10,6 +10,12 @@ dependency/license audit, secret scan, Windows installer build, workflow syntax
 check, or installer release automation test fails or is skipped.
 The job summary links to the run; failed step logs contain diagnostic details.
 The fresh Windows installer is saved as a workflow artifact for seven days.
+The installer job also runs Windows PowerShell 5.1 toolchain-manager regression tests
+and silent packaged Setup tests. A local mock WinGet covers installed and missing
+tools, ordinary package failures, and initialization errors `142`/`0xc0000142` without
+downloading toolchains. Packaged tests verify a single PowerShell transcript for all
+selected languages, that a failing WinGet is not retried for later languages, and
+that bundled-only Setup does not start the toolchain manager.
 
 ## Installer releases
 
