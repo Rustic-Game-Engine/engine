@@ -4781,7 +4781,7 @@ fn move_project_entry(root: &Path, source: &Path, destination: &Path) -> Result<
     if target == source {
         return Ok(());
     }
-    relocate_project_entry(&source, &target)
+    relocate_project_entry_with_scripts(root, &source, &target)
 }
 
 // Resolve existing entries and reject symlinks, including symlinked ancestors.
@@ -4827,7 +4827,75 @@ fn rename_project_entry(root: &Path, source: &Path, name: &str) -> Result<(), St
     if source_path == destination {
         return Ok(());
     }
-    relocate_project_entry(&source_path, &destination)
+    relocate_project_entry_with_scripts(root, &source_path, &destination)
+}
+
+// Script attachments store IDs; only their registry paths change on relocation.
+// Prepare the registry before moving anything and restore files if persistence fails.
+fn relocate_project_entry_with_scripts(
+    root: &Path,
+    source: &Path,
+    destination: &Path,
+) -> Result<(), String> {
+    let root = root.canonicalize().map_err(|error| error.to_string())?;
+    let manifest_path = root.join("config/scripts.ron");
+    if !manifest_path.exists() {
+        return relocate_project_entry(source, destination);
+    }
+    let bytes = std::fs::read(&manifest_path).map_err(|error| error.to_string())?;
+    let mut manifest = load_manifest(&bytes)
+        .map_err(|error| error.to_string())?
+        .manifest;
+    let source_relative = source
+        .strip_prefix(&root)
+        .map_err(|error| error.to_string())?;
+    let destination_relative = destination
+        .strip_prefix(&root)
+        .map_err(|error| error.to_string())?;
+    let mut changed = false;
+    for entry in &mut manifest.scripts {
+        if let Ok(suffix) = entry.relative_path.strip_prefix(source_relative) {
+            let path = if suffix.as_os_str().is_empty() {
+                destination_relative.to_path_buf()
+            } else {
+                destination_relative.join(suffix)
+            };
+            let language = ScriptLanguage::from_path(&path)
+                .ok_or("Keep a supported script extension when renaming an attached script")?;
+            if !language.accepts_project_path(&path) {
+                return Err("Web UI scripts must stay inside the ui folder".into());
+            }
+            entry.relative_path = path;
+            entry.language = language;
+            changed = true;
+        }
+    }
+    if changed {
+        let mut paths = BTreeSet::new();
+        if manifest
+            .scripts
+            .iter()
+            .any(|entry| !paths.insert(&entry.relative_path))
+        {
+            return Err("A script is already registered at the destination".into());
+        }
+        // Do not relocate the registry itself along with the source folder.
+        if manifest_path.starts_with(source) {
+            return Err("Cannot move a folder containing the script registry".into());
+        }
+    }
+    relocate_project_entry(source, destination)?;
+    if changed && let Err(error) = save_manifest_atomic(&manifest_path, &manifest) {
+        return match relocate_project_entry(destination, source) {
+            Ok(()) => Err(format!(
+                "Could not update script links; move was undone: {error}"
+            )),
+            Err(rollback) => Err(format!(
+                "Could not update script links: {error}; could not undo move: {rollback}"
+            )),
+        };
+    }
+    Ok(())
 }
 
 fn project_path_occupied(path: &Path) -> Result<bool, String> {
@@ -5432,6 +5500,102 @@ mod explorer_tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    fn registered_script(root: &Path, path: &str) -> ScriptId {
+        let path = Path::new(path);
+        std::fs::create_dir_all(root.join(path.parent().unwrap())).unwrap();
+        std::fs::write(root.join(path), "return { Start = function() end }").unwrap();
+        register_script_asset(root, path).unwrap()
+    }
+
+    fn assert_script_link(root: &Path, id: ScriptId, path: &str) {
+        let manifest = load_manifest(&std::fs::read(root.join("config/scripts.ron")).unwrap())
+            .unwrap()
+            .manifest;
+        let entry = manifest
+            .scripts
+            .iter()
+            .find(|entry| entry.id == id)
+            .unwrap();
+        assert_eq!(entry.relative_path, Path::new(path));
+        // Play resolves the unchanged attachment ID through this registry and reads the source.
+        engine_scripting::source_descriptor(root, entry, 1024).unwrap();
+    }
+
+    #[test]
+    fn registered_script_links_follow_file_and_folder_relocations() {
+        let project = TestProject::new();
+        let root = &project.0;
+        let id = registered_script(root, "scripts/player.lua");
+        let nested = registered_script(root, "scripts/nested/start.lua");
+        let other = registered_script(root, "scripts-other/other.lua");
+        let attachment = ScriptComponent::new(id);
+        std::fs::write(root.join("scripts/player.lua.rmeta"), "identity").unwrap();
+        rename_project_entry(root, Path::new("scripts/player.lua"), "controller.lua").unwrap();
+        assert_script_link(root, attachment.script_id, "scripts/controller.lua");
+        assert!(!root.join("scripts/player.lua").exists());
+        rename_project_entry(root, Path::new("scripts"), "behaviors").unwrap();
+        assert_script_link(root, id, "behaviors/controller.lua");
+        assert_script_link(root, nested, "behaviors/nested/start.lua");
+        assert_script_link(root, other, "scripts-other/other.lua");
+        std::fs::create_dir(root.join("game")).unwrap();
+        move_project_entry(root, Path::new("behaviors"), Path::new("game")).unwrap();
+        assert_script_link(root, id, "game/behaviors/controller.lua");
+        assert_script_link(root, nested, "game/behaviors/nested/start.lua");
+        move_project_entry(
+            root,
+            Path::new("game/behaviors/controller.lua"),
+            Path::new("scripts-other"),
+        )
+        .unwrap();
+        assert_script_link(root, id, "scripts-other/controller.lua");
+        assert_eq!(
+            std::fs::read_to_string(root.join("scripts-other/controller.lua.rmeta")).unwrap(),
+            "identity"
+        );
+    }
+
+    #[test]
+    fn script_registry_write_failure_restores_source_and_sidecar() {
+        let project = TestProject::new();
+        let root = &project.0;
+        let id = registered_script(root, "scripts/player.lua");
+        std::fs::write(root.join("scripts/player.lua.rmeta"), "identity").unwrap();
+        let before = std::fs::read(root.join("config/scripts.ron")).unwrap();
+        // A directory at the atomic writer's temporary-file path forces a portable I/O failure.
+        std::fs::create_dir(root.join("config/scripts.ron.tmp")).unwrap();
+        let error = rename_project_entry(root, Path::new("scripts/player.lua"), "controller.lua")
+            .unwrap_err();
+        assert!(error.contains("move was undone"), "{error}");
+        assert_script_link(root, id, "scripts/player.lua");
+        assert_eq!(
+            std::fs::read(root.join("config/scripts.ron")).unwrap(),
+            before
+        );
+        assert!(root.join("scripts/player.lua.rmeta").is_file());
+        assert!(!root.join("scripts/controller.lua").exists());
+        assert!(!root.join("scripts/controller.lua.rmeta").exists());
+    }
+
+    #[test]
+    fn registered_scripts_reject_invalid_paths_and_registry_collisions() {
+        let project = TestProject::new();
+        let root = &project.0;
+        let id = registered_script(root, "scripts/player.lua");
+        let stale = registered_script(root, "scripts/old.lua");
+        std::fs::remove_file(root.join("scripts/old.lua")).unwrap();
+        assert!(rename_project_entry(root, Path::new("scripts/player.lua"), "old.lua").is_err());
+        assert!(rename_project_entry(root, Path::new("scripts/player.lua"), "player.txt").is_err());
+        assert_script_link(root, id, "scripts/player.lua");
+        let web = registered_script(root, "ui/hud.html");
+        assert!(move_project_entry(root, Path::new("ui/hud.html"), Path::new("scripts")).is_err());
+        assert!(rename_project_entry(root, Path::new("ui"), "overlay").is_err());
+        assert_script_link(root, web, "ui/hud.html");
+        let manifest = load_manifest(&std::fs::read(root.join("config/scripts.ron")).unwrap())
+            .unwrap()
+            .manifest;
+        assert!(manifest.scripts.iter().any(|entry| entry.id == stale));
     }
 
     #[test]
