@@ -107,4 +107,6 @@ GitHub access to this repository and are retained for 30 days.
 
 Explorer rename, clipboard, drag and script-scope controls are described in [`docs/EXPLORER.md`](docs/EXPLORER.md).
 
+3D camera controls and keyboard-focus troubleshooting are described in [`docs/VIEWPORT_NAVIGATION.md`](docs/VIEWPORT_NAVIGATION.md).
+
 Gameplay authors should start with [`docs/GAMEPLAY_PROGRAMMING.md`](docs/GAMEPLAY_PROGRAMMING.md).
