@@ -1,3 +1,4 @@
+global using Interpolation = Rustic.Smooth;
 global using Timer = Rustic.Timer;
 global using Path = Rustic.Path;
 using System;
@@ -207,6 +208,7 @@ static class Rustic {
         public static Gameplay.Handle fade(string? entity,double opacity,double duration,string easing="Linear")=>Tween.to(entity,"Opacity",opacity,duration,easing);
     }
     public static class Clock {
+        public static JsonElement state()=>Query(new{op="clock"});
         public static double timeScale(double? scale=null)=>Query(scale.HasValue?new {op="clock",scale=scale.Value}:(object)new{op="clock"}).GetProperty("scale").GetDouble();
         public static void pause()=>Query(new{op="clock",paused=true});public static void resume()=>Query(new{op="clock",paused=false});
     }
@@ -243,7 +245,29 @@ static class Rustic {
         public static Gameplay.Handle headTracking(string e,double[] target,double duration=0,string easing="Linear")=>Movement.lookAt(e,target,duration,easing);
         public static Gameplay.Handle recoil(string e,double[] rotation,double duration,string easing="Linear")=>Gameplay.Start(Tween.Action(e,"Rotation",rotation,duration,easing),false,1,true);
     }
+    public sealed class CaptureHandle {
+        public string Id {get;}
+        private readonly bool recording;
+        internal CaptureHandle(string id,bool recording){Id=id;this.recording=recording;}
+        public JsonElement read()=>Query(new{op="capture_read",id=Id});
+        public void unload()=>Query(new{op="capture_unload",id=Id});
+        public void stop()=>Query(new{op=recording?"capture_recording_stop":"capture_mic_stop",id=Id});
+    }
     public static class Audio{
+        public sealed class LoadedAudio {
+            private readonly string source;
+            private string? id;
+            internal LoadedAudio(string source){this.source=source;}
+            public LoadedAudio load(){if(id is null)id=Query(new{op="audio_load",source}).GetString()!;return this;}
+            private string Loaded()=>id??throw new InvalidOperationException("audio is not loaded; call load() before play()");
+            public Voice play(double volume=1,double pitch=1,bool loop=false,double[]? position=null)=>new(Query(new{op="audio_loaded_play",entity=Loaded(),volume,pitch,loop,position}).GetString()!);
+            public void stop()=>Query(new{op="audio_loaded_stop",entity=Loaded()});
+            public void pause()=>Query(new{op="audio_loaded_pause",entity=Loaded()});
+            public void resume()=>Query(new{op="audio_loaded_resume",entity=Loaded()});
+            public void unload(){if(id is not null){Query(new{op="audio_unload",entity=id});id=null;}}
+            public void Unload()=>unload();
+        }
+        public static LoadedAudio load(string source)=>new LoadedAudio(source).load();
         public static JsonElement get_output_devices()=>Query(new{op="audio_get_output_devices"});
         public static JsonElement get_input_devices()=>Query(new{op="audio_get_input_devices"});
         public static void set_output_device(string? device=null)=>Query(new{op="audio_set_output_device",device});
@@ -293,6 +317,12 @@ sealed class ObjectPath : System.Dynamic.DynamicObject {
     public ObjectPath(List<object> commands, string source="rustic.game") { this.commands=commands; this.source=source; }
     public override bool TryGetMember(System.Dynamic.GetMemberBinder binder, out object? result) { result=new ObjectPath(commands,source+"."+binder.Name); return true; }
     public ObjectPath this[string name] => new(commands,source+"."+name);
+    public object? GetAttribute(string name)=>RusticApi.ConvertValue(Rustic.Query(new{op="object_attribute",source,name}));
+    public object? get_attribute(string name)=>GetAttribute(name);
+    public Rustic.CaptureHandle startRecording(string? path=null,string source="game")=>Rustic.Game.startRecording(path,source);
+    public void stopRecording(Rustic.CaptureHandle? handle=null)=>Rustic.Game.stopRecording(handle);
+    public Rustic.CaptureHandle startHotMic()=>Rustic.Game.startHotMic();
+    public void stopHotMic(Rustic.CaptureHandle? handle=null)=>Rustic.Game.stopHotMic(handle);
     public void EditAttribute(string name, object? value) => commands.Add(new {op="edit_attribute",source,name,value});
     public void edit_attribute(string name, object? value) => EditAttribute(name,value);
 }
@@ -302,11 +332,14 @@ sealed class RusticApi {
     public dynamic game { get; }
     public RusticApi(List<object> commands) { Commands = commands; game=new ObjectPath(commands); }
     private object? Read(string group, string name) => State.GetProperty(group).TryGetProperty(name, out var v) ? ConvertValue(v) : null;
-    private static object? ConvertValue(JsonElement v) => v.ValueKind switch {
+    internal static object? ConvertValue(JsonElement v) => v.ValueKind switch {
         JsonValueKind.True => true, JsonValueKind.False => false,
         JsonValueKind.String => v.GetString(), JsonValueKind.Number => v.TryGetInt64(out var n) ? (object)n : v.GetDouble(),
         JsonValueKind.Array => v.EnumerateArray().Select(x=>x.GetDouble()).ToArray(), _ => null };
     private RusticActionState Action(string group,string name) => State.GetProperty(group).TryGetProperty(name,out var v) ? JsonSerializer.Deserialize<RusticActionState>(v)! : new();
+    public string? find_entity(string source)=>Rustic.Query(new{op="find_entity",source}).GetString();
+    public void edit_object_attribute(string source,string name,object? value)=>Commands.Add(new{op="edit_attribute",source,name,value});
+    public object? get_object_attribute(string source,string name)=>ConvertValue(Rustic.Query(new{op="object_attribute",source,name}));
     public string entity_id() => State.GetProperty("entity_id").GetString()!;
     public double delta_time() => State.GetProperty("delta_time").GetDouble();
     public double fixed_delta_time() => State.GetProperty("fixed_delta_time").GetDouble();
@@ -322,19 +355,26 @@ sealed class RusticApi {
     public RusticActionState key(string name) => Action("keys", name);
     public RusticKeyEvent[] key_events() => JsonSerializer.Deserialize<RusticKeyEvent[]>(State.GetProperty("key_events"))!;
     public bool any_key_pressed() => State.GetProperty("any_key_pressed").GetBoolean();
+    public void print(string message)=>log("info",message);
+    public void warn(string message)=>log("warn",message);
     public void log(string level,string message) => Commands.Add(new { op="log", level, message });
     public void set_enabled(bool enabled) => Commands.Add(new { op="set_enabled", enabled });
 }
 
 sealed class SceneApi {
+    public JsonElement getEnvironment(string field)=>Rustic.Query(new{op="scene_environment_field",field});
     public JsonElement getEnvironment() => Rustic.Query(new {op="scene_environment"});
     public JsonElement setEnvironment(object settings) => Rustic.Query(new {op="scene_environment", settings});
     public JsonElement setSkyTexture(string path) => setEnvironment(new {sky_image=path});
     public JsonElement State { get; set; }
     public string? Find(string path) => State.TryGetProperty(path, out var value) ? value.GetString() : null;
-    public IEnumerable<string> List(string path="Game.scene") => State.EnumerateObject().Where(x => path=="Game.scene" || x.Name.StartsWith(path+".")).Select(x => x.Value.GetString()!);
+    public IEnumerable<string> List(string path="Game.scene") => State.EnumerateObject().Where(x => x.Name.StartsWith((string.IsNullOrEmpty(path)?"Game.scene":path)+".")).Select(x => x.Value.GetString()!);
 }
 sealed class GameApi {
+    public Rustic.CaptureHandle startRecording(string? path=null,string source="game")=>new(Rustic.Query(new{op="capture_recording_start",path,source}).GetString()!,true);
+    public void stopRecording(Rustic.CaptureHandle? handle=null)=>Rustic.Query(new{op="capture_recording_stop",id=handle?.Id});
+    public Rustic.CaptureHandle startHotMic()=>new(Rustic.Query(new{op="capture_mic_start"}).GetString()!,false);
+    public void stopHotMic(Rustic.CaptureHandle? handle=null)=>Rustic.Query(new{op="capture_mic_stop",id=handle?.Id});
     public SceneApi scene { get; } = new();
     private readonly List<object> commands;
     public GameApi(List<object> commands) => this.commands = commands;

@@ -11,6 +11,9 @@ final class InstanceApi {
 final class ObjectPath {
     public function __construct(private InstanceApi $instance, private string $source="rustic.game") {}
     public function __get(string $name): ObjectPath { return new ObjectPath($this->instance, $this->source.".".$name); }
+    public function GetAttribute(string $name):mixed{global $rustic;return $rustic->query(["op"=>"object_attribute","source"=>$this->source,"name"=>$name]);}
+    public function get_attribute(string $name):mixed{return $this->GetAttribute($name);}
+    public function __call(string $name,array $args):mixed{global $Game;if($this->source!=="rustic.game")throw new BadMethodCallException($name);return $Game->$name(...$args);}
     public function EditAttribute(string $name, mixed $value): void { $this->instance->commands[]=["op"=>"edit_attribute","source"=>$this->source,"name"=>$name,"value"=>$value]; }
     public function edit_attribute(string $name, mixed $value): void { $this->EditAttribute($name,$value); }
 }
@@ -22,6 +25,9 @@ final class RusticApi {
         echo json_encode(["query"=>$query,"commands"=>$this->instance->commands],JSON_THROW_ON_ERROR),PHP_EOL;flush();$this->instance->commands=[];
         $r=json_decode(fgets(STDIN),true,flags:JSON_THROW_ON_ERROR);if(isset($r["error"]))throw new RuntimeException($r["error"]);return $r["result"];
     }
+    public function find_entity(string $source):?string{return $this->query(["op"=>"find_entity","source"=>$source]);}
+    public function edit_object_attribute(string $source,string $name,mixed $value):void{$this->instance->commands[]=["op"=>"edit_attribute","source"=>$source,"name"=>$name,"value"=>$value];}
+    public function get_object_attribute(string $source,string $name):mixed{return $this->query(["op"=>"object_attribute","source"=>$source,"name"=>$name]);}
     public function entity_id(): string { return $this->state["entity_id"]; }
     public function delta_time(): float { return $this->state["delta_time"]; }
     public function fixed_delta_time(): float { return $this->state["fixed_delta_time"]; }
@@ -37,18 +43,25 @@ final class RusticApi {
     public function key(string $name): array { return $this->state["keys"][$name] ?? ["pressed"=>false,"released"=>false,"held"=>false,"axis"=>0]; }
     public function key_events(): array { return $this->state["key_events"]; }
     public function any_key_pressed(): bool { return $this->state["any_key_pressed"]; }
+    public function print(mixed ...$values):void{$this->log("info",implode(" ",array_map("strval",$values)));}
+    public function warn(mixed ...$values):void{$this->log("warn",implode(" ",array_map("strval",$values)));}
     public function log(string $level,string $message): void { $this->instance->commands[]=["op"=>"log","level"=>$level,"message"=>$message]; }
     public function set_enabled(bool $enabled): void { $this->instance->commands[]=["op"=>"set_enabled","enabled"=>$enabled]; }
 }
 final class SceneApi {
+    public function getEnvironmentField(string $field):mixed{global $rustic;return $rustic->query(["op"=>"scene_environment_field","field"=>$field]);}
     public function getEnvironment(): array { global $rustic; return $rustic->query(["op"=>"scene_environment"]); }
     public function setEnvironment(array $settings): array { global $rustic; return $rustic->query(["op"=>"scene_environment","settings"=>(object)$settings]); }
     public function setSkyTexture(string $path): array { return $this->setEnvironment(["sky_image"=>$path]); }
     public array $state=[];
     public function Find(string $path): ?string { return $this->state[$path] ?? null; }
-    public function List(string $path="Game.scene"): array { return array_values(array_filter($this->state, fn($id,$name)=>$path==="Game.scene" || str_starts_with($name,$path."."), ARRAY_FILTER_USE_BOTH)); }
+    public function List(string $path="Game.scene"): array { return array_values(array_filter($this->state, fn($id,$name)=>str_starts_with($name,($path===""?"Game.scene":$path)."."), ARRAY_FILTER_USE_BOTH)); }
 }
 final class GameApi {
+    function startRecording(?string $path=null,array $options=[]):CaptureHandle{global $rustic;return new CaptureHandle($rustic->query(["op"=>"capture_recording_start","path"=>$path,"source"=>$options["source"]??"game"]),true);}
+    function stopRecording(?CaptureHandle $handle=null):void{global $rustic;$rustic->query(["op"=>"capture_recording_stop","id"=>$handle?->id]);}
+    function startHotMic():CaptureHandle{global $rustic;return new CaptureHandle($rustic->query(["op"=>"capture_mic_start"]),false);}
+    function stopHotMic(?CaptureHandle $handle=null):void{global $rustic;$rustic->query(["op"=>"capture_mic_stop","id"=>$handle?->id]);}
     public SceneApi $scene;
     public function __construct(private InstanceApi $instance){ $this->scene=new SceneApi(); }
     public function setCurrentCamera(string $source): void { $this->instance->commands[]=["op"=>"set_current_camera","source"=>$source]; }
@@ -212,7 +225,7 @@ final class Effects{
     static function pulse(?string $e,array $scale,float $d,string $ease="Linear"):GameplayHandle{return Gameplay::start(Tween::action($e,"Scale",$scale,$d,$ease),false,1,true);}
     static function shake(?string $e,float $strength,float $duration,string $easing="Linear"):GameplayHandle{return Gameplay::start(["kind"=>"shake","entity"=>Gameplay::entity($e),"strength"=>$strength,"duration"=>$duration,"easing"=>$easing]);}
 }
-final class Clock{static function timeScale(?float $scale=null):float{global $rustic;return $rustic->query($scale===null?["op"=>"clock"]:["op"=>"clock","scale"=>$scale])["scale"];}static function pause():void{global $rustic;$rustic->query(["op"=>"clock","paused"=>true]);}static function resume():void{global $rustic;$rustic->query(["op"=>"clock","paused"=>false]);}}
+final class Clock{static function state():array{global $rustic;return $rustic->query(["op"=>"clock"]);}static function timeScale(?float $scale=null):float{global $rustic;return $rustic->query($scale===null?["op"=>"clock"]:["op"=>"clock","scale"=>$scale])["scale"];}static function pause():void{global $rustic;$rustic->query(["op"=>"clock","paused"=>true]);}static function resume():void{global $rustic;$rustic->query(["op"=>"clock","paused"=>false]);}}
 final class Camera{
     static function current():string{global $rustic;return $rustic->query(["op"=>"camera_current"]);}
     static function moveTo(?string $e,array $p,float $d,string $ease="Linear"):GameplayHandle{return Tween::move($e,$p,$d,$ease);}
@@ -244,7 +257,25 @@ final class Animation{
 final class AudioVoice{
     function __construct(public string $id){}function stop():void{global $rustic;$rustic->query(["op"=>"audio_stop","entity"=>$this->id]);}function pause():void{global $rustic;$rustic->query(["op"=>"audio_pause","entity"=>$this->id]);}function resume():void{global $rustic;$rustic->query(["op"=>"audio_resume","entity"=>$this->id]);}
 }
+final class LoadedAudio {
+    private ?string $id=null;
+    function __construct(private string $source){}
+    function load():self{global $rustic;if($this->id===null)$this->id=$rustic->query(["op"=>"audio_load","source"=>$this->source]);return $this;}
+    private function loaded():string{if($this->id===null)throw new RuntimeException("audio is not loaded; call load() before play()");return $this->id;}
+    function play(array $options=[]):AudioVoice{global $rustic;return new AudioVoice($rustic->query(["op"=>"audio_loaded_play","entity"=>$this->loaded()]+$options));}
+    function stop():void{global $rustic;$rustic->query(["op"=>"audio_loaded_stop","entity"=>$this->loaded()]);}
+    function pause():void{global $rustic;$rustic->query(["op"=>"audio_loaded_pause","entity"=>$this->loaded()]);}
+    function resume():void{global $rustic;$rustic->query(["op"=>"audio_loaded_resume","entity"=>$this->loaded()]);}
+    function unload():void{global $rustic;if($this->id!==null){$rustic->query(["op"=>"audio_unload","entity"=>$this->id]);$this->id=null;}}
+}
+final class CaptureHandle {
+    function __construct(public string $id,private bool $recording){}
+    function read():array{global $rustic;return $rustic->query(["op"=>"capture_read","id"=>$this->id]);}
+    function unload():void{global $rustic;$rustic->query(["op"=>"capture_unload","id"=>$this->id]);}
+    function stop():void{global $rustic;$rustic->query(["op"=>$this->recording?"capture_recording_stop":"capture_mic_stop","id"=>$this->id]);}
+}
 final class Audio{
+    static function load(string $source):LoadedAudio{return (new LoadedAudio($source))->load();}
     static function get_output_devices():array{global $rustic;return $rustic->query(["op"=>"audio_get_output_devices"]);}
     static function get_input_devices():array{global $rustic;return $rustic->query(["op"=>"audio_get_input_devices"]);}
     static function set_output_device(?string $device=null):void{global $rustic;$rustic->query(["op"=>"audio_set_output_device","device"=>$device]);}

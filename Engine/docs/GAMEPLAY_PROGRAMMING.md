@@ -302,3 +302,5 @@ use native member calls, subscripts, or path-selection methods. See
 [Edit scene objects](Scripting/sceneObjects.md) for exact attachment steps, all
 language examples, supported values, and current limitations. This does not
 invoke another script's custom functions or load another scene.
+
+See [APIs in every language](Scripting/apiLanguages.md) for API families shared by every gameplay binding, reusable audio, capture handles, and live object queries.

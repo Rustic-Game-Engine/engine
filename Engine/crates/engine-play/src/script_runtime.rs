@@ -962,6 +962,30 @@ impl GameplayHost for RuntimeHost {
             .get("op")
             .and_then(serde_json::Value::as_str)
             .ok_or("query operation is missing")?;
+        if op == "find_entity" {
+            let source = query["source"]
+                .as_str()
+                .ok_or("entity source must be a string")?;
+            return serde_json::to_value(self.find_entity(source)?).map_err(|e| e.to_string());
+        }
+        if op == "object_attribute" {
+            let source = query["source"]
+                .as_str()
+                .ok_or("object source must be a string")?;
+            let name = query["name"]
+                .as_str()
+                .ok_or("attribute name must be a string")?;
+            return Ok(match self.object_attribute(source, name)? {
+                None | Some(EngineValue::Entity(None)) => serde_json::Value::Null,
+                Some(EngineValue::Boolean(value)) => serde_json::json!(value),
+                Some(EngineValue::Integer(value)) => serde_json::json!(value),
+                Some(EngineValue::Number(value)) => serde_json::json!(value),
+                Some(EngineValue::String(value)) => serde_json::json!(value),
+                Some(EngineValue::Vec2(value)) => serde_json::json!(value),
+                Some(EngineValue::Vec3(value)) => serde_json::json!(value),
+                Some(EngineValue::Entity(Some(value))) => serde_json::json!(value),
+            });
+        }
         if crate::entity_services::handles(op) {
             let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
             return crate::entity_services::query(&mut world, query);
@@ -2161,6 +2185,138 @@ mod tests {
         save_manifest_atomic,
     };
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one shared fixture harness verifies all ten adapters"
+    )]
+    fn audio_capture_and_live_reads_conform_in_every_available_adapter() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (
+                ScriptLanguage::Lua54,
+                "parity.lua",
+                include_bytes!("../tests/fixtures/api-parity/parity.lua").as_slice(),
+            ),
+            (
+                ScriptLanguage::Luau,
+                "parity.luau",
+                include_bytes!("../tests/fixtures/api-parity/parity.luau").as_slice(),
+            ),
+            (
+                ScriptLanguage::JavaScript,
+                "parity.js",
+                include_bytes!("../tests/fixtures/api-parity/parity.js").as_slice(),
+            ),
+            (
+                ScriptLanguage::Web,
+                "parity.html",
+                include_bytes!("../tests/fixtures/api-parity/parity.html").as_slice(),
+            ),
+            (
+                ScriptLanguage::Python,
+                "parity.py",
+                include_bytes!("../tests/fixtures/api-parity/parity.py").as_slice(),
+            ),
+            (
+                ScriptLanguage::C,
+                "parity.c",
+                include_bytes!("../tests/fixtures/api-parity/parity.c").as_slice(),
+            ),
+            (
+                ScriptLanguage::Cpp,
+                "parity.cpp",
+                include_bytes!("../tests/fixtures/api-parity/parity.cpp").as_slice(),
+            ),
+            (
+                ScriptLanguage::CSharp,
+                "parity.cs",
+                include_bytes!("../tests/fixtures/api-parity/parity.cs").as_slice(),
+            ),
+            (
+                ScriptLanguage::Java,
+                "parity.java",
+                include_bytes!("../tests/fixtures/api-parity/parity.java").as_slice(),
+            ),
+            (
+                ScriptLanguage::Php,
+                "parity.php",
+                include_bytes!("../tests/fixtures/api-parity/parity.php").as_slice(),
+            ),
+        ];
+        for &(language, name, source) in fixtures {
+            if !matches!(
+                language,
+                ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
+            ) && !engine_scripting::probe_language_toolchain(language).available
+            {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_API_ADAPTERS").is_none(),
+                    "{} toolchain required for API conformance",
+                    language.display_name()
+                );
+                eprintln!(
+                    "SKIPPED API conformance {}: missing toolchain",
+                    language.display_name()
+                );
+                continue;
+            }
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir(temp.path().join("assets")).unwrap();
+            let path = temp.path().join("assets/tone.wav");
+            let mut wav = hound::WavWriter::create(
+                &path,
+                hound::WavSpec {
+                    channels: 1,
+                    sample_rate: 8000,
+                    bits_per_sample: 16,
+                    sample_format: hound::SampleFormat::Int,
+                },
+            )
+            .unwrap();
+            wav.write_sample(1000_i16).unwrap();
+            wav.finalize().unwrap();
+            let mut world = SceneWorld::new();
+            let entity = EntitySnapshot::default();
+            let id = entity.id;
+            world
+                .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+                .unwrap();
+            let world = Arc::new(Mutex::new(world));
+            let mut host = environment_host(&world);
+            host.entity = id;
+            host.snapshot_root = temp.path().into();
+            let context = Arc::clone(&host.gameplay);
+            let mut behavior =
+                RuntimeBehavior::load(language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap_or_else(|e| panic!("{} load: {e}", language.display_name()));
+            behavior
+                .on_start()
+                .unwrap_or_else(|e| panic!("{} start: {e}", language.display_name()));
+            assert_eq!(
+                context.lock().unwrap().audio.voices.len(),
+                1,
+                "{} playback",
+                language.display_name()
+            );
+            std::fs::remove_file(path).unwrap();
+            context
+                .lock()
+                .unwrap()
+                .audio_capture
+                .submit(&[0.25, -0.25, 0.5, -0.5]);
+            behavior
+                .update(0.01)
+                .unwrap_or_else(|e| panic!("{} update: {e}", language.display_name()));
+            assert!(context.lock().unwrap().audio.voices.is_empty());
+            let mut wav = hound::WavReader::open(temp.path().join("capture.wav")).unwrap();
+            assert_eq!(
+                wav.samples::<f32>().collect::<Result<Vec<_>, _>>().unwrap(),
+                vec![0.25, -0.25, 0.5, -0.5]
+            );
+            eprintln!("PASSED API conformance {}", language.display_name());
+        }
+    }
 
     #[test]
     fn lua_and_luau_recording_handles_retain_samples_and_save_wav() {
