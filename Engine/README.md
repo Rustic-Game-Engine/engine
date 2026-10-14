@@ -70,6 +70,30 @@ removed through Windows Installed Apps. Because it is a desktop application, its
 folder is not added to `PATH` by default; pass `-InstallDirectoryOnPath` to select that
 installer option by default.
 
+The builder validates the installer script with Inno Setup before compiling the
+engine. This preflight omits the unbuilt binaries and disables output; it cannot
+produce a distributable installer.
+
+Setup checks and installs all selected optional toolchains in one hidden,
+noninteractive PowerShell process as the original user. Already-installed toolchains
+are skipped. If PowerShell cannot start, or WinGet returns an initialization failure
+(`142` or `0xc0000142`), Setup reports the optional-toolchain failure once and leaves
+the installed engine usable with its bundled languages. Setup always saves a log in
+`%TEMP%` named `Setup Log ...txt`; the failure dialog gives its exact path. To choose
+a persistent location, run `RusticGameEngine-Setup-<version>.exe /LOG="C:\path\setup.log"`.
+If PowerShell started, its transcript is in the original user's
+`%LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log`. Repair the failing
+PowerShell or Microsoft App Installer installation before retrying **Language
+Toolchain Manager**. The Setup log records launch errors and exit codes even when
+the transcript could not be created.
+
+On Windows, run the toolchain regression tests with
+`powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-language-toolchains.ps1`.
+Pass `-InstallerPath .\dist\RusticGameEngine-Setup-<version>.exe` to also test silent
+packaged Setup with all optional languages, simulated WinGet initialization failures,
+and bundled languages only. The tests use a local mock WinGet executable and never
+download or install external toolchains.
+
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the decision-record and project-file safety
 conventions.
 

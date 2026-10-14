@@ -73,6 +73,16 @@ if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 Push-Location $workspaceRoot
 try {
+    # Compile Setup's sections and Pascal code before the expensive Cargo build.
+    # /O- prevents producing a preflight installer; only unbuilt binaries are omitted.
+    Write-Host 'Validating the Windows installer script...'
+    & $iscc '/O-' '/DInstallerPreflight=1' 'installer\RusticGameEngine.iss'
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup preflight failed with exit code $LASTEXITCODE." }
+
+    Write-Host 'Testing the toolchain manager with Windows PowerShell...'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-language-toolchains.ps1'
+    if ($LASTEXITCODE -ne 0) { throw "Toolchain manager tests failed with exit code $LASTEXITCODE." }
+
     Write-Host 'Building bundled Luau API host...'
     & $cargo build --locked --manifest-path 'apps/luau-host/Cargo.toml' --profile distribution --target-dir 'target'
     if ($LASTEXITCODE -ne 0) { throw "Luau host build failed with exit code $LASTEXITCODE." }
