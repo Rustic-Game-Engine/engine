@@ -174,7 +174,7 @@ struct Handle {
     Handle& control(const char* command){rustic.gameplay(rustic_detail::object({{"command",command},{"handle",id}}));if(std::string(command)=="cancel")release();return *this;}
     Handle& pause(){return control("pause");}Handle& resume(){return control("resume");}Handle& cancel(){return control("cancel");}Handle& reverse(){return control("reverse");}
 };
-inline std::string entity(const std::string& id){if(id.empty())return rustic.entity_id();return Game.scene.Find(id).value_or(id);}
+inline std::string entity(const std::string& id){if(id.empty())return rustic.entity_id();if(id.starts_with("game.scene."))return rustic.query(rustic_detail::object({{"op","scene_object"},{"source",id}})).string();return Game.scene.Find(id).value_or(id);}
 inline std::shared_ptr<Handle> start(RusticValue action,bool looping=false,int repeats=0,bool pingPong=false){
     auto h=std::make_shared<Handle>();h->id="gameplay-"+std::to_string(++serial);handles[h->id]=h;collect(action,h->tokens);
     rustic.gameplay(rustic_detail::object({{"command","start"},{"handle",h->id},{"action",std::move(action)},{"on_finished",h->id},{"playback",rustic_detail::object({{"looping",looping},{"repeats",repeats},{"ping_pong",pingPong}})}}));return h;
@@ -392,5 +392,211 @@ inline std::vector<std::string> find_in_radius(RusticVector3 center,double radiu
 }
 
 struct RusticBehavior {std::function<void()> on_create={},on_start={},on_enable={},on_disable={},on_destroy={},on_stop={};std::function<void(double)> fixed_update={},update={};};
+
+// Canonical API paths.
+struct CanonicalScenePath {
+  std::string source;
+  void clone(std::optional<std::string> parent={})const{::instance.clone(source,parent);}
+  void add(std::optional<std::string> parent={})const{::instance.add(source,parent);}
+  void setCurrentCamera()const{::Game.setCurrentCamera(source);}
+  void emit(const std::string& name,RusticValue::Array arguments)const{::Events::emit(name,std::move(arguments),source);}
+  CanonicalScenePath operator[](const std::string& name)const{return {source+"."+name};}
+  operator std::string()const{return source;}
+  template<class... A> decltype(auto) tweenTo(A&&... args)const{return ::Tween::to(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tweenMove(A&&... args)const{return ::Tween::move(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tweenRotate(A&&... args)const{return ::Tween::rotate(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tweenScale(A&&... args)const{return ::Tween::scale(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tweenAction(A&&... args)const{return ::Tween::action(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) movementMoveTo(A&&... args)const{return ::Movement::moveTo(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) movementMove(A&&... args)const{return ::Movement::move(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) movementRotateTo(A&&... args)const{return ::Movement::rotateTo(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) movementLookAt(A&&... args)const{return ::Movement::lookAt(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) movementFollow(A&&... args)const{return ::Movement::follow(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) movementOrbit(A&&... args)const{return ::Movement::orbit(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) pathFollow(A&&... args)const{return ::Path::follow(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) effectsFade(A&&... args)const{return ::Effects::fade(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) effectsFlash(A&&... args)const{return ::Effects::flash(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) effectsShake(A&&... args)const{return ::Effects::shake(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) effectsPulse(A&&... args)const{return ::Effects::pulse(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) cameraZoom(A&&... args)const{return ::Camera::zoom(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) cameraFov(A&&... args)const{return ::Camera::fov(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) cameraTransition(A&&... args)const{return ::Camera::transition(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsImpulse(A&&... args)const{return ::Physics::impulse(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsForce(A&&... args)const{return ::Physics::force(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsLaunch(A&&... args)const{return ::Physics::launch(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsKnockback(A&&... args)const{return ::Physics::knockback(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationRegisterClip(A&&... args)const{return ::Animation::registerClip(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationClips(A&&... args)const{return ::Animation::clips(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationAction(A&&... args)const{return ::Animation::action(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationPlay(A&&... args)const{return ::Animation::play(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationBlend(A&&... args)const{return ::Animation::blend(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationTransition(A&&... args)const{return ::Animation::transition(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationIk(A&&... args)const{return ::Animation::ik(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationFootPlacement(A&&... args)const{return ::Animation::footPlacement(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationLookAt(A&&... args)const{return ::Animation::lookAt(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationHeadTracking(A&&... args)const{return ::Animation::headTracking(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationRecoil(A&&... args)const{return ::Animation::recoil(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationAddMarker(A&&... args)const{return ::Animation::addMarker(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) eventsConnect(A&&... args)const{return ::Events::connect(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tagsAdd(A&&... args)const{return ::Tags::add(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tagsRemove(A&&... args)const{return ::Tags::remove(source,std::forward<A>(args)...);}
+  template<class First,class... A> decltype(auto) groupsAdd(First&& first,A&&... args)const{return ::Groups::add(std::forward<First>(first),source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) hierarchySetParent(A&&... args)const{return ::Hierarchy::set_parent(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) hierarchyGetChildren(A&&... args)const{return ::Hierarchy::get_children(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) hierarchyDetach(A&&... args)const{return ::Hierarchy::detach(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) entityDestroy(A&&... args)const{return ::Entity::destroy(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) entityDestroyAfter(A&&... args)const{return ::Entity::destroy_after(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) entityIsValid(A&&... args)const{return ::Entity::is_valid(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) componentsHas(A&&... args)const{return ::Components::has(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) componentsGetAll(A&&... args)const{return ::Components::get_all(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) componentsFindInChildren(A&&... args)const{return ::Components::find_in_children(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tween(A&&... args)const{return ::Tween::to(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) moveTo(A&&... args)const{return ::Movement::moveTo(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) move(A&&... args)const{return ::Movement::move(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) rotateTo(A&&... args)const{return ::Movement::rotateTo(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) lookAt(A&&... args)const{return ::Movement::lookAt(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) follow(A&&... args)const{return ::Movement::follow(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) orbit(A&&... args)const{return ::Movement::orbit(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) fade(A&&... args)const{return ::Effects::fade(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) flash(A&&... args)const{return ::Effects::flash(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) shake(A&&... args)const{return ::Effects::shake(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) pulse(A&&... args)const{return ::Effects::pulse(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) impulse(A&&... args)const{return ::Physics::impulse(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) force(A&&... args)const{return ::Physics::force(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) launch(A&&... args)const{return ::Physics::launch(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) knockback(A&&... args)const{return ::Physics::knockback(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) playAnimation(A&&... args)const{return ::Animation::play(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) destroy(A&&... args)const{return ::Entity::destroy(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) destroyAfter(A&&... args)const{return ::Entity::destroy_after(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) isValid(A&&... args)const{return ::Entity::is_valid(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) addTag(A&&... args)const{return ::Tags::add(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) removeTag(A&&... args)const{return ::Tags::remove(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) setParent(A&&... args)const{return ::Hierarchy::set_parent(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) getChildren(A&&... args)const{return ::Hierarchy::get_children(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) detach(A&&... args)const{return ::Hierarchy::detach(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) hasComponent(A&&... args)const{return ::Components::has(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) getComponents(A&&... args)const{return ::Components::get_all(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) findInChildren(A&&... args)const{return ::Components::find_in_children(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) followPath(A&&... args)const{return ::Path::follow(source,std::forward<A>(args)...);}
+  void EditAttribute(const std::string& name,RusticValue value)const{::rustic.edit_object_attribute(source,name,std::move(value));}
+  void edit_attribute(const std::string& name,RusticValue value)const{EditAttribute(name,std::move(value));}
+};
+struct CanonicalFilePath {
+  std::string source;
+  CanonicalFilePath operator[](const std::string& name)const{return {source+(source.empty()?"":"/")+name};}
+  operator std::string()const{return source;}
+  template<class... A> decltype(auto) audioPlay(A&&... args)const{return ::Audio::play(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioPlayAt(A&&... args)const{return ::Audio::playAt(source,std::forward<A>(args)...);}
+  template<class First,class... A> decltype(auto) animationLoad(First&& first,A&&... args)const{return ::Animation::load(std::forward<First>(first),source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) play(A&&... args)const{return ::Audio::play(source,std::forward<A>(args)...);}
+  template<class... A> decltype(auto) playAt(A&&... args)const{return ::Audio::playAt(source,std::forward<A>(args)...);}
+  template<class First,class... A> decltype(auto) loadAnimation(First&& first,A&&... args)const{return ::Animation::load(std::forward<First>(first),source,std::forward<A>(args)...);}
+  void add(std::optional<std::string> parent={})const{::instance.add(source,parent);}
+  void clone(std::optional<std::string> parent={})const{::instance.clone(source,parent);}
+  auto setSkyTexture()const{return ::Game.scene.setSkyTexture(source);}
+};
+struct CanonicalGlobalApi {
+  CanonicalFilePath files{""};
+  template<class... A> decltype(auto) tweenValue(A&&... args)const{return ::Tween::value(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) timerAfter(A&&... args)const{return ::Timer::after(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) timerEvery(A&&... args)const{return ::Timer::every(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) smoothLerp(A&&... args)const{return ::Smooth::lerp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) smoothSlerp(A&&... args)const{return ::Smooth::slerp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) smoothInverseLerp(A&&... args)const{return ::Smooth::inverseLerp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) smoothRemap(A&&... args)const{return ::Smooth::remap(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) smoothSmoothDamp(A&&... args)const{return ::Smooth::smoothDamp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsRaycast(A&&... args)const{return ::Physics::raycast(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsSphereCast(A&&... args)const{return ::Physics::sphereCast(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsOverlap(A&&... args)const{return ::Physics::overlap(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) physicsExplosion(A&&... args)const{return ::Physics::explosion(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) clockTimeScale(A&&... args)const{return ::Clock::timeScale(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) clockPause(A&&... args)const{return ::Clock::pause(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) clockResume(A&&... args)const{return ::Clock::resume(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) pathCreate(A&&... args)const{return ::Path::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) sequenceNew(A&&... args)const{return ::Sequence::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) sequenceCreate(A&&... args)const{return ::Sequence::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) timelineNew(A&&... args)const{return ::Timeline::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) timelineCreate(A&&... args)const{return ::Timeline::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) eventsOn(A&&... args)const{return ::Events::on(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) eventsOnce(A&&... args)const{return ::Events::once(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) eventsEmit(A&&... args)const{return ::Events::emit(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) eventsDisconnect(A&&... args)const{return ::Events::disconnect(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioGetOutputDevices(A&&... args)const{return ::Audio::get_output_devices(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioGetInputDevices(A&&... args)const{return ::Audio::get_input_devices(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioSetOutputDevice(A&&... args)const{return ::Audio::set_output_device(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioSetInputDevice(A&&... args)const{return ::Audio::set_input_device(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioVolume(A&&... args)const{return ::Audio::volume(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioPitch(A&&... args)const{return ::Audio::pitch(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioFadeIn(A&&... args)const{return ::Audio::fadeIn(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioFadeOut(A&&... args)const{return ::Audio::fadeOut(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) audioCrossfade(A&&... args)const{return ::Audio::crossfade(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationValue(A&&... args)const{return ::Animation::value(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationStop(A&&... args)const{return ::Animation::stop(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationPause(A&&... args)const{return ::Animation::pause(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationSpeed(A&&... args)const{return ::Animation::speed(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) animationLoop(A&&... args)const{return ::Animation::loop(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) cameraCurrent(A&&... args)const{return ::Camera::current(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) tagsFindAll(A&&... args)const{return ::Tags::find_all(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) groupsCreate(A&&... args)const{return ::Groups::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) groupsGetMembers(A&&... args)const{return ::Groups::get_members(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) worldFindByTag(A&&... args)const{return ::World::find_by_tag(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) worldFindInRadius(A&&... args)const{return ::World::find_in_radius(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) after(A&&... args)const{return ::Timer::after(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) every(A&&... args)const{return ::Timer::every(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) lerp(A&&... args)const{return ::Smooth::lerp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) slerp(A&&... args)const{return ::Smooth::slerp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) inverseLerp(A&&... args)const{return ::Smooth::inverseLerp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) remap(A&&... args)const{return ::Smooth::remap(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) smoothDamp(A&&... args)const{return ::Smooth::smoothDamp(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) raycast(A&&... args)const{return ::Physics::raycast(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) sphereCast(A&&... args)const{return ::Physics::sphereCast(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) overlap(A&&... args)const{return ::Physics::overlap(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) explosion(A&&... args)const{return ::Physics::explosion(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) timeScale(A&&... args)const{return ::Clock::timeScale(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) pause(A&&... args)const{return ::Clock::pause(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) resume(A&&... args)const{return ::Clock::resume(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) createPath(A&&... args)const{return ::Path::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) sequence(A&&... args)const{return ::Sequence::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) timeline(A&&... args)const{return ::Timeline::create(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) on(A&&... args)const{return ::Events::on(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) once(A&&... args)const{return ::Events::once(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) emit(A&&... args)const{return ::Events::emit(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) disconnect(A&&... args)const{return ::Events::disconnect(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) currentCamera(A&&... args)const{return ::Camera::current(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) getOutputDevices(A&&... args)const{return ::Audio::get_output_devices(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) get_output_devices(A&&... args)const{return ::Audio::get_output_devices(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) getInputDevices(A&&... args)const{return ::Audio::get_input_devices(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) get_input_devices(A&&... args)const{return ::Audio::get_input_devices(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) setOutputDevice(A&&... args)const{return ::Audio::set_output_device(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) set_output_device(A&&... args)const{return ::Audio::set_output_device(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) setInputDevice(A&&... args)const{return ::Audio::set_input_device(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) set_input_device(A&&... args)const{return ::Audio::set_input_device(std::forward<A>(args)...);}
+  auto getEnvironment()const{return ::Game.scene.getEnvironment();}
+  auto setEnvironment(RusticValue::Object settings)const{return ::Game.scene.setEnvironment(std::move(settings));}
+  void setCurrentCamera(const std::string& source)const{::Game.setCurrentCamera(source);}
+  template<class... A> decltype(auto) query(A&&... args)const{return ::rustic.query(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) gameplay(A&&... args)const{return ::rustic.gameplay(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) gameplay_connections(A&&... args)const{return ::rustic.gameplay_connections(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) gameplay_states(A&&... args)const{return ::rustic.gameplay_states(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) gameplay_callbacks(A&&... args)const{return ::rustic.gameplay_callbacks(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) entity_id(A&&... args)const{return ::rustic.entity_id(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) delta_time(A&&... args)const{return ::rustic.delta_time(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) fixed_delta_time(A&&... args)const{return ::rustic.fixed_delta_time(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) get_translation(A&&... args)const{return ::rustic.get_translation(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) set_translation(A&&... args)const{return ::rustic.set_translation(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) get_property(A&&... args)const{return ::rustic.get_property(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) set_property(A&&... args)const{return ::rustic.set_property(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) GetAttribute(A&&... args)const{return ::rustic.GetAttribute(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) get_attribute(A&&... args)const{return ::rustic.get_attribute(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) EditAttribute(A&&... args)const{return ::rustic.EditAttribute(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) edit_attribute(A&&... args)const{return ::rustic.edit_attribute(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) input(A&&... args)const{return ::rustic.input(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) key(A&&... args)const{return ::rustic.key(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) key_events(A&&... args)const{return ::rustic.key_events(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) any_key_pressed(A&&... args)const{return ::rustic.any_key_pressed(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) log(A&&... args)const{return ::rustic.log(std::forward<A>(args)...);}
+  template<class... A> decltype(auto) set_enabled(A&&... args)const{return ::rustic.set_enabled(std::forward<A>(args)...);}
+};
+struct CanonicalGame {CanonicalScenePath scene{"game.scene"};CanonicalGlobalApi rustic;};inline CanonicalGame game;
 inline int rustic_run(const RusticBehavior& b){std::string line;while(std::getline(std::cin,line)){try{auto state=rustic_detail::Parser(line).parse();std::vector<RusticValue> commands;rustic.state=&state;rustic.commands=&commands;instance.commands=&commands;Game.commands=&commands;Game.scene.state=&state.at("scene_paths");auto cb=state.at("callback").string();double d=state.at("delta").is_null()?0:state.at("delta").number();if(cb=="update")Gameplay::dispatch();if(cb=="on_create"&&b.on_create)b.on_create();else if(cb=="on_start"&&b.on_start)b.on_start();else if(cb=="on_enable"&&b.on_enable)b.on_enable();else if(cb=="on_disable"&&b.on_disable)b.on_disable();else if(cb=="fixed_update"&&b.fixed_update)b.fixed_update(d);else if(cb=="update"&&b.update)b.update(d);else if(cb=="on_destroy"&&b.on_destroy)b.on_destroy();else if(cb=="on_stop"&&b.on_stop)b.on_stop();std::cout<<rustic_detail::dump(rustic_detail::object({{"format_version",1},{"commands",commands}}))<<std::endl;}catch(const std::exception&e){std::cerr<<"Rustic C++ SDK: "<<e.what()<<std::endl;return 1;}}return 0;}
 "#;

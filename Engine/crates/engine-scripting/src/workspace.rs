@@ -125,6 +125,7 @@ pub fn generate_programming_workspace(
         include_str!("sdk/entity-api.lua"),
         include_str!("sdk/media-api.lua")
     );
+    let api_text = format!("{api_text}{}", include_str!("sdk/game-api.lua"));
     files.write_with_options(
         &api,
         api_text.as_bytes(),
@@ -139,6 +140,7 @@ pub fn generate_programming_workspace(
         include_str!("sdk/entity-api.d.ts"),
         include_str!("sdk/media-api.d.ts")
     );
+    let javascript_api_text = format!("{javascript_api_text}{}", include_str!("sdk/game-api.d.ts"));
     files.write_with_options(
         &javascript_api,
         javascript_api_text.as_bytes(),

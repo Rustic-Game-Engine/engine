@@ -113,7 +113,7 @@ final class Gameplay {
     public static function release(GameplayHandle $h):void{foreach($h->tokens as $t){unset(self::$callbacks[$t],self::$once[$t]);}unset(self::$handles[$h->id]);}
     private static function collect(array $a,array &$tokens):void{foreach(["token","marker_token"] as $key)if(isset($a[$key]))$tokens[]=$a[$key];foreach($a["actions"]??[] as $child)self::collect($child,$tokens);}
     public static function send(array $request): void {global $instance;$instance->commands[]=["op"=>"gameplay","request"=>$request];}
-    public static function entity(?string $id): string {global $rustic,$Game;return $id===null?$rustic->entity_id():($Game->scene->Find($id)??$id);}
+    public static function entity(?string $id): string {global $rustic,$Game;return $id===null?$rustic->entity_id():(str_starts_with($id,"game.scene.")?$rustic->query(["op"=>"scene_object","source"=>$id]):($Game->scene->Find($id)??$id));}
     public static function start(array $action,bool $loop=false,int $repeats=0,bool $pingPong=false): GameplayHandle {
         $id=bin2hex(random_bytes(16));$h=new GameplayHandle($id);self::$handles[$id]=$h;self::collect($action,$h->tokens);
         self::send(["command"=>"start","handle"=>$id,"action"=>$action,"on_finished"=>$id,"playback"=>["looping"=>$loop,"repeats"=>$repeats,"ping_pong"=>$pingPong]]);return $h;
@@ -329,3 +329,54 @@ final class World {
     static function find_by_tag(string $name):array {global $rustic;return $rustic->query(["op"=>"world_find_by_tag","name"=>$name]);}
     static function find_in_radius(array $center,float $radius):array {global $rustic;return $rustic->query(["op"=>"world_find_in_radius","center"=>$center,"radius"=>$radius]);}
 }
+
+// Canonical API paths.
+final class ApiPath {
+    private array $children=[];
+    public function __construct(public string $source,private string $category,public ?string $filePath=null){}
+    public function __get(string $name): ApiPath { return $this->children[$name]??=new ApiPath($this->source.'.'.$name,$this->category,$this->category==='file'?($this->filePath? $this->filePath.'/':'').$name:null); }
+    public function __call(string $name,array $args):mixed {
+        global $Game,$instance;
+        if($name==='EditAttribute'||$name==='edit_attribute'){$instance->commands[]=['op'=>'edit_attribute','source'=>$this->source,'name'=>$args[0],'value'=>$args[1]];return null;}
+        $methods=$this->category==='scene'?["tweenTo"=>["Tween","to",0],"tweenMove"=>["Tween","move",0],"tweenRotate"=>["Tween","rotate",0],"tweenScale"=>["Tween","scale",0],"tweenAction"=>["Tween","action",0],"tweenToOptions"=>["Tween","toOptions",0],"movementMoveTo"=>["Movement","moveTo",0],"movementMove"=>["Movement","move",0],"movementRotateTo"=>["Movement","rotateTo",0],"movementLookAt"=>["Movement","lookAt",0],"movementFollow"=>["Movement","follow",0],"movementOrbit"=>["Movement","orbit",0],"movementMoveToOptions"=>["Movement","moveToOptions",0],"pathFollow"=>["Path","follow",0],"effectsFade"=>["Effects","fade",0],"effectsFlash"=>["Effects","flash",0],"effectsShake"=>["Effects","shake",0],"effectsPulse"=>["Effects","pulse",0],"cameraMoveTo"=>["Camera","moveTo",0],"cameraZoom"=>["Camera","zoom",0],"cameraFov"=>["Camera","fov",0],"cameraFollow"=>["Camera","follow",0],"cameraOrbit"=>["Camera","orbit",0],"cameraLookAt"=>["Camera","lookAt",0],"cameraShake"=>["Camera","shake",0],"cameraTransition"=>["Camera","transition",0],"physicsImpulse"=>["Physics","impulse",0],"physicsForce"=>["Physics","force",0],"physicsLaunch"=>["Physics","launch",0],"physicsKnockback"=>["Physics","knockback",0],"animationRegister"=>["Animation","register",0],"animationRegisterClip"=>["Animation","registerClip",0],"animationClips"=>["Animation","clips",0],"animationAction"=>["Animation","action",0],"animationPlay"=>["Animation","play",0],"animationBlend"=>["Animation","blend",0],"animationTransition"=>["Animation","transition",0],"animationIk"=>["Animation","ik",0],"animationFootPlacement"=>["Animation","footPlacement",0],"animationLookAt"=>["Animation","lookAt",0],"animationHeadTracking"=>["Animation","headTracking",0],"animationRecoil"=>["Animation","recoil",0],"animationAddMarker"=>["Animation","addMarker",0],"eventsConnect"=>["Events","connect",0],"tagsAdd"=>["Tags","add",0],"tagsRemove"=>["Tags","remove",0],"groupsAdd"=>["Groups","add",1],"hierarchySetParent"=>["Hierarchy","set_parent",0],"hierarchyGetChildren"=>["Hierarchy","get_children",0],"hierarchyDetach"=>["Hierarchy","detach",0],"entityDestroy"=>["Entity","destroy",0],"entityDestroyAfter"=>["Entity","destroy_after",0],"entityIsValid"=>["Entity","is_valid",0],"componentsHas"=>["Components","has",0],"componentsGetAll"=>["Components","get_all",0],"componentsFindInChildren"=>["Components","find_in_children",0],"tween"=>["Tween","to",0],"moveTo"=>["Movement","moveTo",0],"move"=>["Movement","move",0],"rotateTo"=>["Movement","rotateTo",0],"lookAt"=>["Movement","lookAt",0],"follow"=>["Movement","follow",0],"orbit"=>["Movement","orbit",0],"fade"=>["Effects","fade",0],"flash"=>["Effects","flash",0],"shake"=>["Effects","shake",0],"pulse"=>["Effects","pulse",0],"impulse"=>["Physics","impulse",0],"force"=>["Physics","force",0],"launch"=>["Physics","launch",0],"knockback"=>["Physics","knockback",0],"playAnimation"=>["Animation","play",0],"destroy"=>["Entity","destroy",0],"destroyAfter"=>["Entity","destroy_after",0],"isValid"=>["Entity","is_valid",0],"addTag"=>["Tags","add",0],"removeTag"=>["Tags","remove",0],"setParent"=>["Hierarchy","set_parent",0],"getChildren"=>["Hierarchy","get_children",0],"detach"=>["Hierarchy","detach",0],"hasComponent"=>["Components","has",0],"getComponents"=>["Components","get_all",0],"findInChildren"=>["Components","find_in_children",0],"followPath"=>["Path","follow",0]]:["audioPlay"=>["Audio","play",0],"audioPlayAt"=>["Audio","playAt",0],"audioLoad"=>["Audio","load",0],"animationLoad"=>["Animation","load",1],"play"=>["Audio","play",0],"playAt"=>["Audio","playAt",0],"load"=>["Audio","load",0],"loadAnimation"=>["Animation","load",1],"add"=>["instance","add",0],"clone"=>["instance","clone",0],"setSkyTexture"=>["scene","setSkyTexture",0]];
+        if($this->category==='scene')$methods+=['clone'=>['instance','clone',0],'add'=>['instance','add',0],'setCurrentCamera'=>['Game','setCurrentCamera',0],'emit'=>['Events','emit',2]];
+        if(!isset($methods[$name]))throw new BadMethodCallException('Unknown path API: '.$name);
+        [$family,$method,$index]=$methods[$name];
+        $args=array_map(fn($a)=>$a instanceof ApiPath?($a->filePath??$a->source):$a,$args);
+        $owner=$family==='scene'?$Game->scene:($family==='Game'?$Game:($family==='instance'?$instance:$family));
+        $parameters=(new ReflectionMethod($owner,$method))->getParameters();
+        $targetName=$parameters[$index]->getName();
+        array_splice($parameters,$index,1);
+        $bound=[];
+        foreach($args as $key=>$value){
+            $name=is_int($key)?($parameters[$key]??throw new InvalidArgumentException('Too many path API arguments'))->getName():$key;
+            if($name===$targetName)throw new InvalidArgumentException('The path supplies the target argument');
+            $bound[$name]=$value;
+        }
+        $bound[$targetName]=$this->filePath??$this->source;
+        $args=$bound;
+        if($family==='Game')return $Game->$method(...$args);
+        if($family==='scene')return $Game->scene->$method(...$args);
+        if($family==='instance')return $instance->$method(...$args);
+        return $family::$method(...$args);
+    }
+}
+final class CanonicalGlobalApi {
+    public ApiPath $files;
+    public function __construct(){$this->files=new ApiPath('game.rustic.files','file','');}
+    public function __call(string $name,array $args):mixed {
+        global $rustic,$Game;
+        $name=['get_output_devices'=>'getOutputDevices','get_input_devices'=>'getInputDevices','set_output_device'=>'setOutputDevice','set_input_device'=>'setInputDevice'][$name]??$name;
+        $methods=["tweenValue"=>["Tween","value",0],"timerAfter"=>["Timer","after",0],"timerEvery"=>["Timer","every",0],"smoothLerp"=>["Smooth","lerp",0],"smoothSlerp"=>["Smooth","slerp",0],"smoothInverseLerp"=>["Smooth","inverseLerp",0],"smoothRemap"=>["Smooth","remap",0],"smoothSmoothDamp"=>["Smooth","smoothDamp",0],"physicsRaycast"=>["Physics","raycast",0],"physicsSphereCast"=>["Physics","sphereCast",0],"physicsOverlap"=>["Physics","overlap",0],"physicsExplosion"=>["Physics","explosion",0],"clockTimeScale"=>["Clock","timeScale",0],"clockPause"=>["Clock","pause",0],"clockResume"=>["Clock","resume",0],"clockState"=>["Clock","state",0],"pathCreate"=>["Path","create",0],"sequenceNew"=>["Sequence","new",0],"sequenceCreate"=>["Sequence","create",0],"timelineNew"=>["Timeline","new",0],"timelineCreate"=>["Timeline","create",0],"eventsOn"=>["Events","on",0],"eventsOnce"=>["Events","once",0],"eventsEmit"=>["Events","emit",0],"eventsDisconnect"=>["Events","disconnect",0],"audioGetOutputDevices"=>["Audio","get_output_devices",0],"audioGetInputDevices"=>["Audio","get_input_devices",0],"audioSetOutputDevice"=>["Audio","set_output_device",0],"audioSetInputDevice"=>["Audio","set_input_device",0],"audioVolume"=>["Audio","volume",0],"audioPitch"=>["Audio","pitch",0],"audioFadeIn"=>["Audio","fadeIn",0],"audioFadeOut"=>["Audio","fadeOut",0],"audioCrossfade"=>["Audio","crossfade",0],"audioStop"=>["Audio","stop",0],"audioPause"=>["Audio","pause",0],"audioResume"=>["Audio","resume",0],"animationValue"=>["Animation","value",0],"animationStop"=>["Animation","stop",0],"animationPause"=>["Animation","pause",0],"animationSpeed"=>["Animation","speed",0],"animationLoop"=>["Animation","loop",0],"cameraCurrent"=>["Camera","current",0],"tagsFindAll"=>["Tags","find_all",0],"groupsCreate"=>["Groups","create",0],"groupsGetMembers"=>["Groups","get_members",0],"worldFindByTag"=>["World","find_by_tag",0],"worldFindInRadius"=>["World","find_in_radius",0],"after"=>["Timer","after",0],"every"=>["Timer","every",0],"lerp"=>["Smooth","lerp",0],"slerp"=>["Smooth","slerp",0],"inverseLerp"=>["Smooth","inverseLerp",0],"remap"=>["Smooth","remap",0],"smoothDamp"=>["Smooth","smoothDamp",0],"raycast"=>["Physics","raycast",0],"sphereCast"=>["Physics","sphereCast",0],"overlap"=>["Physics","overlap",0],"explosion"=>["Physics","explosion",0],"timeScale"=>["Clock","timeScale",0],"pause"=>["Clock","pause",0],"resume"=>["Clock","resume",0],"createPath"=>["Path","create",0],"sequence"=>["Sequence","new",0],"timeline"=>["Timeline","new",0],"on"=>["Events","on",0],"once"=>["Events","once",0],"emit"=>["Events","emit",0],"disconnect"=>["Events","disconnect",0],"currentCamera"=>["Camera","current",0],"getOutputDevices"=>["Audio","get_output_devices",0],"getInputDevices"=>["Audio","get_input_devices",0],"setOutputDevice"=>["Audio","set_output_device",0],"setInputDevice"=>["Audio","set_input_device",0]];
+        if(isset($methods[$name])){[$family,$method]=$methods[$name];if(($family==="Sequence"||$family==="Timeline")&&$method==="new")$method="create";return $family::$method(...$args);}
+        if($name==='getEnvironment'||$name==='setEnvironment')return $Game->scene->$name(...$args);
+        if($name==='setCurrentCamera')return $Game->setCurrentCamera($args[0] instanceof ApiPath?$args[0]->source:$args[0]);
+        return $rustic->$name(...$args);
+    }
+}
+final class CanonicalGame {
+    public ApiPath $scene;
+    public CanonicalGlobalApi $rustic;
+    public function __construct(){$this->scene=new ApiPath('game.scene','scene');$this->rustic=new CanonicalGlobalApi();}
+}
+$game=new CanonicalGame();

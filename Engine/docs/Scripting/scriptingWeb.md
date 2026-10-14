@@ -66,7 +66,9 @@ if (rustic.key("KeyW").held) {
 }
 ```
 
-JavaScript mutations are applied in command order after the callback. Properties must
+JavaScript mutations are applied in command order after the callback. Canonical
+`game.scene.Scene.ObjectPath` target resolution flushes earlier queued commands
+before resolving the live object, including renames and reparenting. Properties must
 be declared and type-compatible. Scene lookup returns stable IDs; JavaScript
 `Game.scene.List()` currently returns path strings. Instance operations are queued
 and do not return the created ID.

@@ -402,14 +402,25 @@ fn object_proxy(
 ) -> mlua::Result<Table> {
     let table = lua.create_table()?;
     table.raw_set("__source", path.clone())?;
+    table.raw_set("__file_path", asset_path.clone())?;
     let meta = lua.create_table()?;
     meta.set(
         "__index",
         lua.create_function(move |lua, (proxy, key): (Table, String)| {
+            if let Some(dispatch) = lua
+                .globals()
+                .get::<Option<Function>>("__rustic_path_method")?
+                && let Some(method) =
+                    dispatch.call::<Option<Function>>((proxy.clone(), key.clone()))?
+            {
+                return Ok(Value::Function(method));
+            }
             let h = Arc::clone(&host);
             let source = path.clone();
             match key.as_str() {
-                "load" | "play" | "stop" | "pause" | "resume" | "Unload" | "unload" => {
+                "load" | "play" | "stop" | "pause" | "resume" | "Unload" | "unload"
+                    if !source.starts_with("game.scene.") =>
+                {
                     let audio: Function = lua.globals().get("__rustic_audio_object")?;
                     let object: Table = audio.call(asset_path.clone())?;
                     for method in [
@@ -441,16 +452,22 @@ fn object_proxy(
                         engine_to_lua(lua, value)
                     },
                 )?)),
-                _ => Ok(Value::Table(object_proxy(
-                    lua,
-                    h,
-                    format!("{source}.{key}"),
-                    if asset_path.is_empty() {
-                        key
-                    } else {
-                        format!("{asset_path}/{key}")
-                    },
-                )?)),
+                _ => {
+                    let child = object_proxy(
+                        lua,
+                        h,
+                        format!("{source}.{key}"),
+                        if asset_path.is_empty() {
+                            key.clone()
+                        } else {
+                            format!("{asset_path}/{key}")
+                        },
+                    )?;
+                    if source.starts_with("game.rustic.files") {
+                        proxy.raw_set(key, child.clone())?;
+                    }
+                    Ok(Value::Table(child))
+                }
             }
         })?,
     )?;
@@ -460,6 +477,13 @@ fn object_proxy(
 
 #[allow(clippy::too_many_lines)]
 fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Result<()> {
+    let path_host = Arc::clone(&host);
+    lua.globals().set(
+        "__rustic_object_path",
+        lua.create_function(move |lua, source: String| {
+            object_proxy(lua, Arc::clone(&path_host), source, String::new())
+        })?,
+    )?;
     let api = lua.create_table()?;
     let h = Arc::clone(&host);
     api.set(

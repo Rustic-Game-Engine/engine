@@ -1,0 +1,26 @@
+-- Canonical roots for Lua 5.4 and Luau.
+---@class RusticSceneObject
+---@field [string] RusticSceneObject
+---@field __source string
+---@field EditAttribute fun(self:RusticSceneObject,name:string,value:any)
+---@field tween fun(self:RusticSceneObject,property:string,value:any,timing:number|table,easing:string|nil):table
+---@field moveTo fun(self:RusticSceneObject,position:number[],timing:number|table,easing:string|nil):table
+---@field destroy fun(self:RusticSceneObject)
+---@class RusticExplorerFile
+---@field [string] RusticExplorerFile
+---@field load fun(self:RusticExplorerFile):RusticExplorerFile
+---@field play fun(self:RusticExplorerFile,options:table|nil):table
+---@field Unload fun(self:RusticExplorerFile)
+---@field setSkyTexture fun(self:RusticExplorerFile):RusticSceneEnvironment
+---@class RusticGlobalApi
+---@field files table<string,RusticExplorerFile>
+---@field after fun(self:RusticGlobalApi,delay:number,callback:fun()):table
+---@field every fun(self:RusticGlobalApi,interval:number,callback:fun(),count:number|nil):table
+---@field lerp fun(self:RusticGlobalApi,from:any,to:any,progress:number,easing:string|nil):any
+---@field getEnvironment fun(self:RusticGlobalApi):RusticSceneEnvironment
+---@field setEnvironment fun(self:RusticGlobalApi,settings:table):RusticSceneEnvironment
+---@class CanonicalRusticGame
+---@field scene table<string,RusticSceneObject>
+---@field rustic RusticGlobalApi
+---@type CanonicalRusticGame
+game=game

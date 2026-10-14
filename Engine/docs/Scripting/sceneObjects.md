@@ -1,5 +1,9 @@
 # Edit another scene object
 
+Use the [canonical API paths](/docs/guides/api-paths) to call object APIs on
+`game.scene.SceneName.ObjectPath`, global APIs on `game.rustic`, and file APIs
+on `game.rustic.files.ExplorerPath`. Existing calls below remain supported.
+
 Use a named scene and the object's full hierarchy path to change its built-in
 properties from a script attached elsewhere. For example:
 
