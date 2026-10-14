@@ -95,11 +95,12 @@ All gameplay languages use engine-owned APIs. The engine handles command transpo
 use the native calls above without serializing or printing requests/responses.
 CSS alone cannot call functions; use inline JavaScript in an HTML UI asset.
 
-Embedded Lua applies edits immediately and supports
-`:GetAttribute("Position")` on the same path. JavaScript and external languages
-queue edits in issue order and apply them after the callback; they do not expose
-path-based getters. Do not use a queued edit followed by an owner getter to read
-another object's new value.
+Embedded Lua applies edits immediately. Every gameplay language can read another
+object using rustic.get_object_attribute(source, name) or its path proxy's
+GetAttribute method (C uses rustic.game.GetAttribute(source, name)).
+JavaScript and external languages queue edits in issue order. A live query flushes
+those edits before reading; owner getters still read the callback snapshot.
+See [APIs in every language](/docs/guides/api-languages) for native signatures.
 
 ## Supported attributes
 
@@ -114,7 +115,7 @@ another object's new value.
 | `Anchored` | boolean | Prevents physics movement; unchecked primitives fall under gravity |
 | `Parent` | stable entity ID or null | Reparents the target; changes future path |
 
-`EditAttribute` and `edit_attribute` are equivalent. The direct Lua and JavaScript
+`EditAttribute` and `edit_attribute` are equivalent. The shared
 helper `rustic.edit_object_attribute(source, name, value)` also accepts the full
 path string. Material and Enabled are not supported attributes; `set_enabled`
 still affects the script owner.

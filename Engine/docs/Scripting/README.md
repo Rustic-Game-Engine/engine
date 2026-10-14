@@ -69,3 +69,5 @@ object using `rustic.game.<scene-name>.<hierarchy>` in native language syntax.
 
 See [Entity foundations](API/entity-foundations.md) for live tags, groups, hierarchy,
 lifetime, component and world queries in the shared scripting runtime.
+
+See [APIs in every language](/docs/guides/api-languages) for the shared API families, reusable audio, capture, and live object reads.

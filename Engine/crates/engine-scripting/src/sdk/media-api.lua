@@ -1,0 +1,31 @@
+---@class RusticCapturePacket
+---@field samples number[]
+---@field sampleRate integer
+---@field channels integer
+---@field active boolean
+---@field droppedSamples integer
+---@class RusticCaptureHandle
+---@field id string
+---@field read fun(self:RusticCaptureHandle): RusticCapturePacket
+---@field stop fun(self:RusticCaptureHandle)
+---@field unload fun(self:RusticCaptureHandle)
+---@class RusticLoadedAudio
+---@field load fun(self:RusticLoadedAudio): RusticLoadedAudio
+---@field play fun(self:RusticLoadedAudio,options:table|nil): table
+---@field stop fun(self:RusticLoadedAudio)
+---@field pause fun(self:RusticLoadedAudio)
+---@field resume fun(self:RusticLoadedAudio)
+---@field unload fun(self:RusticLoadedAudio)
+---@field Unload fun(self:RusticLoadedAudio)
+---@class RusticApi
+---@field get_object_attribute fun(source:string,name:string): any
+---@class RusticGameApi
+---@field startRecording fun(path:string|nil,options:table|nil): RusticCaptureHandle
+---@field stopRecording fun(handle:RusticCaptureHandle|nil)
+---@field startHotMic fun(): RusticCaptureHandle
+---@field stopHotMic fun(handle:RusticCaptureHandle|nil)
+---@class RusticAudioApi
+---@field load fun(source:string): RusticLoadedAudio
+---@field play fun(source:string,options:table|nil): table
+---@type RusticAudioApi
+Audio = Audio

@@ -20,7 +20,7 @@ The signatures and complete example below use JavaScript. Attach a JavaScript Ob
 | OGG Opus | `.ogg`, `.oga`, `.opus` | Mono or stereo Opus (mapping family 0) |
 
 Put the file inside your project's `assets/` folder. Extensions are case
-insensitive. The same formats work with loaded Lua/Luau audio handles and
+insensitive. The same formats work with loaded audio handles in every gameplay language and
 `Audio.play` / `Audio.playAt` in every supported script language. For example,
 `rustic.game.assets.music["theme.mp3"]:load()` or
 `Audio.play("assets/music/theme.flac")` uses the usual audio controls.
@@ -38,7 +38,7 @@ bytes and 200 million decoded samples per clip. Opus decodes at 48 kHz and
 respects header gain, encoder delay, and end padding; other formats preserve the
 decoded sample rate. Lossy decoder peaks are clamped to the mixer's [-1, 1] range.
 
-## Load and control audio objects (Lua and Luau)
+## Load and control audio objects
 
 Create `assets/sounds/` in your project and place `crash.wav` there (WAV, MP3, AAC, FLAC, and OGG are supported). Create a Lua or Luau Object Component script, attach it to an
 enabled scene object, and press **Play**. Use `Start` to load audio before playing:
@@ -87,7 +87,10 @@ with no active playback are harmless.
   error. Missing, unsupported, or invalid files fail during `load()`. Check the
   Console, attachment, file name and extension. Paths must stay inside `assets/`.
 
-The object methods and `Audio.load` are available in Lua 5.4 and Luau. Existing
+Audio.load and loaded playback/control/unload are available in every gameplay language.
+Asset path proxies retain their Lua/Luau syntax and are also available in JavaScript;
+other languages use Audio.load(source). See [APIs in every language](/docs/guides/api-languages)
+for native signatures and examples. Existing
 `Audio.play(source, options?)` and `Audio.playAt` in all languages still decode
 and play immediately; their voice controls continue to work.
 
@@ -104,8 +107,9 @@ list and report an unavailable-backend error when selecting a device.
   duplicated; use the ID to select a device.
 - `Audio.set_output_device(id)` switches this scene's mixed audio to that output.
 - `Audio.set_input_device(id)` validates and retains the scene's selected input
-  device. **Microphone recording/capture is not implemented**, so this call does
-  not produce microphone samples or route microphone sound to playback.
+  device. This call does not start capture or route microphone sound to playback.
+  Recording and hot mic capture currently use the system default input
+  independently of this selection; see the recording section below.
 - Pass `null` (Lua/Luau `nil`, Python `None`, C `NULL`) to either setter to select
   the current system default. Java requires an explicit `null` argument; other
   bindings except C also allow omitting the argument. Setters return no value.
@@ -155,7 +159,7 @@ plugging/unplugging hardware. Empty lists are valid on hosts without devices.
 
 - `Audio.get_output_devices() / get_input_devices()`
 - `Audio.set_output_device(id = null) / set_input_device(id = null)`
-- `Audio.load(source)` (Lua/Luau; returns a reusable audio handle)
+- `Audio.load(source)` (every gameplay language; returns a reusable audio handle)
 - `Audio.play(source, options?)`
 - `Audio.playAt(source, position, options?)`
 - `voice.pause() / resume() / stop()`
@@ -199,11 +203,14 @@ globalThis.behavior = {
 - Check script attachment, enabled state and the Console when an operation fails. Asynchronous errors also appear in operation state. Callback exceptions disable the owner and clean up its actions.
 - Owner destruction, disable, successful reload or Stop cleans up owned actions and subscriptions. Failed reload retains the previous behavior's operations. See [Operation handles](/docs/api/operation-handles) for controls and lifetime details.
 
-## Record audio and read a hot microphone (Lua and Luau)
+## Record audio and read a hot microphone
 
 Create a Lua or Luau Object Component script in `scripts/`, attach it to an
 **enabled** scene object, and press **Play**. Start capture inside `Start` or
-another callback. Capture methods use camel case and colon syntax:
+another callback. The example below uses Lua/Luau colon syntax. All gameplay languages expose
+Game.startRecording, stopRecording, startHotMic, stopHotMic and capture
+handle read/stop/unload; see [APIs in every language](/docs/guides/api-languages)
+for copyable native bindings:
 
 ```lua
 local rec
@@ -211,7 +218,7 @@ return {
   Start = function()
     rec = rustic.game:startRecording()
   end,
-  Stop = function()
+  OnStop = function()
     rec:stopRecording()
     local packet = rec:read()
     -- packet.samples contains interleaved floating-point PCM.
@@ -268,7 +275,7 @@ return {
     -- Feed packet.samples, packet.sampleRate and packet.channels to your
     -- audio processing or relay code. peak can drive a microphone meter.
   end,
-  Stop = function()
+  OnStop = function()
     mic:stopHotMic()
     mic:unload()
   end
@@ -298,5 +305,5 @@ return {
   and OS microphone access. Default F32, I16 and U16 device formats are supported.
   Missing devices, permission failures, unsupported formats, startup timeouts and
   device disconnection raise errors. Game mixer recording works headlessly too.
-- These convenience bindings are available in Lua 5.4 and Luau. Hot mic supplies
+- These services are available in every gameplay language. Hot mic supplies
   local PCM; automatic network transport and speaker monitoring are not provided.
