@@ -20,6 +20,33 @@ Every gameplay language uses engine-owned built-in functions. Scripts define
 callbacks and call the API; no user-written JSON request/response loop is needed.
 CSS is styling only; use inline JavaScript in HTML for gameplay API calls.
 
+## Missing scripts during Play
+
+Press **Play** after creating or attaching scripts through **Programming > New
+Script**, **Programming > Attach Existing Script**, or **+ Add Component** in the
+Inspector. If an enabled global startup, scene startup, or object component script
+has a missing Asset ID in the script manifest or its source file has been deleted,
+Play skips that attachment and continues running the scene and the remaining
+scripts. This also applies to automatically added startup scripts. Missing scripts
+are not retried during the same play session.
+
+The runtime log shows a warning naming the missing script ID or source path and
+`skipped for this play session`. To recover, stop Play, restore the file at the
+reported path or remove/replace the attachment through the editor, then press
+Play again. Do not edit serialized scene or manifest files to repair attachments.
+Manual script reload skips missing source files and continues reloading available
+files; an already running instance keeps its last good code.
+
+For HTML assets, a missing quoted `<script src="...">` file produces a warning
+and contributes no code. Later linked scripts and inline script bodies still run.
+For example, `<script src="missing.js"></script>` followed by an inline behavior
+continues with the inline behavior even when `missing.js` does not exist. Keep
+linked paths relative to the HTML asset, in its directory or a child directory.
+
+This recovery applies to missing scripts only. Invalid settings or manifests,
+unreadable files for other reasons, syntax errors, and linked paths containing
+`..` or absolute paths still fail existing validation.
+
 ## Rules shared by every language
 
 Create, move, rename, and attach scripts in the editor. Never edit

@@ -50,8 +50,13 @@ impl EditorPlaySession {
             programming.push(SnapshotInput::new("config/scripts.ron", manifest_bytes));
             for entry in manifest.manifest.scripts {
                 let path = document.project().root().join(&entry.relative_path);
-                let bytes = std::fs::read(&path)
-                    .map_err(|error| format!("could not read {}: {error}", path.display()))?;
+                let bytes = match std::fs::read(&path) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(format!("could not read {}: {error}", path.display()));
+                    }
+                };
                 validate_script(
                     entry.language,
                     &bytes,
@@ -177,8 +182,18 @@ impl EditorPlaySession {
         let manifest = load_manifest(&bytes).map_err(|error| error.to_string())?;
         let mut outcomes = Vec::new();
         for entry in manifest.manifest.scripts {
-            let source = std::fs::read(project_root.join(&entry.relative_path))
-                .map_err(|error| error.to_string())?;
+            let source = match std::fs::read(project_root.join(&entry.relative_path)) {
+                Ok(source) => source,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    outcomes.push(format!(
+                        "script {} source {} is missing; reload skipped",
+                        entry.id,
+                        entry.relative_path.display()
+                    ));
+                    continue;
+                }
+                Err(error) => return Err(error.to_string()),
+            };
             validate_script(
                 entry.language,
                 &source,

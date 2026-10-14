@@ -99,3 +99,7 @@ API 1.1 exposes shared-core easing, tweens, movement, skeletal/keyframe/procedur
 animation, timelines, timers, paths, cameras, physics, effects, audio and signals.
 See [Shared gameplay actions](gameplayActions.md) for attachment, native call
 conventions, duration/speed options, callbacks, scene-clock controls and backend limits.
+
+A missing linked script is skipped with a runtime warning for that play session.
+Remaining linked and inline scripts continue running. Restore the file, stop Play,
+and start Play again to load it. Missing files are not retried during the session.

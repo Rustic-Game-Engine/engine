@@ -396,20 +396,22 @@ impl RuntimeScripts {
                 if !component.enabled {
                     continue;
                 }
-                let entry = entries.get(&component.script_id).ok_or_else(|| {
-                    format!(
-                        "entity {} references missing script {}",
-                        entity.id, component.script_id
-                    )
-                })?;
-                let source_path = snapshot_root.join(&entry.relative_path);
-                let mut source = std::fs::read(&source_path).map_err(|error| {
-                    format!("could not read {}: {error}", source_path.display())
-                })?;
-                if entry.language == ScriptLanguage::Web {
-                    source =
-                        resolve_linked_web_scripts(snapshot_root, &entry.relative_path, &source)?;
-                }
+                let Some(entry) = entries.get(&component.script_id) else {
+                    push_log(
+                        &logs,
+                        &dropped_logs,
+                        "warn",
+                        &format!(
+                            "entity {} references missing script {}; skipped for this play session",
+                            entity.id, component.script_id
+                        ),
+                    );
+                    continue;
+                };
+                let Some(source) = read_script_source(snapshot_root, entry, &logs, &dropped_logs)?
+                else {
+                    continue;
+                };
                 let host = RuntimeHost {
                     gameplay: Arc::clone(&gameplay),
                     owner_script: ScriptId::new(),
@@ -744,18 +746,21 @@ fn load_startup_references(
         .next()
         .unwrap_or_else(EntityId::new);
     for reference in references.iter().filter(|reference| reference.enabled) {
-        let entry = entries.get(&reference.asset_id).ok_or_else(|| {
-            format!(
-                "startup scope references missing script {}",
-                reference.asset_id
-            )
-        })?;
-        let source_path = snapshot_root.join(&entry.relative_path);
-        let mut source = std::fs::read(&source_path)
-            .map_err(|error| format!("could not read {}: {error}", source_path.display()))?;
-        if entry.language == ScriptLanguage::Web {
-            source = resolve_linked_web_scripts(snapshot_root, &entry.relative_path, &source)?;
-        }
+        let Some(entry) = entries.get(&reference.asset_id) else {
+            push_log(
+                logs,
+                dropped_logs,
+                "warn",
+                &format!(
+                    "startup scope references missing script {}; skipped for this play session",
+                    reference.asset_id
+                ),
+            );
+            continue;
+        };
+        let Some(source) = read_script_source(snapshot_root, entry, logs, dropped_logs)? else {
+            continue;
+        };
         let host = RuntimeHost {
             gameplay: Arc::clone(gameplay),
             owner_script: ScriptId::new(),
@@ -783,10 +788,50 @@ fn load_startup_references(
     Ok(())
 }
 
+fn read_script_source(
+    snapshot_root: &Path,
+    entry: &engine_scripting::ScriptManifestEntry,
+    logs: &Arc<Mutex<VecDeque<(String, String)>>>,
+    dropped_logs: &Arc<Mutex<u64>>,
+) -> Result<Option<Vec<u8>>, String> {
+    let source_path = snapshot_root.join(&entry.relative_path);
+    let source = match std::fs::read(&source_path) {
+        Ok(source) => source,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            push_log(
+                logs,
+                dropped_logs,
+                "warn",
+                &format!(
+                    "script {} source {} is missing; skipped for this play session",
+                    entry.id,
+                    entry.relative_path.display()
+                ),
+            );
+            return Ok(None);
+        }
+        Err(error) => return Err(format!("could not read {}: {error}", source_path.display())),
+    };
+    if entry.language == ScriptLanguage::Web {
+        resolve_linked_web_scripts(
+            snapshot_root,
+            &entry.relative_path,
+            &source,
+            logs,
+            dropped_logs,
+        )
+        .map(Some)
+    } else {
+        Ok(Some(source))
+    }
+}
+
 fn resolve_linked_web_scripts(
     snapshot_root: &Path,
     document_path: &Path,
     source: &[u8],
+    logs: &Arc<Mutex<VecDeque<(String, String)>>>,
+    dropped_logs: &Arc<Mutex<u64>>,
 ) -> Result<Vec<u8>, String> {
     let text = std::str::from_utf8(source).map_err(|error| error.to_string())?;
     let lower = text.to_ascii_lowercase();
@@ -820,13 +865,26 @@ fn resolve_linked_web_scripts(
                 ));
             }
             let linked_path = snapshot_root.join(&relative);
-            let linked = std::fs::read_to_string(&linked_path).map_err(|error| {
-                format!(
-                    "could not read linked script {}: {error}",
-                    linked_path.display()
-                )
-            })?;
-            output.push_str(&linked);
+            match std::fs::read_to_string(&linked_path) {
+                Ok(linked) => output.push_str(&linked),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    push_log(
+                        logs,
+                        dropped_logs,
+                        "warn",
+                        &format!(
+                            "linked script {} is missing; skipped for this play session",
+                            relative.display()
+                        ),
+                    );
+                }
+                Err(error) => {
+                    return Err(format!(
+                        "could not read linked script {}: {error}",
+                        linked_path.display()
+                    ));
+                }
+            }
         } else {
             output.push_str(&text[tag_end + 1..close]);
         }
@@ -3943,6 +4001,123 @@ rustic_run(["on_start"=>"on_start"]);"#),
     }
 
     #[test]
+    fn missing_scripts_are_skipped_in_every_scope_without_retries() {
+        for scope in ["global", "scene", "object"] {
+            for missing_entry in [false, true] {
+                let temp = tempfile::tempdir().unwrap();
+                std::fs::create_dir_all(temp.path().join("config")).unwrap();
+                let missing = ScriptId::new();
+                let working = ScriptId::new();
+                let references = vec![ScriptReference::new(missing), ScriptReference::new(working)];
+                let mut actor = EntitySnapshot::default();
+                if scope == "object" {
+                    actor.scripts =
+                        vec![ScriptComponent::new(missing), ScriptComponent::new(working)];
+                }
+                let scene = SceneDocument {
+                    environment: engine_world::SceneEnvironment::default(),
+                    id: engine_core::SceneId::new(),
+                    name: "Missing scripts".into(),
+                    startup_scripts: if scope == "scene" {
+                        references.clone()
+                    } else {
+                        Vec::new()
+                    },
+                    entities: vec![actor],
+                    instances: Vec::new(),
+                };
+                let mut settings = GameSettings::default();
+                if scope == "global" {
+                    settings.global_scripts = references;
+                }
+                settings.save(temp.path()).unwrap();
+                let mut entries = vec![ScriptManifestEntry {
+                    id: working,
+                    language: ScriptLanguage::Lua54,
+                    relative_path: "working.lua".into(),
+                    api_version: ScriptApiVersion::CURRENT,
+                    public_properties: Vec::new(),
+                }];
+                if !missing_entry {
+                    entries.push(ScriptManifestEntry {
+                        id: missing,
+                        relative_path: "missing.lua".into(),
+                        ..entries[0].clone()
+                    });
+                }
+                save_manifest_atomic(
+                    &temp.path().join("config/scripts.ron"),
+                    &ScriptManifest {
+                        format_version: 2,
+                        scripts: entries,
+                    },
+                )
+                .unwrap();
+                std::fs::write(
+                    temp.path().join("working.lua"),
+                    b"return { fixed_update=function(dt) rustic.log('info', 'still running') end }",
+                )
+                .unwrap();
+                let mut runtime =
+                    RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+                assert_eq!(
+                    runtime.behaviors.len(),
+                    1,
+                    "{scope}: missing entry={missing_entry}"
+                );
+                let warnings = runtime.drain_logs();
+                assert_eq!(warnings.len(), 1);
+                assert_eq!(warnings[0].0, "warn");
+                assert!(warnings[0].1.contains(&missing.to_string()));
+                assert!(warnings[0].1.contains("skipped for this play session"));
+                // Restoring the source does not trigger a retry during this session.
+                std::fs::write(temp.path().join("missing.lua"), b"return {}").unwrap();
+                for _ in 0..3 {
+                    runtime.fixed_update(0.016);
+                    runtime.frame_update(0.016);
+                }
+                let logs = runtime.drain_logs();
+                assert_eq!(logs.len(), 3);
+                assert!(
+                    logs.iter()
+                        .all(|(level, message)| level == "info" && message == "still running")
+                );
+                assert_eq!(runtime.behaviors.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn linked_web_script_errors_other_than_missing_files_still_fail() {
+        let temp = tempfile::tempdir().unwrap();
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let dropped_logs = Arc::new(Mutex::new(0));
+        std::fs::write(temp.path().join("invalid.js"), [0xff]).unwrap();
+        std::fs::create_dir(temp.path().join("directory.js")).unwrap();
+        let absolute = temp.path().join("absolute.js");
+        for link in [
+            "../outside.js",
+            absolute.to_str().unwrap(),
+            "invalid.js",
+            "directory.js",
+        ] {
+            let source = format!("<script src=\"{link}\"></script>");
+            assert!(
+                resolve_linked_web_scripts(
+                    temp.path(),
+                    Path::new("index.html"),
+                    source.as_bytes(),
+                    &logs,
+                    &dropped_logs,
+                )
+                .is_err(),
+                "{link} should not be treated as a missing script"
+            );
+        }
+        assert!(logs.lock().unwrap().is_empty());
+    }
+
+    #[test]
     fn linked_web_script_executes_on_its_attached_entity() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("config")).unwrap();
@@ -3977,16 +4152,32 @@ rustic_run(["on_start"=>"on_start"]);"#),
         GameSettings::default().save(temp.path()).unwrap();
         std::fs::write(
             temp.path().join("ui/index.html"),
-            br#"<!doctype html><html><body><script src="behavior.js"></script></body></html>"#,
+            br#"<!doctype html><html><body><script src="missing.js">throw new Error('do not run fallback');</script><script src="behavior.js"></script><script>globalThis.behavior.OnCreate=function(){rustic.log('info', 'inline ran');};</script></body></html>"#,
         )
         .unwrap();
         std::fs::write(
             temp.path().join("ui/behavior.js"),
-            b"globalThis.behavior={Start(){rustic.set_translation(9,0,0);}};",
+            b"globalThis.behavior={Start(){rustic.set_translation(9,0,0);},FixedUpdate(dt){rustic.log('info', 'linked ran');}};",
         )
         .unwrap();
 
-        let runtime = RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+        let mut runtime = RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+        let logs = runtime.drain_logs();
+        assert_eq!(logs.len(), 2);
+        assert_eq!(logs[0].0, "warn");
+        assert!(
+            logs[0]
+                .1
+                .contains(&Path::new("ui").join("missing.js").display().to_string())
+        );
+        assert_eq!(logs[1], ("info".into(), "inline ran".into()));
+        for _ in 0..3 {
+            runtime.fixed_update(0.016);
+        }
+        assert_eq!(
+            runtime.drain_logs(),
+            vec![("info".into(), "linked ran".into()); 3]
+        );
         let changes = runtime
             .runtime_changes("base", &scene.to_bytes().unwrap())
             .unwrap();
