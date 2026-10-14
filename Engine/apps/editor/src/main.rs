@@ -1,6 +1,7 @@
 mod explorer_selection;
 mod play_session;
 mod ui_theme;
+mod viewport_keyboard;
 
 use eframe::egui;
 use egui_tiles::{Behavior, TileId, Tree, UiResponse};
@@ -1646,8 +1647,7 @@ impl EditorViewer<'_> {
         if response.hovered() && ui.input(|input| input.pointer.any_pressed()) {
             response.request_focus();
         }
-        let keyboard_active =
-            (response.has_focus() || response.hovered()) && !ui.ctx().egui_wants_keyboard_input();
+        let keyboard_active = viewport_keyboard::active(response);
         let keys = if keyboard_active {
             ui.input(|input| {
                 let mut keys = BTreeSet::new();
@@ -1712,11 +1712,7 @@ impl EditorViewer<'_> {
                 self.request_preview = true;
             }
         }
-        // Hovering is sufficient to steer the scene. Requiring an earlier LMB
-        // click made RMB-look and WASD appear broken because the viewport never
-        // acquired keyboard focus.
-        let keyboard_active =
-            (response.has_focus() || hovered) && !ui.ctx().egui_wants_keyboard_input();
+        let keyboard_active = viewport_keyboard::active(response);
         if keyboard_active {
             ui.input(|input| {
                 if input.key_pressed(egui::Key::F) {
