@@ -58,6 +58,32 @@ function Assert-WinGetInitialized([int]$ExitCode) {
     }
 }
 
+function Invoke-WinGet([string]$Executable, [string[]]$Arguments) {
+    # Native '& winget' can make PowerShell allocate a hidden console even when
+    # Setup started PowerShell with CREATE_NO_WINDOW. Keep WinGet console-free too.
+    $info = [System.Diagnostics.ProcessStartInfo]::new()
+    $info.FileName = $Executable
+    # Callers supply only fixed flags and catalog package IDs, with no whitespace.
+    $info.Arguments = $Arguments -join ' '
+    $info.UseShellExecute = $false
+    $info.CreateNoWindow = $true
+    $info.RedirectStandardOutput = $true
+    $info.RedirectStandardError = $true
+    $process = [System.Diagnostics.Process]::Start($info)
+    try {
+        # Drain both pipes concurrently so a full stderr pipe cannot deadlock stdout.
+        $stdout = $process.StandardOutput.ReadToEndAsync()
+        $stderr = $process.StandardError.ReadToEndAsync()
+        $process.WaitForExit()
+        $output = $stdout.GetAwaiter().GetResult()
+        $errors = $stderr.GetAwaiter().GetResult()
+        if ($output) { Write-Host $output.TrimEnd() }
+        if ($errors) { Write-Host $errors.TrimEnd() }
+        return $process.ExitCode
+    }
+    finally { $process.Dispose() }
+}
+
 function Test-ToolchainInstalled($Entry) {
     foreach ($commandName in $Entry.Commands) {
         if (Get-Command $commandName -ErrorAction SilentlyContinue) { return $true }
@@ -71,10 +97,10 @@ function Test-ToolchainInstalled($Entry) {
     if (-not $wingetCommand) { return $false }
 
     $wingetPath = if ($wingetCommand -is [string]) { $wingetCommand } else { $wingetCommand.Source }
-    & $wingetPath list --id $Entry.Package --exact --source winget `
-        --disable-interactivity --accept-source-agreements | Out-Host
-    Assert-WinGetInitialized $LASTEXITCODE
-    return $LASTEXITCODE -eq 0
+    $code = Invoke-WinGet $wingetPath @('list', '--id', $Entry.Package, '--exact', '--source', 'winget',
+        '--disable-interactivity', '--accept-source-agreements')
+    Assert-WinGetInitialized $code
+    return $code -eq 0
 }
 
 $exitCode = 0
@@ -126,9 +152,9 @@ try {
 
             if (-not $winget) { $winget = Find-WinGet }
             Write-Host "Installing $($entry.Name)..."
-            & $winget install --id $entry.Package --exact --source winget --silent `
-                --disable-interactivity --accept-source-agreements --accept-package-agreements | Out-Host
-            $packageExitCode = $LASTEXITCODE
+            $packageExitCode = Invoke-WinGet $winget @('install', '--id', $entry.Package, '--exact',
+                '--source', 'winget', '--silent', '--disable-interactivity',
+                '--accept-source-agreements', '--accept-package-agreements')
             Write-Host "WinGet exit code: $packageExitCode"
             Assert-WinGetInitialized $packageExitCode
             if ($packageExitCode -ne 0) {
