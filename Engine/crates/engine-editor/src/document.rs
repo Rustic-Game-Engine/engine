@@ -1,4 +1,4 @@
-use engine_core::{EntityId, SceneId};
+use engine_core::{EntityId, SceneId, ScriptId};
 use engine_play::{
     ApplyRuntimeChangesTransaction, MapChangeStore, RuntimeChangeSet, RuntimeChangeTarget,
     RuntimeValue,
@@ -11,7 +11,7 @@ use engine_world::{
 };
 use num_traits::ToPrimitive as _;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
@@ -50,6 +50,8 @@ pub struct AuthoringDocument {
     selected: Option<EntityId>,
     read_only: bool,
     recovered_from_backup: bool,
+    removed_scripts: BTreeSet<ScriptId>,
+    script_links_modified: bool,
 }
 
 impl AuthoringDocument {
@@ -93,6 +95,8 @@ impl AuthoringDocument {
             selected: None,
             read_only: read_only || recovery_read_only,
             recovered_from_backup,
+            removed_scripts: BTreeSet::new(),
+            script_links_modified: false,
         })
     }
 
@@ -171,7 +175,43 @@ impl AuthoringDocument {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.undo.is_modified()
+        self.undo.is_modified() || self.script_links_modified
+    }
+
+    /// Removes links to deleted source assets, including links restored by later undo/redo.
+    /// Unrelated scene edits and their history remain available.
+    ///
+    /// # Errors
+    /// Returns an error for read-only access or invalid world data.
+    pub fn remove_script_links(&mut self, ids: &BTreeSet<ScriptId>) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        self.removed_scripts.extend(ids);
+        self.prune_removed_script_links()
+    }
+
+    fn prune_removed_script_links(&mut self) -> Result<(), AuthoringError> {
+        if self.removed_scripts.is_empty() {
+            return Ok(());
+        }
+        let mut commands = Vec::new();
+        for entity in self.entity_snapshots()? {
+            let mut scripts = entity.scripts;
+            let before = scripts.len();
+            scripts.retain(|script| !self.removed_scripts.contains(&script.script_id));
+            if scripts.len() != before {
+                commands.push(engine_world::WorldCommand::SetScripts {
+                    entity: entity.id,
+                    value: scripts,
+                });
+            }
+        }
+        self.world.apply_commands(&commands)?;
+        let before = self.scene_startup_scripts.len();
+        self.scene_startup_scripts
+            .retain(|script| !self.removed_scripts.contains(&script.asset_id));
+        self.script_links_modified |=
+            !commands.is_empty() || before != self.scene_startup_scripts.len();
+        Ok(())
     }
 
     /// Returns stable snapshots for all entities.
@@ -632,7 +672,9 @@ impl AuthoringDocument {
     /// Returns an error when the document is read-only or the inverse world edit fails.
     pub fn undo(&mut self) -> Result<bool, AuthoringError> {
         self.ensure_writable()?;
-        self.undo.undo(&mut self.world).map_err(Into::into)
+        let changed = self.undo.undo(&mut self.world)?;
+        self.prune_removed_script_links()?;
+        Ok(changed)
     }
 
     /// Reapplies the most recently reverted edit.
@@ -642,7 +684,9 @@ impl AuthoringDocument {
     /// Returns an error when the document is read-only or the world edit fails.
     pub fn redo(&mut self) -> Result<bool, AuthoringError> {
         self.ensure_writable()?;
-        self.undo.redo(&mut self.world).map_err(Into::into)
+        let changed = self.undo.redo(&mut self.world)?;
+        self.prune_removed_script_links()?;
+        Ok(changed)
     }
 
     /// Saves the current scene transactionally and advances the undo checkpoint.
@@ -658,6 +702,7 @@ impl AuthoringDocument {
             .clone_from(&self.scene_startup_scripts);
         save_scene_atomic(&self.scene_path, &document)?;
         self.undo.mark_saved();
+        self.script_links_modified = false;
         Ok(())
     }
 
