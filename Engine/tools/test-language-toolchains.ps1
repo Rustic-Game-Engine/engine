@@ -20,8 +20,11 @@ New-Item -ItemType Directory -Path $mockBin -Force | Out-Null
 Add-Type -OutputAssembly (Join-Path $mockBin 'winget.exe') -OutputType ConsoleApplication -TypeDefinition @'
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 public class MockWinGet {
+    [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
     public static int Main(string[] args) {
+        if (GetConsoleWindow() != IntPtr.Zero) return 92;
         File.AppendAllText(Environment.GetEnvironmentVariable("RUSTIC_TEST_CALLS"),
             string.Join(" ", args) + Environment.NewLine);
         string mode = Environment.GetEnvironmentVariable("RUSTIC_TEST_MODE");
@@ -51,6 +54,7 @@ function New-TestProcess([string]$Mode) {
     # Isolate discovery from the runner's installed toolchains and App Installer.
     $info.EnvironmentVariables['PATH'] = $mockBin
     $info.EnvironmentVariables['LOCALAPPDATA'] = $caseRoot
+    $info.EnvironmentVariables['USERPROFILE'] = $caseRoot
     $info.EnvironmentVariables['RUSTIC_TEST_MODE'] = $Mode
     $info.EnvironmentVariables['RUSTIC_TEST_CALLS'] = Join-Path $caseRoot 'calls.txt'
     return $info
@@ -105,8 +109,11 @@ function Invoke-InstallerCase([string]$Mode, [string]$Components, [int]$Expected
     }
     finally { $process.Dispose() }
     Assert-Equal (Test-Path (Join-Path $installRoot 'rustic-project-manager.exe')) $true 'Engine installed'
+    Assert-Equal (Test-Path (Join-Path $installRoot 'rustic-setup-helper.exe')) $true 'Setup helper installed'
     Assert-Equal @(Get-Calls $info).Count $ExpectedCalls "$Mode Setup WinGet invocation count"
     $log = Get-Content -LiteralPath $setupLog -Raw
+    Assert-Equal ($log.Contains('Agent integration installation exited with code')) $false 'Agent integrations must initialize successfully'
+    Assert-Equal ($log.Contains('Could not start the integration installer')) $false 'Integration helper must start'
     Assert-Equal ($log.Contains('Language Toolchain Manager exited with code')) $ExpectFailure 'Setup failure diagnostic'
     $transcript = Join-Path $caseRoot 'Rustic Game Engine\logs\toolchain-install.log'
     if ($Components -eq 'engine,languages\bundled') {
@@ -117,6 +124,20 @@ function Invoke-InstallerCase([string]$Mode, [string]$Components, [int]$Expected
         $text = Get-Content -LiteralPath $transcript -Raw
         Assert-Equal ([regex]::Matches($text, 'Windows PowerShell transcript start').Count) 1 'Setup PowerShell launch count'
     }
+    $launchLog = Get-Content -LiteralPath (Join-Path $caseRoot 'Rustic Game Engine\logs\setup-launch.log') -Raw
+    if (-not $launchLog.Contains('--install-user-integrations exited with code 0')) {
+        throw 'Packaged agent integration launch did not succeed'
+    }
+    # Exercise the installed GUI-subsystem executable without requiring a GPU.
+    $smokeInfo = New-TestProcess 'project-manager-smoke'
+    $smokeInfo.FileName = Join-Path $installRoot 'rustic-project-manager.exe'
+    $smokeInfo.Arguments = '--headless-smoke'
+    $smoke = [System.Diagnostics.Process]::Start($smokeInfo)
+    try {
+        if (-not $smoke.WaitForExit(60000)) { $smoke.Kill(); throw 'Installed project manager timed out' }
+        Assert-Equal $smoke.ExitCode 0 'Installed project manager startup'
+    }
+    finally { $smoke.Dispose() }
     Write-Host "PASS: packaged Setup $Mode"
 }
 

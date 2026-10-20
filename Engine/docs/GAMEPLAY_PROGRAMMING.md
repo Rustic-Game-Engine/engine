@@ -236,17 +236,33 @@ installs every selected item through Windows Package Manager. Lua, JavaScript, a
 HTML/CSS are bundled. Additional toolchains can be installed later using **Rustic Game
 Engine > Language Toolchain Manager** in the Start menu or by rerunning Setup.
 
-Setup checks all selected toolchains in one hidden PowerShell process, skipping
-already-installed tools. If PowerShell cannot start or WinGet reports initialization
+Setup checks all selected toolchains in one PowerShell process without allocating a
+console, skipping already-installed tools. A bundled GUI setup helper launches
+PowerShell and the agent integration installer under the original user's account.
+The project manager is a Windows GUI executable, so the Finish-screen launch also
+does not initialize a console host. Hiding a console window alone does not prevent
+console-host startup failures.
+
+If PowerShell cannot start or WinGet reports initialization
 error `142` or `0xc0000142`, it stops the batch and reports the optional-toolchain
 failure once. Rustic remains installed with its bundled languages. These are distinct
 error codes; retain the full message and the failing executable when diagnosing them.
 The failure dialog shows the Setup log path (`Setup Log ...txt` in `%TEMP%` by default).
 Use `/LOG="C:\path\setup.log"` to choose a persistent log location. If PowerShell started,
 check the original user's `%LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log`
-for package details and WinGet output. Otherwise, the Setup log records the PowerShell
-startup failure. Repair the failing PowerShell or Microsoft App Installer installation
-before retrying **Language Toolchain Manager**. Setup does not require Windows Terminal.
+for package details and WinGet output. Also check that user's
+`%LOCALAPPDATA%\Rustic Game Engine\logs\setup-launch.log` for helper errors,
+child-process output and exit codes; it can contain startup failures from before
+PowerShell creates its transcript. The Setup log records failures to start the helper.
+
+If error `0xc0000142` occurs only during Setup or its Finish-screen launch, close
+Setup and try **Rustic Game Engine** from Start. If that opens, install a build with
+the console-free setup helper; a working Start shortcut does not establish that
+PowerShell or WinGet is broken. If **Language Toolchain Manager** also fails when
+opened separately from Start, use the failing executable and logs to diagnose
+PowerShell or Microsoft App Installer before retrying. Setup does not require Windows
+Terminal. Agent integration failures are reported separately and can be retried with
+`rustic-agent-backend.exe --install-user-integrations` from the installation directory.
 
 ## HTML/CSS content
 

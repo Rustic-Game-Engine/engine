@@ -1,0 +1,10 @@
+[package]
+name = "rustic-setup-helper"
+description = "Console-free Windows installer child process launcher"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints]
+workspace = true

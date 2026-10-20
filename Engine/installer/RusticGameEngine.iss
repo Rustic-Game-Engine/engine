@@ -75,6 +75,7 @@ Source: "..\licenses\Audio-Decoders-NOTICE.md"; DestDir: "{app}\licenses"; Flags
 #ifndef InstallerPreflight
 Source: "..\target\distribution\rustic-luau-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-agent-backend.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\distribution\rustic-setup-helper.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-project-manager.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-editor.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-runtime.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -83,19 +84,48 @@ Source: "..\target\distribution\rustic-asset-worker.exe"; DestDir: "{app}"; Flag
 Source: "..\tools\manage-language-toolchains.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
-Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
 Name: "{autoprograms}\{#AppName}\Language Toolchain Manager"; Filename: "{sys}\WindowsPowerShell\v1.0\powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\tools\manage-language-toolchains.ps1"""; WorkingDir: "{app}"
-Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; Tasks: desktopicon
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
 Root: HKLM; Subkey: "SYSTEM\CurrentControlSet\Control\Session Manager\Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: IsAdminInstallMode and NeedsAddPath('{app}'); Tasks: addtopath; Flags: preservestringtype
 Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; ValueData: "{olddata};{app}"; Check: (not IsAdminInstallMode) and NeedsAddPath('{app}'); Tasks: addtopath; Flags: preservestringtype
 
 [Run]
-Filename: "{app}\rustic-agent-backend.exe"; Parameters: "--install-user-integrations"; Flags: runhidden waituntilterminated; StatusMsg: "Installing Rustic AI agent skills..."
-Filename: "{app}\{#AppExeName}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 
 [Code]
+procedure InstallUserIntegrations();
+var
+  ResultCode: Integer;
+  Failure: String;
+begin
+  WizardForm.StatusLabel.Caption := 'Installing Rustic AI agent skills...';
+  WizardForm.Refresh;
+  Failure := '';
+  ResultCode := -1;
+  try
+    if not ExecAsOriginalUser(ExpandConstant('{app}\rustic-setup-helper.exe'),
+      '--install-user-integrations', ExpandConstant('{app}'), SW_HIDE,
+      ewWaitUntilTerminated, ResultCode) then
+      Failure := Format('Could not start the integration installer: Windows error %d (%s).', [ResultCode, SysErrorMessage(ResultCode)])
+    else if ResultCode <> 0 then
+      Failure := Format('Agent integration installation exited with code %d (0x%.8x).', [ResultCode, ResultCode]);
+  except
+    Failure := 'Could not install agent integrations: ' + GetExceptionMessage;
+  end;
+  if Failure <> '' then
+  begin
+    Log(Failure);
+    SuppressibleMsgBox(Failure + #13#10 + #13#10 +
+      'Rustic remains installed. Retry with rustic-agent-backend.exe --install-user-integrations after closing Setup.' + #13#10 +
+      'Setup log: ' + ExpandConstant('{log}') + #13#10 +
+      'Launch log (if the helper started): %LOCALAPPDATA%\Rustic Game Engine\logs\setup-launch.log',
+      mbError, MB_OK, IDOK);
+  end;
+end;
+
 procedure AddSelectedLanguage(Component, Language: String; var Languages: String);
 begin
   if WizardIsComponentSelected(Component) then
@@ -123,25 +153,23 @@ begin
   WizardForm.StatusLabel.Caption := 'Checking and installing selected gameplay language toolchains...';
   WizardForm.Refresh;
 
-  // The manager checks installed packages itself. Launch it once, rather than
-  // starting a new PowerShell host for each check and each installation.
+  // The GUI-subsystem helper starts PowerShell with CREATE_NO_WINDOW. SW_HIDE
+  // alone still initializes a console host and can fail before the script runs.
   Log('Selected optional language toolchains: ' + Languages);
   Failure := '';
   ResultCode := -1;
   try
     Started := ExecAsOriginalUser(
-      ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' +
-        ExpandConstant('{app}\tools\manage-language-toolchains.ps1') +
-        '" -Languages "' + Languages + '" -Setup',
+      ExpandConstant('{app}\rustic-setup-helper.exe'),
+      '--install-language-toolchains "' + Languages + '"',
       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode
     );
     if not Started then
-      Failure := Format('Could not start PowerShell: Windows error %d (%s).', [ResultCode, SysErrorMessage(ResultCode)])
+      Failure := Format('Could not start the toolchain setup helper: Windows error %d (%s).', [ResultCode, SysErrorMessage(ResultCode)])
     else if ResultCode <> 0 then
       Failure := Format('Language Toolchain Manager exited with code %d (0x%.8x).', [ResultCode, ResultCode]);
   except
-    Failure := 'Could not start Language Toolchain Manager: ' + GetExceptionMessage;
+    Failure := 'Could not start the toolchain setup helper: ' + GetExceptionMessage;
   end;
 
   if Failure <> '' then
@@ -155,6 +183,7 @@ begin
       Failure + #13#10 + #13#10 +
       'You can retry from Language Toolchain Manager in the Start menu.' + #13#10 +
       'Setup log: ' + ExpandConstant('{log}') + #13#10 +
+      'Launch log (if the helper started): %LOCALAPPDATA%\Rustic Game Engine\logs\setup-launch.log' + #13#10 +
       'Toolchain log (if PowerShell started): %LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log',
       mbError, MB_OK, IDOK);
   end;
@@ -165,7 +194,11 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
-  if CurStep = ssPostInstall then InstallSelectedLanguageToolchains();
+  if CurStep = ssPostInstall then
+  begin
+    InstallUserIntegrations();
+    InstallSelectedLanguageToolchains();
+  end;
 end;
 
 function NeedsAddPath(Param: string): Boolean;

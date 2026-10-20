@@ -5,6 +5,7 @@ members = [
     "apps/editor",
     "apps/project-manager",
     "apps/runtime",
+    "apps/setup-helper",
     "crates/engine-assets",
     "crates/engine-core",
     "crates/engine-editor",
