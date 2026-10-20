@@ -538,7 +538,10 @@ fn terminate_tree_and_reap(child: &mut Child) -> Result<ExitStatus, std::io::Err
 
 #[cfg(windows)]
 fn terminate_process_group(process_id: u32) {
-    let _ = Command::new("taskkill")
+    let mut command = Command::new("taskkill");
+    // Cleanup is also invoked from the GUI editor's readiness watcher.
+    configure_process_group(&mut command);
+    let _ = command
         .args(["/PID", &process_id.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
