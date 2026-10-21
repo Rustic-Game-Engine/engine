@@ -2,6 +2,15 @@
 
 Each scene can save its own sky image, ambient light, sun light and haze. The settings affect the 3D editor viewport and the game renderer in Play, Play Solo and Run. They are scene settings, so you do not attach a sky to an entity. Inserted scene instances use the containing scene's environment.
 
+## Change scenes
+
+1. Keep your scene files in the project's scenes folder: `scene/` for new projects, or the configured `scenes/` folder in older projects. Both `.scene` and legacy `.rscene` files are supported, including files in subfolders. To try a second scene, save the current scene, then copy `scene/main.scene` to `scene/night.scene` using your file manager.
+2. In the **Project** panel, click the **settings gear** at the top right, open **Change scene**, and select a scene. The list shows paths relative to the scenes folder and highlights the current scene. New files appear after the background project scan, normally within a few seconds.
+3. The editor saves pending changes to the scene you are leaving, even when autosave is off. It then replaces the hierarchy and viewport with the selected scene's objects, cameras, lights, script attachments and environment. Selection and undo history start fresh. Check Console for `Loaded scene`.
+4. Edit **Scene sky & atmosphere** in Inspector and save. Switch back and forth to verify that each scene retains its own sky, ambient light, sun and haze settings. Play, Play Solo and Run use the scene currently selected in the editor.
+
+Stop play and resolve **Review runtime changes** before switching; **Change scene** is disabled until then. Read-only projects can switch scenes for inspection, but cannot save edits. If loading the target or saving local edits fails, the current scene stays open with its edits intact; inspect Console for `Could not change scene` and fix the reported path, scene data or write-permission issue. Scene files outside the configured scenes folder are not listed. Reopening the project still starts with `main.scene` (or legacy `main.rscene`); the picker does not change the project's startup scene.
+
 ## Set up a sky
 
 1. Copy a **2:1 equirectangular panorama** into your project, for example `assets/sky/sunset.hdr`. Supported formats are Radiance HDR (`.hdr`), PNG, JPEG and TGA. A 4096 × 2048 image is a typical choice; each dimension must be at most 8192 pixels. Six separate cubemap faces, EXR and model files are not supported.
