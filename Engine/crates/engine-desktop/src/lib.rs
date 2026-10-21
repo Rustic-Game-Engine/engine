@@ -179,7 +179,7 @@ fn draw_title_bar(
         .show(ui, |ui| {
             let rect = ui.max_rect();
             let controls_width = if custom { 159.0 } else { 0.0 };
-            let update_width = if update_available { 90.0 } else { 0.0 };
+            let update_width = if update_available { 56.0 } else { 0.0 };
             let drag_rect = egui::Rect::from_min_max(
                 rect.min,
                 egui::pos2(
@@ -208,6 +208,7 @@ fn draw_title_bar(
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
+                ui.spacing_mut().button_padding = egui::vec2(5.0, 0.0);
                 if custom {
                     if caption_button(ui, icons::Icon::X, "Close").clicked() {
                         context.send_viewport_cmd(ViewportCommand::Close);
@@ -221,7 +222,10 @@ fn draw_title_bar(
                 }
                 if update_available {
                     let response = ui
-                        .add_sized([90.0, 24.0], egui::Button::new("Update"))
+                        .add_sized(
+                            [56.0, 16.0],
+                            egui::Button::new(egui::RichText::new("Update").size(11.0)).small(),
+                        )
                         .on_hover_text("Close Rustic and install the latest update");
                     update_rect = Some(response.rect);
                     update = response.clicked();
@@ -238,6 +242,7 @@ fn caption_button(ui: &mut egui::Ui, icon: icons::Icon, tooltip: &str) -> egui::
     let response = ui.add_sized(
         [53.0, 24.0],
         egui::Button::image(icon.image(egui::Color32::WHITE, 14.0))
+            .small()
             .image_tint_follows_text_color(true)
             .frame(false),
     );
@@ -296,6 +301,11 @@ mod tests {
     #[test]
     fn update_button_stays_immediately_left_of_caption_controls_when_resized() {
         let context = egui::Context::default();
+        context.set_theme(egui::Theme::Dark);
+        context.style_mut_of(egui::Theme::Dark, |style| {
+            style.spacing.interact_size.y = 30.0;
+            style.spacing.button_padding = egui::vec2(12.0, 6.0);
+        });
         for width in [1280.0, 1080.0, 760.0] {
             let input = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
@@ -310,8 +320,9 @@ mod tests {
             });
             let button = button.expect("ready updates must have a title-bar action");
             assert!((button.right() - (width - 159.0)).abs() < 1.0);
-            assert!((button.width() - 90.0).abs() < 1.0);
-            assert!(button.top() < 2.0 && button.bottom() <= 26.0);
+            assert!((button.width() - 56.0).abs() < 1.0);
+            assert!((button.height() - 16.0).abs() < 1.0);
+            assert!((button.center().y - 12.0).abs() < 1.0);
         }
     }
 
