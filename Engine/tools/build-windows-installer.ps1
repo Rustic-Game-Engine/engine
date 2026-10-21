@@ -92,8 +92,15 @@ try {
         --package rustic-editor `
         --package rustic-runtime `
         --package rustic-asset-worker `
-        --package rustic-agent-backend
+        --package rustic-agent-backend `
+        --package rustic-setup-helper
     if ($LASTEXITCODE -ne 0) { throw "Cargo build failed with exit code $LASTEXITCODE." }
+
+    Write-Host 'Testing console-free installer launches...'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-installer-launch.ps1' `
+        -HelperPath 'target\distribution\rustic-setup-helper.exe' `
+        -ProjectManagerPath 'target\distribution\rustic-project-manager.exe'
+    if ($LASTEXITCODE -ne 0) { throw "Installer launch tests failed with exit code $LASTEXITCODE." }
 
     $metadata = (& $cargo metadata --locked --no-deps --format-version 1 | ConvertFrom-Json)
     if ($LASTEXITCODE -ne 0) { throw "Cargo metadata failed with exit code $LASTEXITCODE." }

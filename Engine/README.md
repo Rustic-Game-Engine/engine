@@ -74,18 +74,25 @@ The builder validates the installer script with Inno Setup before compiling the
 engine. This preflight omits the unbuilt binaries and disables output; it cannot
 produce a distributable installer.
 
-Setup checks and installs all selected optional toolchains in one hidden,
-noninteractive PowerShell process as the original user. Already-installed toolchains
+Setup checks and installs all selected optional toolchains in one noninteractive
+PowerShell process as the original user. A bundled GUI setup helper starts PowerShell
+and the agent backend with `CREATE_NO_WINDOW`; the manager also starts WinGet without
+a console. The project manager uses the Windows GUI subsystem, including when
+launched from Setup's Finish screen. Already-installed toolchains
 are skipped. If PowerShell cannot start, or WinGet returns an initialization failure
 (`142` or `0xc0000142`), Setup reports the optional-toolchain failure once and leaves
 the installed engine usable with its bundled languages. Setup always saves a log in
 `%TEMP%` named `Setup Log ...txt`; the failure dialog gives its exact path. To choose
 a persistent location, run `RusticGameEngine-Setup-<version>.exe /LOG="C:\path\setup.log"`.
 If PowerShell started, its transcript is in the original user's
-`%LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log`. Repair the failing
-PowerShell or Microsoft App Installer installation before retrying **Language
-Toolchain Manager**. The Setup log records launch errors and exit codes even when
-the transcript could not be created.
+`%LOCALAPPDATA%\Rustic Game Engine\logs\toolchain-install.log`. The helper captures
+child output and exit codes in that user's `logs\setup-launch.log` under the same
+directory. The Setup log records failures to start the helper even when neither
+child log could be created. If `0xc0000142` occurs only during Setup or its Finish
+launch but Rustic opens from Start, use a build containing the console-free helper.
+Diagnose PowerShell or Microsoft App Installer separately if **Language Toolchain
+Manager** also fails outside Setup. Agent integration errors are reported separately;
+retry with `rustic-agent-backend.exe --install-user-integrations` after closing Setup.
 
 On Windows, run the toolchain regression tests with
 `powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\test-language-toolchains.ps1`.
@@ -93,6 +100,9 @@ Pass `-InstallerPath .\dist\RusticGameEngine-Setup-<version>.exe` to also test s
 packaged Setup with all optional languages, simulated WinGet initialization failures,
 and bundled languages only. The tests use a local mock WinGet executable and never
 download or install external toolchains.
+The builder also runs `tools\test-installer-launch.ps1` against the distribution
+helper and project manager to check GUI subsystem headers, console-free child
+launches, output capture, argument forwarding, and exact child exit codes.
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the decision-record and project-file safety
 conventions.

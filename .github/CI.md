@@ -16,6 +16,12 @@ tools, ordinary package failures, and initialization errors `142`/`0xc0000142` w
 downloading toolchains. Packaged tests verify a single PowerShell transcript for all
 selected languages, that a failing WinGet is not retried for later languages, and
 that bundled-only Setup does not start the toolchain manager.
+The installer build also checks the GUI subsystem on the project manager and setup
+helper. Native backend and PowerShell fixtures verify that helper children have no
+console window, receive their arguments, capture stdout/stderr, and return exact
+exit codes (including signed `0xc0000142`). Packaged tests require successful agent
+integration registration and run the installed project manager's headless smoke path.
+The visible Finish-screen launch still needs interactive qualification on Windows.
 
 ## Installer releases
 
