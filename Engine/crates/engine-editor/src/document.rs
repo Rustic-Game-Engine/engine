@@ -15,6 +15,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+mod scene_files;
+
 #[derive(Debug, Error)]
 pub enum AuthoringError {
     #[error(transparent)]
@@ -35,6 +37,8 @@ pub enum AuthoringError {
     },
     #[error("scene path must stay inside the project scenes folder")]
     UnsafeScenePath,
+    #[error("scene file operation failed: {0}")]
+    SceneFileOperation(String),
 }
 
 /// One source scene and its centralized, checkpoint-aware edit history.
@@ -60,22 +64,16 @@ pub struct AuthoringDocument {
 }
 
 impl AuthoringDocument {
-    /// Opens the project's main scene, including backup recovery when required.
+    /// Opens the project's start scene, including backup recovery when required.
     ///
     /// # Errors
     ///
     /// Returns an error when project paths, scene recovery, migration, or world construction fails.
     pub fn open(project: Project, read_only: bool) -> Result<Self, AuthoringError> {
-        let scene_directory = project.directory(VirtualDirectory::Scenes)?;
-        // New projects use scene/{name}.scene. Keep opening the original
-        // scenes/main.rscene location so existing projects need no migration.
-        let preferred = scene_directory.join("main.scene");
-        let legacy = scene_directory.join("main.rscene");
-        let scene_path = if preferred.is_file() || !legacy.is_file() {
-            preferred
-        } else {
-            legacy
-        };
+        if let Some(relative) = project.descriptor().start_scene.clone() {
+            return Self::open_scene(project, relative, read_only);
+        }
+        let scene_path = project.start_scene_path()?;
         let (document, recovery_read_only, recovered_from_backup) = if scene_path.is_file() {
             let loaded = load_scene_recovering(&scene_path)?;
             (

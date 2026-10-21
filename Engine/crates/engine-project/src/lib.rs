@@ -48,6 +48,8 @@ pub enum ProjectError {
     UnsupportedFormat { found: u32, expected: u32 },
     #[error("invalid project name: {0}")]
     InvalidName(String),
+    #[error("start scene must be a .scene or .rscene path relative to the scenes folder: {0}")]
+    InvalidStartScene(PathBuf),
     #[error("unsafe path for virtual directory `{directory}`: {path}")]
     UnsafeVirtualPath {
         directory: VirtualDirectory,
@@ -311,6 +313,9 @@ pub struct ProjectDescriptor {
     pub metadata: ProjectMetadata,
     #[serde(default)]
     pub directories: VirtualDirectoryMap,
+    /// Scene opened when the project starts, relative to the configured scenes folder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_scene: Option<PathBuf>,
 }
 
 impl ProjectDescriptor {
@@ -328,6 +333,7 @@ impl ProjectDescriptor {
             template,
             metadata,
             directories,
+            start_scene: None,
         }
     }
 
@@ -345,6 +351,9 @@ impl ProjectDescriptor {
             });
         }
         validate_name(&self.metadata.name)?;
+        if let Some(path) = &self.start_scene {
+            validate_scene_path(path)?;
+        }
         for (directory, path) in self.directories.iter() {
             validate_relative_path(directory, path)?;
         }
@@ -543,6 +552,37 @@ impl Project {
         self.descriptor.project_id
     }
 
+    /// Resolves the configured start scene, or the legacy main-scene default.
+    /// # Errors
+    /// Returns an error for invalid scene or virtual-directory paths.
+    pub fn start_scene_path(&self) -> Result<PathBuf, ProjectError> {
+        let scenes = self.directory(VirtualDirectory::Scenes)?;
+        if let Some(path) = &self.descriptor.start_scene {
+            validate_scene_path(path)?;
+            return Ok(scenes.join(path));
+        }
+        let preferred = scenes.join("main.scene");
+        let legacy = scenes.join("main.rscene");
+        Ok(if preferred.is_file() || !legacy.is_file() {
+            preferred
+        } else {
+            legacy
+        })
+    }
+
+    /// Persists a start-scene path relative to the configured scenes folder.
+    /// The authoring layer validates the scene's contents before calling this method.
+    /// # Errors
+    /// Returns an error for unsafe paths or failed descriptor persistence; memory is unchanged.
+    pub fn set_start_scene(&mut self, path: impl AsRef<Path>) -> Result<(), ProjectError> {
+        validate_scene_path(path.as_ref())?;
+        let mut updated = self.clone();
+        updated.descriptor.start_scene = Some(path.as_ref().to_path_buf());
+        updated.save()?;
+        *self = updated;
+        Ok(())
+    }
+
     /// Resolve a virtual directory after validating its configured relative path.
     ///
     /// # Errors
@@ -595,6 +635,23 @@ impl Project {
         self.descriptor.metadata.updated_unix_seconds = unix_seconds();
         write_descriptor(&self.root, &self.descriptor, true)
     }
+}
+
+fn validate_scene_path(path: &Path) -> Result<(), ProjectError> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|part| !matches!(part, Component::Normal(_)))
+        || !path
+            .extension()
+            .and_then(|value| value.to_str())
+            .is_some_and(|value| {
+                value.eq_ignore_ascii_case("scene") || value.eq_ignore_ascii_case("rscene")
+            })
+    {
+        return Err(ProjectError::InvalidStartScene(path.to_path_buf()));
+    }
+    Ok(())
 }
 
 /// Convenience wrapper around [`Project::create`].

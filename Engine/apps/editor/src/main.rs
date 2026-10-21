@@ -163,6 +163,7 @@ struct EditorApp {
     show_game_settings: bool,
     missing_dependencies: Vec<ScriptLanguage>,
     show_dependency_prompt: bool,
+    scene_rename: Option<SceneRename>,
 }
 
 impl EditorApp {
@@ -270,6 +271,7 @@ impl EditorApp {
             show_game_settings: false,
             missing_dependencies,
             show_dependency_prompt,
+            scene_rename: None,
         };
         app.log(
             if read_only {
@@ -529,6 +531,136 @@ impl EditorApp {
                 "scene",
                 format!("Could not change scene: {error}"),
             ),
+        }
+    }
+
+    fn set_start_scene(&mut self, path: &Path) {
+        if self.play.is_some() || self.pending_runtime_changes.is_some() {
+            return;
+        }
+        let was_modified = self.document.is_modified();
+        let scene_existed = self.document.scene_path().is_file();
+        match self.document.set_start_scene(path) {
+            Ok(()) => {
+                if (was_modified && !self.document.is_modified())
+                    || (!scene_existed && self.document.scene_path().is_file())
+                {
+                    self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                    self.external_scene_change_pending = false;
+                }
+                self.log(
+                    Severity::Info,
+                    "scene",
+                    format!("Start scene set to {}", path.display()),
+                );
+            }
+            Err(error) => self.log(Severity::Error, "scene", error.to_string()),
+        }
+    }
+
+    fn scene_rename_dialog(&mut self, context: &egui::Context) {
+        let Some(mut rename) = self.scene_rename.take() else {
+            return;
+        };
+        let can_edit = !self.document.is_read_only()
+            && self.play.is_none()
+            && self.pending_runtime_changes.is_none();
+        let mut cancel = false;
+        let mut submit = false;
+        egui::Window::new("Rename scene")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(context, |ui| {
+                ui.label(format!("Scene: {}", rename.source.display()));
+                ui.add_enabled_ui(can_edit, |ui| {
+                    let input = ui
+                        .add(egui::TextEdit::singleline(&mut rename.name).hint_text("Scene name"));
+                    if rename.focus {
+                        input.request_focus();
+                        rename.focus = false;
+                    }
+                    submit = (input.has_focus() || input.lost_focus())
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                    if let Some(error) = &rename.error {
+                        ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    }
+                    submit |= ui.button("Rename").clicked();
+                });
+                cancel = ui.button("Cancel").clicked()
+                    || ui.input(|input| input.key_pressed(egui::Key::Escape));
+            });
+        if cancel {
+            return;
+        }
+        if submit && can_edit {
+            let previous_path = self.document.scene_path().to_path_buf();
+            let was_modified = self.document.is_modified();
+            match self.document.rename_scene(&rename.source, &rename.name) {
+                Ok(path) => {
+                    if self.document.scene_path() != previous_path
+                        || (was_modified && !self.document.is_modified())
+                    {
+                        self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                        self.external_scene_change_pending = false;
+                        self.last_scene_scan = Instant::now();
+                    }
+                    self.project_scan = Some(spawn_project_scan(
+                        self.document.project().root().to_path_buf(),
+                    ));
+                    self.log(
+                        Severity::Info,
+                        "scene",
+                        format!("Renamed scene to {}", path.display()),
+                    );
+                    return;
+                }
+                Err(error) => rename.error = Some(error.to_string()),
+            }
+        }
+        self.scene_rename = Some(rename);
+    }
+
+    fn apply_deferred_project_action(
+        &mut self,
+        action: Option<ProjectFileAction>,
+        context: &egui::Context,
+    ) {
+        match action {
+            Some(ProjectFileAction::ChangeScene(path)) => self.change_scene(&path, context),
+            Some(ProjectFileAction::SetStartScene(path)) => self.set_start_scene(&path),
+            Some(ProjectFileAction::RenameScene(path)) => {
+                if !self.document.is_read_only()
+                    && self.play.is_none()
+                    && self.pending_runtime_changes.is_none()
+                {
+                    self.scene_rename = Some(SceneRename {
+                        name: path
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy()
+                            .into_owned(),
+                        source: path,
+                        error: None,
+                        focus: true,
+                    });
+                }
+            }
+            Some(ProjectFileAction::Attach(path, scope)) => {
+                self.attach_project_script(&path, scope);
+            }
+            Some(ProjectFileAction::Refresh) => {
+                let project_root = self.document.project().root().to_path_buf();
+                if let Ok(settings) = GameSettings::load(&project_root) {
+                    self.game_settings = settings;
+                }
+                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                self.model_assets = load_project_model_assets(&project_root);
+                self.project_scan = Some(spawn_project_scan(project_root));
+                self.last_project_scan = Instant::now();
+                self.refresh_preview();
+            }
+            _ => {}
         }
     }
 
@@ -1451,27 +1583,12 @@ impl eframe::App for EditorApp {
         viewer.flush_play_input();
         let request_preview = viewer.request_preview;
         drop(viewer);
-        match project_file_action {
-            Some(ProjectFileAction::ChangeScene(path)) => self.change_scene(&path, ui.ctx()),
-            Some(ProjectFileAction::Attach(path, scope)) => {
-                self.attach_project_script(&path, scope);
-            }
-            Some(ProjectFileAction::Refresh) => {
-                if let Ok(settings) = GameSettings::load(&project_root) {
-                    self.game_settings = settings;
-                }
-                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
-                self.model_assets = load_project_model_assets(&project_root);
-                self.project_scan = Some(spawn_project_scan(project_root));
-                self.last_project_scan = Instant::now();
-                self.refresh_preview();
-            }
-            _ => {}
-        }
+        self.apply_deferred_project_action(project_file_action, ui.ctx());
         if request_preview {
             self.refresh_preview();
         }
         self.runtime_changes_dialog(ui.ctx());
+        self.scene_rename_dialog(ui.ctx());
         self.game_settings_dialog(ui.ctx());
         self.dependency_prompt(ui.ctx());
         self.update_close_dialog(ui);
@@ -2281,15 +2398,19 @@ impl EditorViewer<'_> {
                         }
                         for path in paths {
                             let selected = active.as_ref() == Some(&path);
-                            if ui
-                                .selectable_label(selected, path.to_string_lossy())
-                                .clicked()
-                            {
-                                if !selected {
-                                    *self.project_file_action =
-                                        Some(ProjectFileAction::ChangeScene(path));
-                                }
-                                ui.close();
+                            let is_start = self
+                                .document
+                                .project()
+                                .start_scene_path()
+                                .is_ok_and(|start| start == scenes.join(&path));
+                            if let Some(action) = scene_picker_entry(
+                                ui,
+                                &path,
+                                selected,
+                                is_start,
+                                !self.document.is_read_only(),
+                            ) {
+                                *self.project_file_action = Some(action);
                             }
                         }
                     });
@@ -4402,6 +4523,8 @@ struct ProjectFile {
 #[derive(Debug)]
 enum ProjectFileAction {
     ChangeScene(PathBuf),
+    RenameScene(PathBuf),
+    SetStartScene(PathBuf),
     Refresh,
     Open(PathBuf),
     Attach(PathBuf, ScriptScope),
@@ -4414,6 +4537,75 @@ enum ProjectFileAction {
         sources: Vec<PathBuf>,
         destination: PathBuf,
     },
+}
+
+struct SceneRename {
+    source: PathBuf,
+    name: String,
+    error: Option<String>,
+    focus: bool,
+}
+
+fn scene_picker_entry(
+    ui: &mut egui::Ui,
+    path: &Path,
+    selected: bool,
+    is_start: bool,
+    can_edit: bool,
+) -> Option<ProjectFileAction> {
+    let mut action = None;
+    let row = ui
+        .horizontal(|ui| {
+            let response = ui.selectable_label(selected, path.to_string_lossy());
+            if is_start {
+                ui.weak("Start");
+            }
+            response
+        })
+        .inner;
+    // Memory-backed context menus close the parent popup. Keep this menu in
+    // egui's submenu state so it remains usable inside the scene picker.
+    let popup_id = ui.make_persistent_id(("scene-actions", path));
+    let secondary_clicked = row.secondary_clicked();
+    let open = egui::menu::MenuState::from_ui(ui, |state, _| {
+        if secondary_clicked {
+            state.open_item = Some(popup_id);
+        }
+        state.open_item == Some(popup_id)
+    });
+    let popup = egui::Popup::from_response(&row)
+        .id(popup_id)
+        .open(open)
+        .kind(egui::PopupKind::Menu)
+        .align(egui::RectAlign::RIGHT_START)
+        .layout(egui::Layout::top_down_justified(egui::Align::Min))
+        .show(|ui| {
+            if ui
+                .add_enabled(can_edit, egui::Button::new("Rename"))
+                .clicked()
+            {
+                action = Some(ProjectFileAction::RenameScene(path.to_path_buf()));
+                ui.close();
+            }
+            if ui
+                .add_enabled(can_edit, egui::Button::new("Set as start scene"))
+                .clicked()
+            {
+                action = Some(ProjectFileAction::SetStartScene(path.to_path_buf()));
+                ui.close();
+            }
+        });
+    if popup.is_some_and(|popup| popup.response.should_close()) {
+        egui::menu::MenuState::from_ui(ui, |state, _| state.open_item = None);
+        ui.close();
+    }
+    if row.clicked() {
+        if !selected {
+            action = Some(ProjectFileAction::ChangeScene(path.to_path_buf()));
+        }
+        ui.close();
+    }
+    action
 }
 
 impl ProjectDirectory {
@@ -5700,6 +5892,123 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
 mod explorer_tests {
     use super::*;
 
+    fn scene_context_frame(
+        context: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+        can_edit: bool,
+    ) -> (egui::FullOutput, Option<ProjectFileAction>) {
+        let mut action = None;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                ui.menu_button("Settings", |ui| {
+                    ui.menu_button("Change scene", |ui| {
+                        action = scene_picker_entry(
+                            ui,
+                            Path::new("night.scene"),
+                            false,
+                            false,
+                            can_edit,
+                        );
+                    });
+                });
+            },
+        );
+        output.textures_delta.clear();
+        (output, action)
+    }
+
+    fn scene_context_click(
+        context: &egui::Context,
+        time: f64,
+        position: egui::Pos2,
+        button: egui::PointerButton,
+        can_edit: bool,
+    ) -> (egui::FullOutput, Option<ProjectFileAction>) {
+        scene_context_frame(
+            context,
+            time,
+            vec![
+                egui::Event::PointerMoved(position),
+                pointer(position, button, true),
+            ],
+            can_edit,
+        );
+        scene_context_frame(
+            context,
+            time + 0.01,
+            vec![pointer(position, button, false)],
+            can_edit,
+        )
+    }
+
+    #[test]
+    fn right_click_scene_offers_rename_and_start_without_loading_the_scene() {
+        for (choice, can_edit) in [
+            ("Rename", true),
+            ("Set as start scene", true),
+            ("Rename", false),
+            ("Set as start scene", false),
+        ] {
+            let context = egui::Context::default();
+            let (output, _) = scene_context_frame(&context, 0.0, vec![], can_edit);
+            let settings = text_position(&output, "Settings");
+            scene_context_click(
+                &context,
+                0.1,
+                settings,
+                egui::PointerButton::Primary,
+                can_edit,
+            );
+            let (output, _) = scene_context_frame(&context, 0.2, vec![], can_edit);
+            let change = text_position(&output, "Change scene");
+            scene_context_click(
+                &context,
+                0.3,
+                change,
+                egui::PointerButton::Primary,
+                can_edit,
+            );
+            let (output, _) = scene_context_frame(&context, 0.4, vec![], can_edit);
+            let night = text_position(&output, "night.scene");
+            let (_, action) = scene_context_click(
+                &context,
+                0.5,
+                night,
+                egui::PointerButton::Secondary,
+                can_edit,
+            );
+            assert!(action.is_none(), "right click must not switch scenes");
+            let (output, _) = scene_context_frame(&context, 0.6, vec![], can_edit);
+            text_position(&output, "Rename");
+            text_position(&output, "Set as start scene");
+            let position = text_position(&output, choice);
+            let (_, action) = scene_context_click(
+                &context,
+                0.7,
+                position,
+                egui::PointerButton::Primary,
+                can_edit,
+            );
+            if !can_edit {
+                assert!(action.is_none());
+            } else if choice == "Rename" {
+                assert!(
+                    matches!(action, Some(ProjectFileAction::RenameScene(path)) if path == Path::new("night.scene"))
+                );
+            } else {
+                assert!(
+                    matches!(action, Some(ProjectFileAction::SetStartScene(path)) if path == Path::new("night.scene"))
+                );
+            }
+        }
+    }
+
     #[test]
     fn project_settings_gear_opens_scene_picker_and_requests_selected_scene() {
         let temporary = TestProject::new();
@@ -6715,7 +7024,7 @@ mod explorer_tests {
                     None
                 }
             })
-            .unwrap()
+            .unwrap_or_else(|| panic!("Missing UI text: {label}"))
     }
 
     fn modifier_pointer(

@@ -498,8 +498,15 @@ engine resources. A descriptor matching the initial `engine-project` schema is:
 )
 ```
 
-Startup scene, rendering defaults, input maps, logging defaults, and other evolving
-settings are versioned resources below `config/`, referenced by asset/resource ID as
+The optional `start_scene` field in `project.engine` stores the selected start scene
+as a path relative to the configured scenes folder. The editor persists it through
+**Change scene → right-click a scene → Set as start scene** and follows it on the
+next project open. Without this field, the editor uses `main.scene`, with
+`main.rscene` as the legacy fallback. The template manifest records the initial
+project seed and does not override this choice.
+
+Rendering defaults, input maps, logging defaults, and other evolving settings are
+versioned resources below `config/`, referenced by asset/resource ID as
 their schemas land; they are not added as an unversioned catch-all table. Machine
 overrides, trust decisions, detected toolchains, and hardware scores do not belong in
 the source-controlled descriptor. They live below `.rustic/local/` or the user's engine
