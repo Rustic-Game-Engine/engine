@@ -6,6 +6,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+# Windows PowerShell 5.1's per-chunk progress rendering makes downloads very slow,
+# even though this worker has no visible console.
+$ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 $script:Repository = 'Rustic-Game-Engine/engine'
 $script:Headers = @{ 'User-Agent' = 'Rustic-Desktop-Updater'; Accept = 'application/vnd.github+json' }
@@ -60,11 +63,19 @@ function Select-DesktopUpdate($Releases, [string]$InstalledCommit) {
 function Save-VerifiedInstaller($Asset, [string]$Directory) {
     $partial = Join-Path $Directory ($Asset.name + '.partial')
     $installer = Join-Path $Directory $Asset.name
+    $expected = $Asset.digest.Substring(7)
+    if (Test-Path -LiteralPath $installer -PathType Leaf) {
+        if ((Get-Item -LiteralPath $installer).Length -eq $Asset.size -and
+            (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash -eq $expected) {
+            Write-UpdateLog "Reusing verified installer $($Asset.name)."
+            return $installer
+        }
+        Remove-Item -LiteralPath $installer -Force
+    }
     try {
         Invoke-WebRequest -UseBasicParsing -Uri $Asset.browser_download_url -Headers $script:Headers `
             -OutFile $partial -TimeoutSec 600 | Out-Null
         if ((Get-Item -LiteralPath $partial).Length -ne $Asset.size) { throw 'Installer size does not match GitHub.' }
-        $expected = $Asset.digest.Substring(7)
         if ((Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash -ne $expected) {
             throw 'Installer SHA-256 does not match GitHub.'
         }
@@ -85,6 +96,44 @@ function Test-RusticRunning([string]$Directory) {
         } catch { return $true }
     }
     return $false
+}
+
+function Wait-DesktopExit([string]$Directory, [string]$CacheDirectory, [string]$Tag) {
+    $requestFile = Join-Path $CacheDirectory 'install-request.txt'
+    $lastRequest = ''
+    $requestWait = 0
+    $ticks = 0
+    while (Test-RusticRunning $Directory) {
+        $request = if (Test-Path -LiteralPath $requestFile) {
+            [IO.File]::ReadAllText($requestFile)
+        } else { '' }
+        if ($request -cne $lastRequest) { $requestWait = 0; $lastRequest = $request }
+        if ($request) {
+            $requestWait++
+            if ($requestWait -ge 120) {
+                # A runtime/worker, inaccessible process or newly opened editor may
+                # still be running. Give closed windows back instead of trapping
+                # the user outside the editor while waiting indefinitely.
+                Remove-Item -LiteralPath $requestFile -Force -ErrorAction SilentlyContinue
+                Write-UpdateLog 'Update deferred after waiting two minutes for Rustic processes. Restoring closed windows; the Update button remains available.'
+                Restart-DesktopSessions $Directory $CacheDirectory $Tag
+                $lastRequest = ''
+                $requestWait = 0
+            }
+        }
+        if (($ticks % 60) -eq 0) {
+            $blockers = @(Get-Process -Name 'rustic-*' -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                    if (-not $_.Path -or (Split-Path -Parent $_.Path) -eq $Directory) {
+                        "$($_.ProcessName) (PID $($_.Id))"
+                    }
+                } catch { "$($_.ProcessName) (PID $($_.Id), path unavailable)" }
+            })
+            Write-UpdateLog "Waiting for Rustic to close: $($blockers -join ', '). Close standalone games/workers separately."
+        }
+        Start-Sleep -Seconds 1
+        $ticks++
+    }
 }
 
 function Install-DesktopUpdate([string]$Installer, [string]$Directory, [string]$LogDirectory) {
@@ -123,7 +172,7 @@ function Restart-DesktopSessions([string]$Directory, [string]$CacheDirectory, [s
             } else { throw 'Unknown desktop session type.' }
             # This worker retains the original user's context even when Setup elevated.
             Start-Process @start | Out-Null
-            Write-UpdateLog "Reopened $($lines[1]) after updating to $Tag."
+            Write-UpdateLog "Restored $($lines[1]) for update $Tag."
         } catch { Write-UpdateLog "Could not restore a desktop session: $($_.Exception.Message)" }
         finally { Remove-Item -LiteralPath $record.FullName -Force -ErrorAction SilentlyContinue }
     }
@@ -134,7 +183,7 @@ function Invoke-DesktopUpdateCheck([string]$Directory, [string]$CacheDirectory) 
     $commit = (Get-Content -LiteralPath $commitFile -Raw).Trim()
     $asset = Select-DesktopUpdate @(Get-PublishedReleases) $commit
     if (-not $asset) { return $null }
-    Write-UpdateLog "Downloading $($asset.name). Close Rustic to install the update."
+    Write-UpdateLog "Preparing $($asset.name)."
     Remove-Item -LiteralPath (Join-Path $CacheDirectory 'pending-update.txt') -Force -ErrorAction SilentlyContinue
     $installer = Save-VerifiedInstaller $asset $CacheDirectory
     $tag = ($asset.browser_download_url -split '/')[-2]
@@ -143,9 +192,11 @@ function Invoke-DesktopUpdateCheck([string]$Directory, [string]$CacheDirectory) 
     $temporary = $pending + '.tmp'
     [IO.File]::WriteAllText($temporary, "$commit`n$tag`n", [Text.Encoding]::ASCII)
     Move-Item -LiteralPath $temporary -Destination $pending -Force
-    while (Test-RusticRunning $Directory) { Start-Sleep -Seconds 5 }
+    Write-UpdateLog 'Installer verified and ready. Waiting for Rustic to close.'
+    Wait-DesktopExit $Directory $CacheDirectory $tag
     if (-not (Test-Path -LiteralPath $commitFile)) { return [pscustomobject]@{ Installed = $false; Tag = $tag } }
     if ((Get-Content -LiteralPath $commitFile -Raw).Trim() -ne $commit) { return [pscustomobject]@{ Installed = $false; Tag = $tag } }
+    Write-UpdateLog 'Starting Setup. See update-setup.log for installation progress.'
     try { Install-DesktopUpdate $installer $Directory $CacheDirectory }
     catch {
         Remove-Item -LiteralPath (Join-Path $CacheDirectory 'install-request.txt') -Force -ErrorAction SilentlyContinue
