@@ -33,12 +33,16 @@ pub enum AuthoringError {
         #[source]
         source: std::io::Error,
     },
-    #[error("scene insertion path must stay inside the project scenes folder")]
+    #[error("scene path must stay inside the project scenes folder")]
     UnsafeScenePath,
 }
 
 /// One source scene and its centralized, checkpoint-aware edit history.
 #[derive(Debug)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "project access, scene recovery, and unsaved script links are independent states"
+)]
 pub struct AuthoringDocument {
     project: Project,
     scene_path: PathBuf,
@@ -49,6 +53,7 @@ pub struct AuthoringDocument {
     undo: UndoStack,
     selected: Option<EntityId>,
     read_only: bool,
+    project_read_only: bool,
     recovered_from_backup: bool,
     removed_scripts: BTreeSet<ScriptId>,
     script_links_modified: bool,
@@ -81,6 +86,96 @@ impl AuthoringDocument {
         } else {
             (SceneDocument::new("Main"), false, false)
         };
+        Self::from_scene(
+            project,
+            scene_path,
+            document,
+            read_only,
+            recovery_read_only,
+            recovered_from_backup,
+        )
+    }
+
+    /// Opens an existing `.scene` or legacy `.rscene` relative to the project's scenes folder.
+    /// Backup recovery and scene environment settings are loaded with the objects.
+    ///
+    /// # Errors
+    /// Returns an error for paths outside the scenes folder, unsupported extensions,
+    /// missing files, invalid scene data, or failed world construction.
+    pub fn open_scene(
+        project: Project,
+        relative_path: impl AsRef<Path>,
+        read_only: bool,
+    ) -> Result<Self, AuthoringError> {
+        let relative_path = relative_path.as_ref();
+        if relative_path.is_absolute()
+            || relative_path.components().any(|part| {
+                !matches!(
+                    part,
+                    std::path::Component::Normal(_) | std::path::Component::CurDir
+                )
+            })
+            || !relative_path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|value| {
+                    value.eq_ignore_ascii_case("scene") || value.eq_ignore_ascii_case("rscene")
+                })
+        {
+            return Err(AuthoringError::UnsafeScenePath);
+        }
+        let scenes = project.directory(VirtualDirectory::Scenes)?;
+        let scene_path = scenes.join(relative_path);
+        let canonical = |path: &Path| {
+            path.canonicalize().map_err(|source| AuthoringError::Io {
+                path: path.to_path_buf(),
+                source,
+            })
+        };
+        if !canonical(&scene_path)?.starts_with(canonical(&scenes)?) {
+            return Err(AuthoringError::UnsafeScenePath);
+        }
+        let loaded = load_scene_recovering(&scene_path)?;
+        Self::from_scene(
+            project,
+            scene_path,
+            loaded.document,
+            read_only,
+            loaded.read_only,
+            loaded.source == RecoverySource::Backup,
+        )
+    }
+
+    /// Loads another scene, saving local edits before replacing the current document.
+    /// Selection and undo history belong to the newly loaded scene.
+    ///
+    /// # Errors
+    /// Returns an error without replacing the current document if loading or saving fails.
+    pub fn switch_scene(&mut self, relative_path: impl AsRef<Path>) -> Result<(), AuthoringError> {
+        let next = Self::open_scene(self.project.clone(), relative_path, self.project_read_only)?;
+        let same_file = self.scene_path.canonicalize().is_ok_and(|current| {
+            next.scene_path
+                .canonicalize()
+                .is_ok_and(|path| path == current)
+        });
+        if next.scene_path == self.scene_path || same_file {
+            return Ok(());
+        }
+        if self.is_modified() {
+            self.save()?;
+        }
+        *self = next;
+        Ok(())
+    }
+
+    fn from_scene(
+        project: Project,
+        scene_path: PathBuf,
+        document: SceneDocument,
+        read_only: bool,
+        recovery_read_only: bool,
+        recovered_from_backup: bool,
+    ) -> Result<Self, AuthoringError> {
         let world = document.create_world()?;
         let mut undo = UndoStack::new();
         undo.mark_saved();
@@ -94,6 +189,7 @@ impl AuthoringDocument {
             undo,
             selected: None,
             read_only: read_only || recovery_read_only,
+            project_read_only: read_only,
             recovered_from_backup,
             removed_scripts: BTreeSet::new(),
             script_links_modified: false,
@@ -892,6 +988,201 @@ mod tests {
     use engine_project::ProjectTemplate;
     use glam::Vec3;
     use tempfile::tempdir;
+
+    #[test]
+    fn switching_scenes_saves_edits_and_replaces_objects_environment_and_history() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("switch"),
+            "Switch",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        let scenes = project.directory(VirtualDirectory::Scenes).unwrap();
+        std::fs::create_dir_all(scenes.join("levels")).unwrap();
+        let mut other = SceneDocument::new("Night");
+        other.environment.enabled = true;
+        other.environment.sky_image = "assets/sky/night.hdr".into();
+        other.environment.sun_intensity = 0.4;
+        other.environment.haze_density = 0.02;
+        let entity = engine_world::EntitySnapshot {
+            name: Some("Night object".into()),
+            camera: Some(engine_world::Camera::default()),
+            light: Some(engine_world::Light::default()),
+            scripts: vec![ScriptComponent::new(ScriptId::new())],
+            ..Default::default()
+        };
+        other.entities.push(entity.clone());
+        other
+            .startup_scripts
+            .push(ScriptReference::new(ScriptId::new()));
+        save_scene_atomic(scenes.join("levels/night.scene"), &other).unwrap();
+
+        let original = document
+            .add_primitive("Day object", Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+        let day_environment = engine_world::SceneEnvironment {
+            enabled: true,
+            sun_intensity: 2.0,
+            ..Default::default()
+        };
+        document.set_environment(day_environment.clone()).unwrap();
+        let main_path = document.scene_path().to_path_buf();
+        document.switch_scene("levels/night.scene").unwrap();
+        assert_eq!(document.scene_path(), scenes.join("levels/night.scene"));
+        assert_eq!(document.entity_snapshots().unwrap(), vec![entity.clone()]);
+        assert_eq!(document.world().environment(), &other.environment);
+        assert_eq!(document.scene_startup_scripts(), &other.startup_scripts);
+        assert_eq!(document.selected(), None);
+        assert!(!document.is_modified());
+        document.undo().unwrap();
+        assert_eq!(document.entity_snapshots().unwrap(), vec![entity]);
+        assert_eq!(
+            load_scene_recovering(&main_path)
+                .unwrap()
+                .document
+                .environment,
+            day_environment
+        );
+
+        document
+            .switch_scene(main_path.file_name().unwrap())
+            .unwrap();
+        assert!(document.world().contains(original));
+        assert_eq!(document.world().environment(), &day_environment);
+        // External reload must reopen the active scene rather than the main scene.
+        let reopened = AuthoringDocument::open_scene(project, "levels/night.scene", false).unwrap();
+        assert_eq!(reopened.world().environment(), &other.environment);
+    }
+
+    #[test]
+    fn selecting_the_current_scene_through_an_alias_keeps_unsaved_edits() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("same-scene"),
+            "Same scene",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.save().unwrap();
+        let entity = document.add_folder(None).unwrap();
+        document.switch_scene("./main.scene").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                "main.scene",
+                document.scene_path().with_file_name("alias.scene"),
+            )
+            .unwrap();
+            document.switch_scene("alias.scene").unwrap();
+        }
+        #[cfg(windows)]
+        document.switch_scene("MAIN.scene").unwrap();
+        assert_eq!(document.selected(), Some(entity));
+        assert!(document.is_modified());
+        assert!(document.world().contains(entity));
+    }
+
+    #[test]
+    fn failed_scene_load_keeps_unsaved_edits_and_history() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("failure"),
+            "Failure",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.save().unwrap();
+        let entity = document.add_folder(None).unwrap();
+        let before = document.snapshot_bytes().unwrap();
+        let saved = std::fs::read(document.scene_path()).unwrap();
+        let broken = document.scene_path().with_file_name("broken.scene");
+        std::fs::write(broken, "invalid scene").unwrap();
+        for path in [
+            "missing.scene",
+            "broken.scene",
+            "../main.scene",
+            "/outside.scene",
+            "main.txt",
+        ] {
+            assert!(document.switch_scene(path).is_err(), "accepted {path}");
+            assert_eq!(document.snapshot_bytes().unwrap(), before);
+            assert_eq!(document.selected(), Some(entity));
+            assert!(document.is_modified());
+            assert_eq!(std::fs::read(document.scene_path()).unwrap(), saved);
+        }
+        document.undo().unwrap();
+        assert!(!document.world().contains(entity));
+    }
+
+    #[test]
+    fn failed_scene_save_does_not_switch() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("save-failure"),
+            "Failure",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.save().unwrap();
+        let path = document.scene_path().to_path_buf();
+        save_scene_atomic(
+            path.with_file_name("other.scene"),
+            &SceneDocument::new("Other"),
+        )
+        .unwrap();
+        let entity = document.add_folder(None).unwrap();
+        // A file where the destination's parent directory is expected forces
+        // a persistence failure on both Windows and Linux, even when run as root.
+        document.scene_path = path.join("blocked.scene");
+        let blocked = document.scene_path().to_path_buf();
+        assert!(document.switch_scene("other.scene").is_err());
+        assert_eq!(document.scene_path(), blocked);
+        assert_eq!(document.selected(), Some(entity));
+        assert!(document.is_modified());
+    }
+
+    #[test]
+    fn read_only_scene_switch_supports_legacy_scenes_and_keeps_project_read_only() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("read-only"),
+            "Read only",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let scenes = project.directory(VirtualDirectory::Scenes).unwrap();
+        save_scene_atomic(scenes.join("legacy.rscene"), &SceneDocument::new("Legacy")).unwrap();
+        let mut document = AuthoringDocument::open(project, true).unwrap();
+        document.switch_scene("legacy.rscene").unwrap();
+        assert!(document.is_read_only());
+        assert!(document.save().is_err());
+        assert_eq!(document.scene_path(), scenes.join("legacy.rscene"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scene_open_rejects_symlinks_outside_scenes() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("symlink"),
+            "Symlink",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let outside = temporary.path().join("outside.scene");
+        save_scene_atomic(&outside, &SceneDocument::new("Outside")).unwrap();
+        let scenes = project.directory(VirtualDirectory::Scenes).unwrap();
+        std::os::unix::fs::symlink(outside, scenes.join("link.scene")).unwrap();
+        assert!(matches!(
+            AuthoringDocument::open_scene(project, "link.scene", false),
+            Err(AuthoringError::UnsafeScenePath)
+        ));
+    }
 
     #[test]
     fn explorer_tree_copy_delete_are_atomic_and_undoable() {

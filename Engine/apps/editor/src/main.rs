@@ -454,7 +454,13 @@ impl EditorApp {
         let selected = self.document.selected();
         let project = self.document.project().clone();
         let read_only = self.project_lock.is_none();
-        match AuthoringDocument::open(project, read_only) {
+        let Ok(scenes) = project.directory(VirtualDirectory::Scenes) else {
+            return;
+        };
+        let Ok(relative_path) = path.strip_prefix(&scenes) else {
+            return;
+        };
+        match AuthoringDocument::open_scene(project, relative_path, read_only) {
             Ok(mut document) => {
                 document.select(selected);
                 self.document = document;
@@ -493,6 +499,36 @@ impl EditorApp {
                 );
             }
             Err(error) => self.log(Severity::Error, "runtime", error),
+        }
+    }
+
+    fn change_scene(&mut self, relative_path: &Path, context: &egui::Context) {
+        if self.play.is_some() || self.pending_runtime_changes.is_some() {
+            return;
+        }
+        match self.document.switch_scene(relative_path) {
+            Ok(()) => {
+                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                self.external_scene_change_pending = false;
+                self.last_scene_scan = Instant::now();
+                self.last_autosave = Some(Instant::now());
+                self.gizmo_drag = None;
+                context.data_mut(|data| {
+                    data.remove::<SceneClipboard>(egui::Id::new("scene-clipboard"));
+                });
+                self.preview = None;
+                self.refresh_preview();
+                self.log(
+                    Severity::Info,
+                    "scene",
+                    format!("Loaded scene {}", relative_path.display()),
+                );
+            }
+            Err(error) => self.log(
+                Severity::Error,
+                "scene",
+                format!("Could not change scene: {error}"),
+            ),
         }
     }
 
@@ -1401,6 +1437,7 @@ impl eframe::App for EditorApp {
             preview_status: &self.preview_status,
             request_preview: false,
             playing: self.play.is_some(),
+            can_switch_scene: self.play.is_none() && self.pending_runtime_changes.is_none(),
             play: self.play.as_mut(),
             play_keys: BTreeSet::new(),
             camera: &mut self.camera,
@@ -1415,6 +1452,7 @@ impl eframe::App for EditorApp {
         let request_preview = viewer.request_preview;
         drop(viewer);
         match project_file_action {
+            Some(ProjectFileAction::ChangeScene(path)) => self.change_scene(&path, ui.ctx()),
             Some(ProjectFileAction::Attach(path, scope)) => {
                 self.attach_project_script(&path, scope);
             }
@@ -1453,6 +1491,7 @@ struct EditorViewer<'a> {
     preview_status: &'a str,
     request_preview: bool,
     playing: bool,
+    can_switch_scene: bool,
     play: Option<&'a mut EditorPlaySession>,
     play_keys: BTreeSet<String>,
     camera: &'a mut EditorCamera,
@@ -2187,7 +2226,14 @@ impl EditorViewer<'_> {
         reason = "the project explorer keeps its compact tree and toolbar interaction together"
     )]
     fn project_explorer(&mut self, ui: &mut egui::Ui) {
-        ui.heading(egui::RichText::new("Project").color(ui_theme::TEXT));
+        ui.horizontal(|ui| {
+            ui.heading(egui::RichText::new("Project").color(ui_theme::TEXT));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button("⚙", |ui| self.project_settings(ui))
+                    .response
+                    .on_hover_text("Project settings");
+            });
+        });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             ui.selectable_value(self.project_panel_mode, ProjectPanelMode::Scene, "Scene");
@@ -2203,6 +2249,54 @@ impl EditorViewer<'_> {
             ProjectPanelMode::Scene => self.scene_tree(ui),
             ProjectPanelMode::Explorer => self.file_explorer(ui),
         }
+    }
+
+    fn project_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_enabled_ui(self.can_switch_scene, |ui| {
+            ui.menu_button("Change scene", |ui| {
+                let Ok(scenes) = self.document.project().directory(VirtualDirectory::Scenes) else {
+                    ui.label("Scenes folder unavailable");
+                    return;
+                };
+                let relative_scenes = scenes.strip_prefix(self.project_root).unwrap_or(&scenes);
+                let mut paths = self
+                    .project_tree
+                    .map_or_else(Vec::new, |tree| tree.scene_paths(relative_scenes));
+                let active = self
+                    .document
+                    .scene_path()
+                    .strip_prefix(&scenes)
+                    .ok()
+                    .map(Path::to_path_buf);
+                if let Some(active) = &active {
+                    paths.push(active.clone());
+                }
+                paths.sort();
+                paths.dedup();
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .show(ui, |ui| {
+                        if self.project_tree.is_none() {
+                            ui.label("Scanning project scenes…");
+                        }
+                        for path in paths {
+                            let selected = active.as_ref() == Some(&path);
+                            if ui
+                                .selectable_label(selected, path.to_string_lossy())
+                                .clicked()
+                            {
+                                if !selected {
+                                    *self.project_file_action =
+                                        Some(ProjectFileAction::ChangeScene(path));
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        })
+        .response
+        .on_disabled_hover_text("Stop play and review runtime changes before changing scenes");
     }
 
     #[allow(
@@ -4307,6 +4401,7 @@ struct ProjectFile {
 
 #[derive(Debug)]
 enum ProjectFileAction {
+    ChangeScene(PathBuf),
     Refresh,
     Open(PathBuf),
     Attach(PathBuf, ScriptScope),
@@ -4322,6 +4417,24 @@ enum ProjectFileAction {
 }
 
 impl ProjectDirectory {
+    fn scene_paths(&self, scenes: &Path) -> Vec<PathBuf> {
+        let mut paths: Vec<_> = self
+            .files
+            .iter()
+            .filter_map(|file| {
+                let path = file.relative_path.strip_prefix(scenes).ok()?;
+                let extension = path.extension()?.to_str()?;
+                (extension.eq_ignore_ascii_case("scene")
+                    || extension.eq_ignore_ascii_case("rscene"))
+                .then(|| path.to_path_buf())
+            })
+            .collect();
+        for directory in &self.directories {
+            paths.extend(directory.scene_paths(scenes));
+        }
+        paths
+    }
+
     fn file_count(&self) -> usize {
         self.files.len() + self.directories.iter().map(Self::file_count).sum::<usize>()
     }
@@ -5586,6 +5699,140 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
 #[cfg(test)]
 mod explorer_tests {
     use super::*;
+
+    #[test]
+    fn project_settings_gear_opens_scene_picker_and_requests_selected_scene() {
+        let temporary = TestProject::new();
+        let project = Project::create(
+            temporary.0.join("game"),
+            "Game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.save().unwrap();
+        let other = document.scene_path().with_file_name("night.scene");
+        engine_world::save_scene_atomic(&other, &engine_world::SceneDocument::new("Night"))
+            .unwrap();
+        let root = document.project().root().to_path_buf();
+        let tree = scan_project_directory(&root, &root);
+        let context = egui::Context::default();
+        ui_theme::apply(&context);
+        let mut action = None;
+        {
+            let mut viewer = EditorViewer {
+                document: &mut document,
+                project_root: &root,
+                console: &mut RuntimeConsole::default(),
+                project_tree: Some(&tree),
+                project_panel_mode: &mut ProjectPanelMode::Scene,
+                project_filter: &mut String::new(),
+                preview: None,
+                preview_status: "",
+                request_preview: false,
+                playing: false,
+                can_switch_scene: true,
+                play: None,
+                play_keys: BTreeSet::new(),
+                camera: &mut EditorCamera::default(),
+                viewport_extent: &mut [640, 480],
+                gizmo: &mut GizmoSettings::default(),
+                gizmo_drag: &mut None,
+                model_assets: &mut BTreeMap::new(),
+                project_file_action: &mut action,
+            };
+            let mut frame = |time, events| {
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(426.0, 586.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| viewer.project_explorer(ui),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let gear = text_position(&frame(0.0, vec![]), "⚙");
+            assert!(
+                gear.x > 350.0 && gear.y < 40.0,
+                "gear must sit at the top right: {gear:?}"
+            );
+            frame(
+                0.1,
+                vec![
+                    egui::Event::PointerMoved(gear),
+                    pointer(gear, egui::PointerButton::Primary, true),
+                ],
+            );
+            frame(
+                0.2,
+                vec![pointer(gear, egui::PointerButton::Primary, false)],
+            );
+            let change = text_position(&frame(0.3, vec![]), "Change scene");
+            frame(
+                0.4,
+                vec![
+                    egui::Event::PointerMoved(change),
+                    pointer(change, egui::PointerButton::Primary, true),
+                ],
+            );
+            frame(
+                0.5,
+                vec![pointer(change, egui::PointerButton::Primary, false)],
+            );
+            let night = text_position(&frame(0.6, vec![]), "night.scene");
+            frame(
+                0.7,
+                vec![
+                    egui::Event::PointerMoved(night),
+                    pointer(night, egui::PointerButton::Primary, true),
+                ],
+            );
+            frame(
+                0.8,
+                vec![pointer(night, egui::PointerButton::Primary, false)],
+            );
+        }
+        assert!(
+            matches!(action, Some(ProjectFileAction::ChangeScene(path)) if path == Path::new("night.scene"))
+        );
+    }
+
+    #[test]
+    fn scene_picker_lists_nested_and_legacy_scenes_in_the_configured_folder() {
+        let project = TestProject::new();
+        for path in [
+            "levels/main.scene",
+            "levels/area/night.scene",
+            "levels/old.rscene",
+            "levels/upper.SCENE",
+            "levels/readme.txt",
+            "assets/unrelated.scene",
+            "scene/unused.scene",
+        ] {
+            let path = project.0.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "").unwrap();
+        }
+        let tree = scan_project_directory(&project.0, &project.0);
+        let mut paths = tree.scene_paths(Path::new("levels"));
+        paths.sort();
+        assert_eq!(
+            paths,
+            [
+                "area/night.scene",
+                "main.scene",
+                "old.rscene",
+                "upper.SCENE"
+            ]
+            .map(PathBuf::from)
+        );
+    }
 
     struct TestProject(PathBuf);
     impl TestProject {
