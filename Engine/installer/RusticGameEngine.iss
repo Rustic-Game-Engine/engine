@@ -75,6 +75,8 @@ Source: "..\licenses\ogg-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ig
 Source: "..\licenses\opus-pure-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\opus-pure-ATTRIBUTION.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\Audio-Decoders-NOTICE.md"; DestDir: "{app}\licenses"; Flags: ignoreversion
+Source: "..\assets\icons\lucide\LICENSE"; DestDir: "{app}\licenses"; DestName: "Lucide-LICENSE.txt"; Flags: ignoreversion
+Source: "..\assets\icons\material-design\LICENSE"; DestDir: "{app}\licenses"; DestName: "Material-Design-Icons-LICENSE.txt"; Flags: ignoreversion
 #ifndef InstallerPreflight
 Source: "..\target\distribution\rustic-luau-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-agent-backend.exe"; DestDir: "{app}"; Flags: ignoreversion

@@ -1,5 +1,7 @@
 //! Shared chrome and update notifications for the native desktop applications.
 
+pub mod icons;
+
 use eframe::egui::{self, Align, Layout, Sense, ViewportCommand};
 use engine_platform::{DesktopUpdate, DesktopUpdateClient};
 use std::time::{Duration, Instant};
@@ -161,6 +163,7 @@ fn draw_title_bar(
     if !custom && !update_available {
         return (false, None);
     }
+    icons::install_loaders(ui.ctx());
     let context = ui.ctx().clone();
     let mut update = false;
     let mut update_rect = None;
@@ -206,13 +209,13 @@ fn draw_title_bar(
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 if custom {
-                    if caption_button(ui, "×", "Close").clicked() {
+                    if caption_button(ui, icons::Icon::X, "Close").clicked() {
                         context.send_viewport_cmd(ViewportCommand::Close);
                     }
-                    if caption_button(ui, "□", "Maximize or restore").clicked() {
+                    if caption_button(ui, icons::Icon::Maximize, "Maximize or restore").clicked() {
                         toggle_maximized(&context);
                     }
-                    if caption_button(ui, "−", "Minimize").clicked() {
+                    if caption_button(ui, icons::Icon::Minus, "Minimize").clicked() {
                         context.send_viewport_cmd(ViewportCommand::Minimized(true));
                     }
                 }
@@ -231,9 +234,17 @@ fn draw_title_bar(
     (update, update_rect)
 }
 
-fn caption_button(ui: &mut egui::Ui, label: &str, tooltip: &str) -> egui::Response {
-    ui.add_sized([53.0, 24.0], egui::Button::new(label).frame(false))
-        .on_hover_text(tooltip)
+fn caption_button(ui: &mut egui::Ui, icon: icons::Icon, tooltip: &str) -> egui::Response {
+    let response = ui.add_sized(
+        [53.0, 24.0],
+        egui::Button::image(icon.image(egui::Color32::WHITE, 14.0))
+            .image_tint_follows_text_color(true)
+            .frame(false),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tooltip)
+    });
+    response.on_hover_text(tooltip)
 }
 
 fn toggle_maximized(context: &egui::Context) {

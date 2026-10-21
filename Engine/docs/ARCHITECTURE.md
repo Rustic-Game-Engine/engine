@@ -265,6 +265,12 @@ an editor returns naturally to the still-running launcher when it was launcher-
 started. Opening a project obtains an advisory project lock; read-only open and
 explicit stale-lock recovery are supported.
 
+The editor and Project Manager use bundled Lucide icons for interface controls,
+folders, and non-script file types. Move, Rotate, and Scale retain their text labels;
+Play, Stop, Pause, Resume, and Frame also keep their labels. Existing script and
+programming-language icons are unchanged. Icons load from the installed application,
+including offline; no icon font or separate download is required.
+
 All play modes use a child `rustic-runtime` so game/runtime faults do not destroy the
 editor:
 

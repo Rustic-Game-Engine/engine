@@ -9,6 +9,7 @@ use engine_core::logging::{AsyncLogger, LogConfig, LogStream, Severity};
 use engine_core::{
     ApplicationIdentity, ApplicationRole, EngineVersion, run_headless_smoke_from_arguments,
 };
+use engine_desktop::icons::Icon;
 use engine_platform::{
     ConfigLoad, ConfigStore, NativePlatformPaths, NativeProcessLauncher, PlatformPaths,
     ProcessLauncher, ProcessRequest, StartupMarker,
@@ -56,7 +57,10 @@ fn run() -> Result<(), String> {
     eframe::run_native(
         "org.rusticengine.project-manager",
         options,
-        Box::new(move |_context| Ok(Box::new(app))),
+        Box::new(move |context| {
+            engine_desktop::icons::install_loaders(&context.egui_ctx);
+            Ok(Box::new(app))
+        }),
     )
     .map_err(|error| format!("native launcher failed: {error}"))
 }
@@ -354,7 +358,12 @@ impl eframe::App for ProjectManagerApp {
                     );
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .add(ui_theme::primary_button("＋  New project"))
+                            .add(
+                                Icon::Plus
+                                    .button("New project")
+                                    .fill(ui_theme::ACCENT)
+                                    .stroke(egui::Stroke::NONE),
+                            )
                             .clicked()
                             && self.model.catalog_writable()
                         {

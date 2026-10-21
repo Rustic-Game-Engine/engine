@@ -8,6 +8,7 @@ publish = false
 
 [dependencies]
 eframe.workspace = true
+egui_extras.workspace = true
 engine-platform = { path = "../engine-platform", version = "0.1.0" }
 
 [lints]

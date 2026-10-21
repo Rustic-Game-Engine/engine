@@ -1,4 +1,5 @@
 use eframe::egui;
+use engine_desktop::icons::Icon;
 
 pub const ACCENT: egui::Color32 = egui::Color32::from_rgb(211, 139, 77);
 pub const ACCENT_HOVER: egui::Color32 = egui::Color32::from_rgb(230, 158, 91);
@@ -103,7 +104,7 @@ pub fn component_card<R>(
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("▼").size(10.0).color(MUTED));
+                ui.add(Icon::ChevronDown.image(MUTED, 12.0));
                 ui.label(egui::RichText::new(title).strong().color(TEXT));
             });
             ui.add_space(5.0);

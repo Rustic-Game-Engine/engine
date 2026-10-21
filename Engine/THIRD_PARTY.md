@@ -24,7 +24,8 @@ license policy on the complete transitive graph.
 | `ogg`, `opus-pure` | Ogg codec detection and bundled pure Rust mono/stereo Opus decoding with encoder-delay and end-padding trimming | BSD-3-Clause | Validated container packets, bounded decoded PCM, corpus tests, and the isolated worker contain decoder failures |
 | `interprocess` | Local authenticated editor/runtime IPC transport | MIT OR Apache-2.0 | Versioned framing, one-use secrets, payload limits, deadlines, and process supervision wrap it |
 | `egui_tiles` | Dockable native editor layout | MIT OR Apache-2.0 | Only editor UI state depends on it; authoring state remains in testable engine models |
-| Material Design Icons (Pictogrammers) | Embedded upstream SVG file-type, language, and transform-tool icons | Apache-2.0 | Icons are compiled into the editor, so rendering never depends on network availability |
+| Material Design Icons (Pictogrammers) | Embedded upstream SVG script-language icons | Apache-2.0 | Icons are compiled into the editor, so rendering never depends on network availability |
+| Lucide Icons | Embedded SVG interface, file-type, transform, playback, and window-control icons | ISC AND MIT | Icons are compiled into the desktop applications and tinted locally; no runtime network access |
 
 Development-only `tempfile` is used for isolated persistence and corruption fixtures
 and is not an engine runtime API.
