@@ -184,6 +184,7 @@ function Invoke-DesktopUpdateCheck([string]$Directory, [string]$CacheDirectory) 
     $asset = Select-DesktopUpdate @(Get-PublishedReleases) $commit
     if (-not $asset) { return $null }
     Write-UpdateLog "Preparing $($asset.name)."
+    Remove-Item -LiteralPath (Join-Path $CacheDirectory 'pending-update.txt') -Force -ErrorAction SilentlyContinue
     $installer = Save-VerifiedInstaller $asset $CacheDirectory
     $tag = ($asset.browser_download_url -split '/')[-2]
     # Publish only after verification. ASCII fields also decode identically in Rust.

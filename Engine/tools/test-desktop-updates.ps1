@@ -140,6 +140,7 @@ try {
     $asset.digest = 'sha256:' + ('0' * 64)
     Assert-Throws { Invoke-DesktopUpdateCheck $temp $temp } 'Checksum failure propagates before installation'
     Assert-Equal $script:Launches 0 'Never execute corrupt downloads'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $false 'Only verified installers are advertised as ready'
 
     # A remaining game/worker cannot keep closed desktop windows unavailable.
     $script:Waits = 0
@@ -152,6 +153,7 @@ try {
         $script:DeferredRestores++
     }
     Set-Content -LiteralPath (Join-Path $temp 'install-request.txt') -Value "$($next.tag_name)`n$([guid]::NewGuid())"
+    Set-Content -LiteralPath (Join-Path $temp 'pending-update.txt') -Value "$commit`n$($next.tag_name)"
     Set-Content -LiteralPath (Join-Path $temp 'resume-deferred.txt') -Value "$($next.tag_name)`nproject-manager"
     Wait-DesktopExit $temp $temp $next.tag_name
     Assert-Equal $script:DeferredRestores 1 'A blocked update restores closed windows exactly once'
