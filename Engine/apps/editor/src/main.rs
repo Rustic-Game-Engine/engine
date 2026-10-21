@@ -538,9 +538,16 @@ impl EditorApp {
         if self.play.is_some() || self.pending_runtime_changes.is_some() {
             return;
         }
+        let was_modified = self.document.is_modified();
+        let scene_existed = self.document.scene_path().is_file();
         match self.document.set_start_scene(path) {
             Ok(()) => {
-                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                if (was_modified && !self.document.is_modified())
+                    || (!scene_existed && self.document.scene_path().is_file())
+                {
+                    self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                    self.external_scene_change_pending = false;
+                }
                 self.log(
                     Severity::Info,
                     "scene",
@@ -587,11 +594,17 @@ impl EditorApp {
             return;
         }
         if submit && can_edit {
+            let previous_path = self.document.scene_path().to_path_buf();
+            let was_modified = self.document.is_modified();
             match self.document.rename_scene(&rename.source, &rename.name) {
                 Ok(path) => {
-                    self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
-                    self.external_scene_change_pending = false;
-                    self.last_scene_scan = Instant::now();
+                    if self.document.scene_path() != previous_path
+                        || (was_modified && !self.document.is_modified())
+                    {
+                        self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                        self.external_scene_change_pending = false;
+                        self.last_scene_scan = Instant::now();
+                    }
                     self.project_scan = Some(spawn_project_scan(
                         self.document.project().root().to_path_buf(),
                     ));
