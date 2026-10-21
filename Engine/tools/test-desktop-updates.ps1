@@ -68,10 +68,17 @@ try {
 
     function Invoke-WebRequest {
         param($Uri, $Headers, $OutFile, $TimeoutSec, [switch]$UseBasicParsing)
+        $script:Downloads++
         [IO.File]::WriteAllText($OutFile, 'abc', [Text.Encoding]::ASCII)
     }
+    $script:Downloads = 0
     $installer = Save-VerifiedInstaller $asset $temp
     Assert-Equal (Test-Path -LiteralPath $installer) $true 'Verified download becomes an installer'
+    Assert-Equal (Save-VerifiedInstaller $asset $temp) $installer 'Reuse a verified cached installer'
+    Assert-Equal $script:Downloads 1 'Retry must not download the installer again'
+    [IO.File]::WriteAllText($installer, 'bad', [Text.Encoding]::ASCII)
+    Save-VerifiedInstaller $asset $temp | Out-Null
+    Assert-Equal $script:Downloads 2 'Recheck the checksum and replace corrupt cached installers'
     Remove-Item -LiteralPath $installer
     $asset.digest = 'sha256:' + ('0' * 64)
     Assert-Throws { Save-VerifiedInstaller $asset $temp } 'Reject checksum mismatch'
@@ -90,7 +97,7 @@ try {
     }
     Assert-Equal (Test-RusticRunning $temp) $true 'Wait for open editor'
     Assert-Equal (Test-RusticRunning (Join-Path $temp 'another-install')) $false 'Other installations do not block'
-    function Get-Process { param($Name, $ErrorAction); [pscustomobject]@{ Path = $null } }
+    function Get-Process { param($Name, $ErrorAction); [pscustomobject]@{ Path = $null; ProcessName = 'rustic-runtime'; Id = 123 } }
     Assert-Equal (Test-RusticRunning $temp) $true 'Inaccessible process must block installation'
 
     # Exercise the download -> wait -> install path without starting any executable.
@@ -133,6 +140,24 @@ try {
     $asset.digest = 'sha256:' + ('0' * 64)
     Assert-Throws { Invoke-DesktopUpdateCheck $temp $temp } 'Checksum failure propagates before installation'
     Assert-Equal $script:Launches 0 'Never execute corrupt downloads'
+
+    # A remaining game/worker cannot keep closed desktop windows unavailable.
+    $script:Waits = 0
+    function Test-RusticRunning { param($Directory); return $script:Waits -lt 122 }
+    $script:DeferredRestores = 0
+    function Start-Process {
+        param($FilePath, $ArgumentList, $WorkingDirectory)
+        Assert-Equal $FilePath (Join-Path $temp 'rustic-project-manager.exe') 'Deferral restores the installed desktop, never Setup'
+        Assert-Equal ($script:Waits -ge 119) $true 'Allow graceful closure before deferring'
+        $script:DeferredRestores++
+    }
+    Set-Content -LiteralPath (Join-Path $temp 'install-request.txt') -Value "$($next.tag_name)`n$([guid]::NewGuid())"
+    Set-Content -LiteralPath (Join-Path $temp 'resume-deferred.txt') -Value "$($next.tag_name)`nproject-manager"
+    Wait-DesktopExit $temp $temp $next.tag_name
+    Assert-Equal $script:DeferredRestores 1 'A blocked update restores closed windows exactly once'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'install-request.txt')) $false 'Deferral cancels the shared close request'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $true 'Deferral keeps the Update button available'
+    Assert-Equal ((Get-Content -LiteralPath (Join-Path $temp 'update.log') -Raw) -match 'rustic-runtime \(PID 123\)') $true 'Log the process delaying installation'
 
     # Only sessions closed for this successful update are restored. Preserve spaces/Unicode.
     $project = Join-Path $temp ('M' + [char]0x0101 + 'ori game project')

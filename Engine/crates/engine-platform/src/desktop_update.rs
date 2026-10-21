@@ -15,6 +15,8 @@ pub struct DesktopUpdate {
 pub struct DesktopUpdateClient {
     directory: PathBuf,
     build_commit: String,
+    // A close request already present at launch must never close this new window.
+    request_at_launch: Option<uuid::Uuid>,
 }
 
 impl DesktopUpdateClient {
@@ -45,11 +47,14 @@ impl DesktopUpdateClient {
                 "{:X}",
                 Sha256::digest(root.to_string_lossy().to_lowercase().as_bytes())
             );
+            let directory = PathBuf::from(local)
+                .join("Rustic Game Engine/updates")
+                .join(key);
+            let request_at_launch = read_install_request(&directory).map(|(_, id)| id);
             Ok(Some(Self {
-                directory: PathBuf::from(local)
-                    .join("Rustic Game Engine/updates")
-                    .join(key),
+                directory,
                 build_commit,
+                request_at_launch,
             }))
         }
         #[cfg(not(windows))]
@@ -97,7 +102,7 @@ impl DesktopUpdateClient {
         }
     }
 
-    /// Requests a graceful close in all desktop windows for this installation.
+    /// Requests a graceful close in windows already open for this installation.
     ///
     /// # Errors
     /// Returns filesystem errors publishing the installation request.
@@ -105,7 +110,15 @@ impl DesktopUpdateClient {
         if !valid_tag(&update.tag) {
             return Err(io::Error::other("Invalid update tag"));
         }
-        fs::write(self.directory.join("install-request.txt"), &update.tag)
+        // Joining an existing request must preserve its identity. Otherwise a
+        // late participant could close a window the user has just reopened.
+        if self.install_requested(update) {
+            return Ok(());
+        }
+        fs::write(
+            self.directory.join("install-request.txt"),
+            format!("{}\n{}\n", update.tag, uuid::Uuid::new_v4()),
+        )
     }
 
     /// Records this window's project for restoration after a successful update.
@@ -135,10 +148,10 @@ impl DesktopUpdateClient {
         )
     }
 
-    /// Whether another desktop window requested this same update.
+    /// Whether another window requested this update after this window launched.
     pub fn install_requested(&self, update: &DesktopUpdate) -> bool {
-        fs::read_to_string(self.directory.join("install-request.txt"))
-            .is_ok_and(|tag| tag.trim() == update.tag)
+        read_install_request(&self.directory)
+            .is_some_and(|(tag, id)| tag == update.tag && Some(id) != self.request_at_launch)
     }
 
     /// Cancels the shared graceful-close request without removing the update.
@@ -159,6 +172,21 @@ impl DesktopUpdateClient {
             result => result,
         }
     }
+}
+
+fn read_install_request(directory: &Path) -> Option<(String, uuid::Uuid)> {
+    let contents = fs::read_to_string(directory.join("install-request.txt")).ok()?;
+    let mut lines = contents.lines();
+    let tag = lines.next()?;
+    if !valid_tag(tag) {
+        return None;
+    }
+    // Legacy tag-only requests caused repeated closes and are deliberately ignored.
+    let id = uuid::Uuid::parse_str(lines.next()?).ok()?;
+    if lines.next().is_some() {
+        return None;
+    }
+    Some((tag.to_owned(), id))
 }
 
 fn valid_tag(tag: &str) -> bool {
@@ -231,6 +259,7 @@ mod tests {
         let client = DesktopUpdateClient {
             directory: temp.path().to_owned(),
             build_commit: "a".repeat(40),
+            request_at_launch: None,
         };
         let update = DesktopUpdate {
             tag: "v2.0-Pre-Alpha".into(),
@@ -246,6 +275,7 @@ mod tests {
         let other_window = DesktopUpdateClient {
             directory: temp.path().to_owned(),
             build_commit: "a".repeat(40),
+            request_at_launch: None,
         };
         assert!(!other_window.claim_prompt(&update).unwrap());
         client.prepare_restart(&update, Some(temp.path())).unwrap();
@@ -257,6 +287,18 @@ mod tests {
         assert_eq!(contents.lines().nth(2), Some(temp.path().to_str().unwrap()));
         client.request_install(&update).unwrap();
         assert!(other_window.install_requested(&update));
+        let reopened = DesktopUpdateClient {
+            directory: temp.path().to_owned(),
+            build_commit: "a".repeat(40),
+            request_at_launch: read_install_request(temp.path()).map(|(_, id)| id),
+        };
+        assert!(!reopened.install_requested(&update));
+        other_window.request_install(&update).unwrap();
+        assert!(!reopened.install_requested(&update));
+        // An explicit Update click in the reopened window starts a fresh request.
+        reopened.request_install(&update).unwrap();
+        assert!(reopened.install_requested(&update));
+        assert!(other_window.install_requested(&update));
         assert!(!other_window.install_requested(&DesktopUpdate {
             tag: "v2.1-Pre-Alpha".into()
         }));
@@ -266,6 +308,7 @@ mod tests {
         let new_build = DesktopUpdateClient {
             directory: temp.path().to_owned(),
             build_commit: "b".repeat(40),
+            request_at_launch: None,
         };
         assert_eq!(new_build.pending().unwrap(), None);
     }
@@ -276,6 +319,7 @@ mod tests {
         let client = DesktopUpdateClient {
             directory: temp.path().to_owned(),
             build_commit: "a".repeat(40),
+            request_at_launch: None,
         };
         fs::write(
             temp.path().join("pending-update.txt"),
@@ -283,6 +327,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(client.pending().unwrap(), None);
+        let update = DesktopUpdate {
+            tag: "v2.0-Pre-Alpha".into(),
+        };
+        fs::write(temp.path().join("install-request.txt"), &update.tag).unwrap();
+        assert!(!client.install_requested(&update));
+        fs::write(
+            temp.path().join("install-request.txt"),
+            format!("{}\ninvalid-id\n", update.tag),
+        )
+        .unwrap();
+        assert!(!client.install_requested(&update));
         assert!(
             client
                 .claim_prompt(&DesktopUpdate {

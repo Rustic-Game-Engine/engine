@@ -24,6 +24,12 @@ Editors ask to save unsaved scenes first; save failures leave the editor open.
 Active Play sessions stop and their runtime changes can be reviewed before closing.
 Canceling leaves the update available. Standalone games/workers must be closed
 separately: Setup waits until all Rustic processes from that installation exit.
+Windows opened after an update request stay open, so you can return to work while
+installation is waiting. If a requested update is still blocked after two minutes,
+the updater cancels that close request and restores the windows it already closed,
+using the currently installed version and original projects. The **Update** button
+remains available; Setup can still run after a later normal exit. Processes whose
+installation path cannot be read also block Setup rather than risking in-use files.
 
 After successful installation, the updater reopens each window closed for the
 update, restoring every editor's original project, including paths with spaces or
@@ -47,12 +53,25 @@ with a published release waits rather than replacing itself with an older build.
 Logs and temporary downloads are under
 `%LOCALAPPDATA%\Rustic Game Engine\updates\<installation-key>\`. `update.log`
 records download, verification and Setup failures; `update-setup.log` contains
-Setup's own diagnostics. A file lock prevents duplicate workers from the same
+Setup's own diagnostics. While waiting, `update.log` lists remaining Rustic process
+names and IDs once a minute. Downloads disable PowerShell's progress rendering;
+retries reuse an existing installer only after rechecking its size and SHA-256.
+A file lock prevents duplicate workers from the same
 user and installation. Network/API rate-limit and Setup failures leave the current
 application usable and retry after an hour while it remains open or on a later
 launch. If download completed but Setup has not started, close every Rustic process.
 If a release is missing its installer/checksum, use its release page or wait for a
 complete release. Do not edit `build-commit.txt` to force an update.
+
+Older updater builds can leave a close request that immediately closes newly
+opened editors. Close Project Manager and clear only that request in PowerShell,
+then reopen Rustic or install a corrected release manually:
+
+```powershell
+Get-ChildItem "$env:LOCALAPPDATA\Rustic Game Engine\updates" -Filter install-request.txt -Recurse -File | Remove-Item
+```
+
+This does not delete projects, downloaded installers or update settings.
 
 Run the network-free updater regression suite with Windows PowerShell 5.1:
 
