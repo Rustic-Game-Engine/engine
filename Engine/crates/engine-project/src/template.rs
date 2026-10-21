@@ -16,7 +16,8 @@ use std::path::{Path, PathBuf};
 pub const CURRENT_TEMPLATE_MANIFEST_VERSION: u32 = 1;
 pub const TEMPLATE_MANIFEST_FILE: &str = "project-template.ron";
 
-/// Versioned record of the materialized project seed and startup scene.
+/// Versioned record of the materialized project seed and its initial scene.
+/// The current start-scene choice is stored in `ProjectDescriptor::start_scene`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct TemplateManifest {
     pub format_version: u32,

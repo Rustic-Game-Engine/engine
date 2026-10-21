@@ -6,6 +6,36 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
+fn start_scene_is_optional_backward_compatible_and_uses_custom_scene_directory() {
+    let temp = tempdir().unwrap();
+    let mut options = CreateProjectOptions::new("Start", ProjectTemplate::Blank);
+    options.directories.scenes = "levels/worlds".into();
+    let mut project = Project::create_with_options(temp.path().join("game"), options).unwrap();
+    let descriptor = fs::read_to_string(project.root().join(PROJECT_DESCRIPTOR_FILE)).unwrap();
+    assert!(!descriptor.contains("start_scene"));
+    assert_eq!(
+        Project::open(project.root())
+            .unwrap()
+            .descriptor()
+            .start_scene,
+        None
+    );
+    project.set_start_scene("nested/night.rscene").unwrap();
+    let reopened = Project::open(project.root()).unwrap();
+    assert_eq!(
+        reopened.start_scene_path().unwrap(),
+        project.root().join("levels/worlds/nested/night.rscene")
+    );
+    for path in ["../outside.scene", "/outside.scene", "night.txt", ""] {
+        assert!(project.set_start_scene(path).is_err());
+        assert_eq!(
+            project.descriptor().start_scene.as_deref(),
+            Some(std::path::Path::new("nested/night.rscene"))
+        );
+    }
+}
+
+#[test]
 fn create_open_and_save_preserve_identity() {
     let temporary = tempdir().unwrap();
     let root = temporary.path().join("my-game");
