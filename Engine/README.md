@@ -52,6 +52,16 @@ or import a project and starts the editor as a separate native process.
 
 ## Windows installer
 
+Installed Windows builds check GitHub Releases for updates on launch and hourly
+while Rustic is open. Newer releases download automatically and prompt once per
+release; a small **Update** title-bar button remains after dismissal. Updating
+asks to save unsaved scenes, closes Rustic gracefully, then reopens its windows
+and projects after installation succeeds. Updates after a normal exit do not
+reopen the app. Windows may request
+elevation for an all-users installation. Older builds need one manual upgrade to
+receive the updater. See [Automatic desktop updates](docs/AUTOMATIC_UPDATES.md)
+for verification, logs and source-build limitations.
+
 From PowerShell, build a self-contained `.exe` installer with:
 
 ```powershell

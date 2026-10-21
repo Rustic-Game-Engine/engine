@@ -7,6 +7,9 @@
 #ifndef BuildSuffix
   #define BuildSuffix ""
 #endif
+#ifndef BuildCommit
+  #define BuildCommit "development"
+#endif
 
 #define AppName "Rustic Game Engine"
 #define AppPublisher "Rustic Game Engine Contributors"
@@ -82,6 +85,7 @@ Source: "..\target\distribution\rustic-runtime.exe"; DestDir: "{app}"; Flags: ig
 Source: "..\target\distribution\rustic-asset-worker.exe"; DestDir: "{app}"; Flags: ignoreversion
 #endif
 Source: "..\tools\manage-language-toolchains.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "..\tools\update-desktop.ps1"; DestDir: "{app}\tools"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"
@@ -94,6 +98,10 @@ Root: HKCU; Subkey: "Environment"; ValueType: expandsz; ValueName: "Path"; Value
 
 [Run]
 Filename: "{app}\{#AppExeName}"; WorkingDir: "{app}"; Description: "Launch {#AppName}"; Flags: nowait postinstall skipifsilent runasoriginaluser
+
+[UninstallDelete]
+Type: files; Name: "{app}\build-commit.txt"
+Type: files; Name: "{app}\install-scope.txt"
 
 [Code]
 procedure InstallUserIntegrations();
@@ -193,9 +201,16 @@ begin
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Scope: String;
 begin
   if CurStep = ssPostInstall then
   begin
+    if IsAdminInstallMode then Scope := 'allusers' else Scope := 'currentuser';
+    if not SaveStringToFile(ExpandConstant('{app}\build-commit.txt'), '{#BuildCommit}', False) then
+      RaiseException('Could not save installed build identity.');
+    if not SaveStringToFile(ExpandConstant('{app}\install-scope.txt'), Scope, False) then
+      RaiseException('Could not save installation scope.');
     InstallUserIntegrations();
     InstallSelectedLanguageToolchains();
   end;

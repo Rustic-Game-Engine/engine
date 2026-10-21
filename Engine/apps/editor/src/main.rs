@@ -75,10 +75,14 @@ fn main() -> ExitCode {
     if let Err(error) = install_user_agent_integrations() {
         eprintln!("Could not install user AI-agent skill/plugin: {error}");
     }
+    if let Err(error) = engine_platform::start_desktop_updater() {
+        eprintln!("Could not start automatic updates: {error}");
+    }
     let title = format!("{} — Rustic Editor", project.metadata().name);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(title)
+            .with_decorations(!cfg!(target_os = "windows"))
             .with_inner_size([1_440.0, 900.0])
             .with_min_inner_size([960.0, 600.0])
             .with_icon(app_icon()),
@@ -118,6 +122,8 @@ fn app_icon() -> egui::IconData {
     reason = "independent editor panel and interaction flags are not mutually exclusive states"
 )]
 struct EditorApp {
+    updates: engine_desktop::DesktopUpdates,
+    update_close_requested: bool,
     document: AuthoringDocument,
     project_lock: Option<engine_editor::ProjectLock>,
     dock: Tree<EditorTab>,
@@ -223,6 +229,8 @@ impl EditorApp {
         let missing_dependencies = missing_project_dependencies(document.project().root());
         let show_dependency_prompt = !missing_dependencies.is_empty();
         let mut app = Self {
+            updates: engine_desktop::DesktopUpdates::default(),
+            update_close_requested: false,
             document,
             project_lock,
             dock,
@@ -605,6 +613,56 @@ impl EditorApp {
                 self.log(Severity::Info, "scene", "Scene saved transactionally");
             }
             Err(error) => self.log(Severity::Error, "scene", error.to_string()),
+        }
+    }
+
+    fn update_close_dialog(&mut self, ui: &mut egui::Ui) {
+        if !self.update_close_requested {
+            return;
+        }
+        if self.play.is_some() {
+            self.stop_play();
+        }
+        if self.pending_runtime_changes.is_some() {
+            return;
+        }
+        let mut ready = !self.document.is_modified();
+        let mut cancel = false;
+        if !ready {
+            egui::Window::new("Save before updating?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ui, |ui| {
+                    ui.label(
+                        "This scene has unsaved changes. Save it before installing the update.",
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Save and update").clicked() {
+                            self.save();
+                            ready = !self.document.is_modified();
+                        }
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                    });
+                });
+        }
+        if cancel {
+            self.update_close_requested = false;
+            self.updates.cancel_install();
+        } else if ready {
+            if self
+                .updates
+                .request_install(Some(self.document.project().root()))
+            {
+                ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.update_close_requested = false;
+                if let Some(error) = self.updates.error().map(str::to_owned) {
+                    self.log(Severity::Error, "update", error);
+                }
+            }
         }
     }
 
@@ -1286,6 +1344,16 @@ fn transform_mode_button(
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.poll_background(ui.ctx());
+        let title = format!(
+            "{} — Rustic Editor",
+            self.document.project().metadata().name
+        );
+        if self.updates.show(ui, &title) {
+            self.update_close_requested = true;
+        }
+        if self.updates.take_cancellation() {
+            self.update_close_requested = false;
+        }
         let scene_was_modified = self.document.is_modified();
         egui::Panel::top("editor-toolbar")
             .frame(
@@ -1360,6 +1428,7 @@ impl eframe::App for EditorApp {
         self.runtime_changes_dialog(ui.ctx());
         self.game_settings_dialog(ui.ctx());
         self.dependency_prompt(ui.ctx());
+        self.update_close_dialog(ui);
         let scene_changed = !scene_was_modified && self.document.is_modified();
         self.autosave_if_needed(scene_changed);
     }

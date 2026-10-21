@@ -12,6 +12,7 @@ egui_extras.workspace = true
 eframe.workspace = true
 engine-assets = { path = "../../crates/engine-assets", version = "0.1.0" }
 engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
+engine-desktop = { path = "../../crates/engine-desktop", version = "0.1.0" }
 engine-editor = { path = "../../crates/engine-editor", version = "0.1.0" }
 engine-platform = { path = "../../crates/engine-platform", version = "0.1.0" }
 engine-play = { path = "../../crates/engine-play", version = "0.1.0" }

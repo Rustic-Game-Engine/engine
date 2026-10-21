@@ -38,12 +38,16 @@ fn run() -> Result<(), String> {
     {
         return Ok(());
     }
+    if let Err(error) = engine_platform::start_desktop_updater() {
+        eprintln!("Could not start automatic updates: {error}");
+    }
     let platform_paths = NativePlatformPaths::discover()
         .map_err(|error| format!("could not discover platform paths: {error}"))?;
     let app = ProjectManagerApp::new(platform_paths)?;
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Rustic Game Engine — Projects")
+            .with_decorations(!cfg!(target_os = "windows"))
             .with_inner_size([1_080.0, 700.0])
             .with_min_inner_size([760.0, 480.0])
             .with_icon(app_icon()),
@@ -122,6 +126,7 @@ struct DialogVisibility {
 }
 
 struct ProjectManagerApp {
+    updates: engine_desktop::DesktopUpdates,
     platform_paths: NativePlatformPaths,
     process_launcher: NativeProcessLauncher,
     model: ProjectManagerModel,
@@ -208,6 +213,7 @@ impl ProjectManagerApp {
             ),
         );
         Ok(Self {
+            updates: engine_desktop::DesktopUpdates::default(),
             platform_paths,
             process_launcher: NativeProcessLauncher,
             model,
@@ -314,6 +320,14 @@ impl eframe::App for ProjectManagerApp {
             ThemePreference::Light => false,
         };
         ui_theme::apply(&context, dark);
+
+        if self.updates.show(ui, "Rustic Game Engine — Projects") {
+            if self.updates.request_install(None) {
+                context.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                self.ui_status = self.updates.error().map(str::to_owned);
+            }
+        }
 
         egui::Panel::top("project_manager_header")
             .frame(
