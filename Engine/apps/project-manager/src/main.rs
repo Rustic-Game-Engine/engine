@@ -38,6 +38,9 @@ fn run() -> Result<(), String> {
     {
         return Ok(());
     }
+    if let Err(error) = engine_platform::start_desktop_updater() {
+        eprintln!("Could not start automatic updates: {error}");
+    }
     let platform_paths = NativePlatformPaths::discover()
         .map_err(|error| format!("could not discover platform paths: {error}"))?;
     let app = ProjectManagerApp::new(platform_paths)?;

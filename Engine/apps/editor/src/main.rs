@@ -75,6 +75,9 @@ fn main() -> ExitCode {
     if let Err(error) = install_user_agent_integrations() {
         eprintln!("Could not install user AI-agent skill/plugin: {error}");
     }
+    if let Err(error) = engine_platform::start_desktop_updater() {
+        eprintln!("Could not start automatic updates: {error}");
+    }
     let title = format!("{} — Rustic Editor", project.metadata().name);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

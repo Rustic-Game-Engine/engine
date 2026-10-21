@@ -3,6 +3,7 @@
 mod atomic_file;
 mod config;
 mod crash_marker;
+mod desktop_update;
 mod paths;
 mod process;
 mod vfs;
@@ -10,6 +11,7 @@ mod vfs;
 pub use atomic_file::{AtomicFileService, AtomicWriteError, AtomicWriteOptions, RecoveryAction};
 pub use config::{ConfigDocument, ConfigError, ConfigLoad, ConfigSchema, ConfigStore};
 pub use crash_marker::{CrashMarkerError, StartupMarker, StartupRecord};
+pub use desktop_update::start_desktop_updater;
 pub use paths::{NativePlatformPaths, PlatformError, PlatformPaths};
 pub use process::{
     NativeProcessLauncher, ProcessError, ProcessExit, ProcessLauncher, ProcessRequest,

@@ -83,6 +83,14 @@ try {
     & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-language-toolchains.ps1'
     if ($LASTEXITCODE -ne 0) { throw "Toolchain manager tests failed with exit code $LASTEXITCODE." }
 
+    Write-Host 'Testing automatic desktop updates with Windows PowerShell...'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-desktop-updates.ps1'
+    if ($LASTEXITCODE -ne 0) { throw "Desktop updater tests failed with exit code $LASTEXITCODE." }
+
+    # Release tags are allocated after the build; the commit identifies its release.
+    $buildCommit = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $buildCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not determine the build commit.' }
+
     Write-Host 'Building bundled Luau API host...'
     & $cargo build --locked --manifest-path 'apps/luau-host/Cargo.toml' --profile distribution --target-dir 'target'
     if ($LASTEXITCODE -ne 0) { throw "Luau host build failed with exit code $LASTEXITCODE." }
@@ -110,7 +118,7 @@ try {
     $pathFlag = if ($InstallDirectoryOnPath) { '1' } else { '0' }
     $buildSuffix = '-' + [DateTime]::UtcNow.ToString('yyyyMMdd-HHmmss')
     Write-Host 'Creating the Windows installer...'
-    & $iscc "/DAppVersion=$appVersion" "/DBuildSuffix=$buildSuffix" "/DAddToPathByDefault=$pathFlag" 'installer\RusticGameEngine.iss'
+    & $iscc "/DAppVersion=$appVersion" "/DBuildSuffix=$buildSuffix" "/DBuildCommit=$buildCommit" "/DAddToPathByDefault=$pathFlag" 'installer\RusticGameEngine.iss'
     if ($LASTEXITCODE -ne 0) { throw "Inno Setup failed with exit code $LASTEXITCODE." }
 }
 finally {

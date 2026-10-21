@@ -110,6 +110,11 @@ function Invoke-InstallerCase([string]$Mode, [string]$Components, [int]$Expected
     finally { $process.Dispose() }
     Assert-Equal (Test-Path (Join-Path $installRoot 'rustic-project-manager.exe')) $true 'Engine installed'
     Assert-Equal (Test-Path (Join-Path $installRoot 'rustic-setup-helper.exe')) $true 'Setup helper installed'
+    Assert-Equal (Test-Path (Join-Path $installRoot 'tools\update-desktop.ps1')) $true 'Desktop updater packaged'
+    $buildCommit = (Get-Content -LiteralPath (Join-Path $installRoot 'build-commit.txt') -Raw).Trim()
+    Assert-Equal ($buildCommit -match '^[0-9a-f]{40}$') $true 'Installed release identity'
+    $scope = (Get-Content -LiteralPath (Join-Path $installRoot 'install-scope.txt') -Raw).Trim()
+    Assert-Equal $scope 'currentuser' 'Installed update scope'
     Assert-Equal @(Get-Calls $info).Count $ExpectedCalls "$Mode Setup WinGet invocation count"
     $log = Get-Content -LiteralPath $setupLog -Raw
     Assert-Equal ($log.Contains('Agent integration installation exited with code')) $false 'Agent integrations must initialize successfully'
