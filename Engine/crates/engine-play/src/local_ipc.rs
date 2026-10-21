@@ -239,8 +239,18 @@ pub fn connect_authenticated(
     token: AuthenticationToken,
     timeout: Duration,
 ) -> Result<AuthenticatedConnection, ProtocolError> {
+    connect_authenticated_with_retry(endpoint, token, timeout, || Ok(()))
+}
+
+pub(crate) fn connect_authenticated_with_retry(
+    endpoint: &LocalEndpoint,
+    token: AuthenticationToken,
+    timeout: Duration,
+    mut before_retry: impl FnMut() -> io::Result<()>,
+) -> Result<AuthenticatedConnection, ProtocolError> {
     let deadline = Instant::now() + timeout;
     let stream = loop {
+        before_retry()?;
         match LocalSocketStream::connect(endpoint.name()?) {
             Ok(stream) => break stream,
             Err(error)
@@ -249,8 +259,14 @@ pub fn connect_authenticated(
                     io::ErrorKind::NotFound
                         | io::ErrorKind::ConnectionRefused
                         | io::ErrorKind::AddrNotAvailable
-                ) && Instant::now() < deadline =>
+                ) =>
             {
+                if Instant::now() >= deadline {
+                    return Err(ProtocolError::Io(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("runtime IPC endpoint was unavailable after {timeout:?}: {error}"),
+                    )));
+                }
                 thread::sleep(Duration::from_millis(10));
             }
             Err(error) => return Err(ProtocolError::Io(error)),
@@ -314,6 +330,26 @@ mod tests {
             process_id: std::process::id(),
             name: "test-runtime".to_owned(),
         }
+    }
+
+    #[test]
+    fn missing_listener_reports_a_connection_deadline() {
+        let directory = tempfile::tempdir().unwrap();
+        let endpoint = LocalEndpoint::unique(directory.path());
+        let result = connect_authenticated(
+            &endpoint,
+            AuthenticationToken::generate(),
+            Duration::from_millis(20),
+        );
+        let Err(ProtocolError::Io(error)) = result else {
+            panic!("missing listener should report an I/O timeout");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            error
+                .to_string()
+                .contains("runtime IPC endpoint was unavailable")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use engine_play::{
     ControlRequest, PlayMode, RuntimeLaunch, RuntimeState, SnapshotBuilder, SnapshotInput,
-    SupervisedRuntime, SupervisorExit,
+    SupervisedRuntime, SupervisorError, SupervisorExit,
 };
 use std::fs;
 use std::path::Path;
@@ -31,6 +31,46 @@ fn real_runtime_child_authenticates_controls_all_modes_and_reaps() {
 #[ignore = "opens native game windows; requires a desktop and graphics adapter"]
 fn native_runtime_windows_render_scene_and_reap() {
     verify_play_modes(true);
+}
+
+#[test]
+fn invalid_snapshot_reaches_the_editor_without_initializing_graphics() {
+    let directory = tempfile::tempdir().unwrap();
+    let launch = RuntimeLaunch::new(
+        env!("CARGO_BIN_EXE_rustic-runtime"),
+        directory.path().join("missing-snapshot"),
+        directory.path().join("logs"),
+        PlayMode::Play,
+        directory.path(),
+    );
+    let error = SupervisedRuntime::spawn(&launch).unwrap_err();
+    let SupervisorError::Runtime { code, message } = error else {
+        panic!("snapshot startup failure should reach the editor over IPC: {error}");
+    };
+    assert_eq!(code, "runtime_failed");
+    assert!(message.contains("snapshot"), "{message}");
+}
+
+#[test]
+fn early_process_exit_reports_status_and_logs_without_waiting_for_the_deadline() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut launch = RuntimeLaunch::new(
+        env!("CARGO_BIN_EXE_rustic-runtime"),
+        directory.path().join("unused-snapshot"),
+        directory.path().join("logs"),
+        PlayMode::Play,
+        directory.path(),
+    );
+    // A smoke invocation exits successfully before opening an IPC listener.
+    launch.extra_arguments.push("--headless-smoke".into());
+    launch.connect_timeout = Duration::from_secs(30);
+    let started = std::time::Instant::now();
+    let error = SupervisedRuntime::spawn(&launch).unwrap_err();
+    assert!(matches!(&error, SupervisorError::Startup { .. }));
+    let diagnostic = error.to_string();
+    assert!(diagnostic.contains("runtime exited before IPC authentication"));
+    assert!(diagnostic.contains(&launch.logs_directory.display().to_string()));
+    assert!(started.elapsed() < Duration::from_secs(10));
 }
 
 #[allow(

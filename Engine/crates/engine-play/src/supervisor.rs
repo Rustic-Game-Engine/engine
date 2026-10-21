@@ -2,7 +2,7 @@
 
 use crate::changes::RuntimeChangeSet;
 use crate::frame_ring::{BgraFrame, FrameRing, FrameRingError, FrameRingLimits};
-use crate::local_ipc::{AuthenticatedConnection, LocalEndpoint, connect_authenticated};
+use crate::local_ipc::{AuthenticatedConnection, LocalEndpoint, connect_authenticated_with_retry};
 use crate::protocol::{
     AuthenticationToken, ConsoleEvent, LiveEntityProperties, ProtocolError, ProtocolMessage,
 };
@@ -13,6 +13,8 @@ use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
 use thiserror::Error;
@@ -28,6 +30,7 @@ pub struct RuntimeLaunch {
     pub endpoint: LocalEndpoint,
     pub mode: PlayMode,
     pub fixed_delta: Duration,
+    /// Budget for connecting/authenticating, and again for receiving the first Ready.
     pub connect_timeout: Duration,
     pub stop_grace_period: Duration,
     pub extra_arguments: Vec<OsString>,
@@ -48,7 +51,7 @@ impl RuntimeLaunch {
             endpoint: LocalEndpoint::unique(ipc_filesystem_parent),
             mode,
             fixed_delta: Duration::from_nanos(1_000_000_000 / 60),
-            connect_timeout: Duration::from_secs(5),
+            connect_timeout: Duration::from_secs(30),
             stop_grace_period: Duration::from_secs(2),
             extra_arguments: Vec::new(),
         }
@@ -124,14 +127,30 @@ impl SupervisedRuntime {
             executable: launch.executable.clone(),
             source,
         })?;
-        let connection =
-            match connect_authenticated(&launch.endpoint, token, launch.connect_timeout) {
-                Ok(connection) => connection,
-                Err(error) => {
-                    let _ = terminate_tree_and_reap(&mut child);
-                    return Err(SupervisorError::Protocol(error));
+        let connection = match connect_authenticated_with_retry(
+            &launch.endpoint,
+            token,
+            launch.connect_timeout,
+            || {
+                if let Some(status) = child.try_wait()? {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        format!("runtime exited before IPC authentication with {status}"),
+                    ));
                 }
-            };
+                Ok(())
+            },
+        ) {
+            Ok(connection) => connection,
+            Err(error) => {
+                let _ = terminate_tree_and_reap(&mut child);
+                return Err(SupervisorError::Startup {
+                    executable: launch.executable.clone(),
+                    logs_directory: launch.logs_directory.clone(),
+                    source: error,
+                });
+            }
+        };
         let mut runtime = Self {
             child,
             connection: Some(connection),
@@ -399,6 +418,12 @@ impl SupervisedRuntime {
     }
 
     fn wait_until_ready(&mut self, timeout: Duration) -> Result<(), SupervisorError> {
+        with_readiness_deadline(self.child.id(), timeout, || {
+            self.receive_until_ready(timeout)
+        })
+    }
+
+    fn receive_until_ready(&mut self, timeout: Duration) -> Result<(), SupervisorError> {
         let connection = self
             .connection
             .as_mut()
@@ -435,6 +460,37 @@ impl Drop for SupervisedRuntime {
         self.connection = None;
         let _ = terminate_tree_and_reap(&mut self.child);
         self.terminal = true;
+    }
+}
+
+fn with_readiness_deadline<T>(
+    process_id: u32,
+    timeout: Duration,
+    receive: impl FnOnce() -> Result<T, SupervisorError>,
+) -> Result<T, SupervisorError> {
+    let timed_out = AtomicBool::new(false);
+    let (cancel, wait) = mpsc::channel();
+    // Windows named pipes do not support receive timeouts. Terminate the child
+    // on expiry to unblock the editor's read. Join/cancel before reaping it.
+    let result = thread::scope(|scope| {
+        let timed_out = &timed_out;
+        scope.spawn(move || {
+            if matches!(
+                wait.recv_timeout(timeout),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            ) {
+                timed_out.store(true, Ordering::Release);
+                terminate_process_group(process_id);
+            }
+        });
+        let result = receive();
+        let _ = cancel.send(());
+        result
+    });
+    if timed_out.load(Ordering::Acquire) {
+        Err(SupervisorError::ReadyTimedOut)
+    } else {
+        result
     }
 }
 
@@ -482,7 +538,10 @@ fn terminate_tree_and_reap(child: &mut Child) -> Result<ExitStatus, std::io::Err
 
 #[cfg(windows)]
 fn terminate_process_group(process_id: u32) {
-    let _ = Command::new("taskkill")
+    let mut command = Command::new("taskkill");
+    // Cleanup is also invoked from the GUI editor's readiness watcher.
+    configure_process_group(&mut command);
+    let _ = command
         .args(["/PID", &process_id.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -520,6 +579,13 @@ pub enum SupervisorError {
         #[source]
         source: std::io::Error,
     },
+    #[error("runtime {executable} failed to start: {source}; check crash logs in {logs_directory}")]
+    Startup {
+        executable: PathBuf,
+        logs_directory: PathBuf,
+        #[source]
+        source: ProtocolError,
+    },
     #[error("runtime process operation failed: {0}")]
     Io(#[from] std::io::Error),
     #[error(transparent)]
@@ -532,4 +598,54 @@ pub enum SupervisorError {
     Runtime { code: String, message: String },
     #[error("runtime has already terminated")]
     AlreadyTerminated,
+}
+
+#[cfg(all(test, any(windows, unix)))]
+mod tests {
+    use super::*;
+
+    fn sleeping_child() -> Child {
+        #[cfg(windows)]
+        let mut command = {
+            let mut command = Command::new("powershell");
+            command.args(["-NoProfile", "-Command", "Start-Sleep -Seconds 30"]);
+            command
+        };
+        #[cfg(unix)]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args(["-c", "exec sleep 30"]);
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        configure_process_group(&mut command);
+        command.spawn().unwrap()
+    }
+
+    #[test]
+    fn readiness_deadline_terminates_a_stalled_child() {
+        let mut child = sleeping_child();
+        let result = with_readiness_deadline(child.id(), Duration::from_millis(20), || {
+            thread::sleep(Duration::from_millis(200));
+            Ok(())
+        });
+        assert!(matches!(result, Err(SupervisorError::ReadyTimedOut)));
+        assert!(child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn successful_readiness_cancels_process_termination() {
+        let mut child = sleeping_child();
+        with_readiness_deadline(child.id(), Duration::from_millis(20), || Ok(())).unwrap();
+        thread::sleep(Duration::from_millis(100));
+        let status = child.try_wait().unwrap();
+        terminate_tree_and_reap(&mut child).unwrap();
+        assert!(
+            status.is_none(),
+            "successful startup must cancel its deadline"
+        );
+    }
 }

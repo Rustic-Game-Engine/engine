@@ -64,12 +64,51 @@ pub fn run_runtime_server(config: RuntimeServerConfig) -> Result<(), RuntimeServ
 /// # Panics
 /// Panics when the explicit `crash_after_ready` failure-injection flag is set.
 #[allow(
-    clippy::too_many_lines,
-    reason = "keep session protocol, simulation worker, and shutdown ordering together"
+    clippy::needless_pass_by_value,
+    reason = "preserve the owning startup API while deferring initialization until after authentication"
 )]
 pub fn run_runtime_server_with_renderer(
     config: RuntimeServerConfig,
+    render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,
+) -> Result<(), RuntimeServerError> {
+    let process = ProcessDescriptor {
+        role: ProcessRole::Runtime,
+        process_id: std::process::id(),
+        name: "rustic-runtime".to_owned(),
+    };
+    // Authenticate before loading the snapshot or running project code. Otherwise
+    // slow or failed initialization looks like a missing pipe to the editor.
+    let mut listener =
+        LocalIpcListener::bind(&config.endpoint, config.authentication_token.clone())?;
+    let mut connection = listener.accept_authenticated(process.clone())?;
+    let logger = start_logger(&config.logs_directory, LogStream::Runtime);
+    let result =
+        run_authenticated_session(&config, render, &mut connection, &process, logger.as_ref());
+    if let Err(error) = &result {
+        let _ = connection.send(
+            0,
+            &ProtocolMessage::Error {
+                code: "runtime_failed".to_owned(),
+                message: error.to_string(),
+            },
+        );
+    }
+    if let Some(logger) = &logger {
+        let _ = logger.shutdown();
+    }
+    result
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "keep session protocol, simulation worker, and shutdown ordering together"
+)]
+fn run_authenticated_session(
+    config: &RuntimeServerConfig,
     mut render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,
+    connection: &mut AuthenticatedConnection,
+    process: &ProcessDescriptor,
+    logger: Option<&AsyncLogger>,
 ) -> Result<(), RuntimeServerError> {
     let snapshot = PlaySnapshot::open(&config.snapshot_root)?;
     let source_scene = snapshot.scene_bytes()?;
@@ -83,18 +122,17 @@ pub fn run_runtime_server_with_renderer(
             requested: config.mode,
         });
     }
-    let process = ProcessDescriptor {
-        role: ProcessRole::Runtime,
-        process_id: std::process::id(),
-        name: "rustic-runtime".to_owned(),
-    };
-    let logger = start_logger(&config.logs_directory, LogStream::Runtime);
-    let mut listener = LocalIpcListener::bind(&config.endpoint, config.authentication_token)?;
-    let mut connection = listener.accept_authenticated(process.clone())?;
     let simulation = Arc::new(Mutex::new(RuntimeSimulation::new(
         config.mode,
         config.fixed_delta,
     )?));
+    // Finish renderer initialization before advancing simulation time.
+    let first_frame = scripts
+        .lock()
+        .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+        .render_world(|world| render(world, 0))
+        .map_err(RuntimeServerError::Scripts)?
+        .map_err(RuntimeServerError::Render)?;
     let stopping = Arc::new(AtomicBool::new(false));
     let simulation_worker = start_simulation_worker(
         Arc::clone(&simulation),
@@ -103,17 +141,7 @@ pub fn run_runtime_server_with_renderer(
     )?;
 
     let result = (|| {
-        connection.send(
-            0,
-            &ProtocolMessage::Frame(
-                scripts
-                    .lock()
-                    .map_err(|_| RuntimeServerError::SimulationPoisoned)?
-                    .render_world(|world| render(world, 0))
-                    .map_err(RuntimeServerError::Scripts)?
-                    .map_err(RuntimeServerError::Scripts)?,
-            ),
-        )?;
+        connection.send(0, &ProtocolMessage::Frame(first_frame))?;
         connection.send(
             0,
             &ProtocolMessage::Ready {
@@ -126,14 +154,14 @@ pub fn run_runtime_server_with_renderer(
             "injected runtime crash after readiness"
         );
         emit_console(
-            &mut connection,
-            logger.as_ref(),
-            &process,
+            connection,
+            logger,
+            process,
             Severity::Info,
             "runtime",
             format!("{} runtime ready", config.mode.as_str()),
         )?;
-        emit_script_logs(&mut connection, logger.as_ref(), &process, &scripts)?;
+        emit_script_logs(connection, logger, process, &scripts)?;
 
         loop {
             let received = match connection.receive() {
@@ -230,7 +258,7 @@ pub fn run_runtime_server_with_renderer(
                     continue;
                 }
             };
-            emit_script_logs(&mut connection, logger.as_ref(), &process, &scripts)?;
+            emit_script_logs(connection, logger, process, &scripts)?;
             let ack = if request == ControlRequest::Stop && config.ignore_stop {
                 let simulation = simulation
                     .lock()
@@ -273,15 +301,15 @@ pub fn run_runtime_server_with_renderer(
                             .map_err(|_| RuntimeServerError::SimulationPoisoned)?
                             .render_world(|world| render(world, ack.fixed_tick))
                             .map_err(RuntimeServerError::Scripts)?
-                            .map_err(RuntimeServerError::Scripts)?,
+                            .map_err(RuntimeServerError::Render)?,
                     ),
                 )?;
             }
             if request != ControlRequest::QueryState {
                 emit_console(
-                    &mut connection,
-                    logger.as_ref(),
-                    &process,
+                    connection,
+                    logger,
+                    process,
                     Severity::Debug,
                     "runtime.control",
                     format!(
@@ -301,9 +329,6 @@ pub fn run_runtime_server_with_renderer(
     stopping.store(true, Ordering::Release);
     if simulation_worker.join().is_err() && result.is_ok() {
         return Err(RuntimeServerError::SimulationWorkerPanicked);
-    }
-    if let Some(logger) = &logger {
-        let _ = logger.shutdown();
     }
     result
 }
@@ -464,6 +489,8 @@ pub enum RuntimeServerError {
     SimulationWorkerPanicked,
     #[error("runtime script startup/execution failed: {0}")]
     Scripts(String),
+    #[error("runtime rendering failed: {0}")]
+    Render(String),
 }
 
 #[cfg(test)]
@@ -472,6 +499,78 @@ mod tests {
     use crate::{RuntimeValue, SnapshotBuilder, SnapshotInput, connect_authenticated};
     use engine_scripting::{ScriptManifest, ScriptManifestEntry};
     use engine_world::{EntitySnapshot, LocalTransform, SceneDocument};
+
+    fn startup_config(directory: &std::path::Path, snapshot_root: PathBuf) -> RuntimeServerConfig {
+        RuntimeServerConfig {
+            endpoint: LocalEndpoint::unique(directory),
+            authentication_token: AuthenticationToken::generate(),
+            snapshot_root,
+            logs_directory: directory.join("logs"),
+            mode: PlayMode::Play,
+            fixed_delta: Duration::from_millis(16),
+            crash_after_ready: false,
+            ignore_stop: false,
+        }
+    }
+
+    #[test]
+    fn invalid_snapshot_reports_its_cause_after_authentication() {
+        let directory = tempfile::tempdir().unwrap();
+        let config = startup_config(directory.path(), directory.path().join("missing-snapshot"));
+        let endpoint = config.endpoint.clone();
+        let token = config.authentication_token.clone();
+        let server = thread::spawn(move || run_runtime_server(config));
+        let mut client = connect_authenticated(&endpoint, token, Duration::from_secs(5)).unwrap();
+        client
+            .set_receive_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let response = client.receive().unwrap();
+        let error = server.join().unwrap().unwrap_err();
+        assert!(matches!(error, RuntimeServerError::Snapshot(_)));
+        assert_eq!(
+            response.message,
+            ProtocolMessage::Error {
+                code: "runtime_failed".into(),
+                message: error.to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn slow_failing_first_render_keeps_handshake_available_and_reports_its_cause() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = SnapshotBuilder::new(directory.path().join("play"))
+            .stage(
+                PlayMode::Play,
+                SnapshotInput::new("scene/main.scene", b"scene".to_vec()),
+                &[],
+            )
+            .unwrap();
+        let config = startup_config(directory.path(), snapshot.root().to_path_buf());
+        let endpoint = config.endpoint.clone();
+        let token = config.authentication_token.clone();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            run_runtime_server_with_renderer(config, move |_, _| {
+                release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+                Err("graphics adapter initialization failed".into())
+            })
+        });
+        // Renderer startup remains blocked until the handshake has completed.
+        let mut client = connect_authenticated(&endpoint, token, Duration::from_secs(5)).unwrap();
+        client
+            .set_receive_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        release_tx.send(()).unwrap();
+        assert_eq!(
+            client.receive().unwrap().message,
+            ProtocolMessage::Error {
+                code: "runtime_failed".into(),
+                message: "runtime rendering failed: graphics adapter initialization failed".into(),
+            }
+        );
+        assert!(server.join().unwrap().is_err());
+    }
 
     #[test]
     #[allow(
