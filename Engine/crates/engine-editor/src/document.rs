@@ -153,7 +153,12 @@ impl AuthoringDocument {
     /// Returns an error without replacing the current document if loading or saving fails.
     pub fn switch_scene(&mut self, relative_path: impl AsRef<Path>) -> Result<(), AuthoringError> {
         let next = Self::open_scene(self.project.clone(), relative_path, self.project_read_only)?;
-        if next.scene_path == self.scene_path {
+        let same_file = self.scene_path.canonicalize().is_ok_and(|current| {
+            next.scene_path
+                .canonicalize()
+                .is_ok_and(|path| path == current)
+        });
+        if next.scene_path == self.scene_path || same_file {
             return Ok(());
         }
         if self.is_modified() {
@@ -1049,6 +1054,24 @@ mod tests {
         // External reload must reopen the active scene rather than the main scene.
         let reopened = AuthoringDocument::open_scene(project, "levels/night.scene", false).unwrap();
         assert_eq!(reopened.world().environment(), &other.environment);
+    }
+
+    #[test]
+    fn selecting_the_current_scene_through_an_alias_keeps_unsaved_edits() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("same-scene"),
+            "Same scene",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.save().unwrap();
+        let entity = document.add_folder(None).unwrap();
+        document.switch_scene("./main.scene").unwrap();
+        assert_eq!(document.selected(), Some(entity));
+        assert!(document.is_modified());
+        assert!(document.world().contains(entity));
     }
 
     #[test]
