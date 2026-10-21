@@ -1069,6 +1069,17 @@ mod tests {
         document.save().unwrap();
         let entity = document.add_folder(None).unwrap();
         document.switch_scene("./main.scene").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(
+                "main.scene",
+                document.scene_path().with_file_name("alias.scene"),
+            )
+            .unwrap();
+            document.switch_scene("alias.scene").unwrap();
+        }
+        #[cfg(windows)]
+        document.switch_scene("MAIN.scene").unwrap();
         assert_eq!(document.selected(), Some(entity));
         assert!(document.is_modified());
         assert!(document.world().contains(entity));
