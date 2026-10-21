@@ -14,6 +14,7 @@ use engine_core::logging::{AsyncLogger, Language, LogConfig, LogStream, Severity
 use engine_core::{
     ApplicationIdentity, ApplicationRole, AssetId, run_headless_smoke_from_arguments,
 };
+use engine_desktop::icons::Icon;
 use engine_editor::{
     AuthoringDocument, ConsoleEntry, EditorCamera, EditorTab, EditorWorkspace, GizmoAxis,
     GizmoOperation, GizmoSettings, GizmoSpace, PickMesh, ProjectAccess, ProjectLock,
@@ -1107,7 +1108,8 @@ impl EditorApp {
                     .color(ui_theme::TEXT),
             );
             if self.document.is_modified() {
-                ui.label(egui::RichText::new("●  Unsaved").color(ui_theme::WARNING));
+                ui.add(Icon::Circle.image(ui_theme::WARNING, 12.0));
+                ui.colored_label(ui_theme::WARNING, "Unsaved");
             }
             if self.document.is_read_only() {
                 ui.colored_label(ui_theme::WARNING, "READ ONLY");
@@ -1115,7 +1117,11 @@ impl EditorApp {
             ui.separator();
             if self.play.is_none() {
                 if ui
-                    .add(egui::Button::new("▶  Play").fill(egui::Color32::from_rgb(45, 100, 70)))
+                    .add(
+                        Icon::Play
+                            .button("Play")
+                            .fill(egui::Color32::from_rgb(45, 100, 70)),
+                    )
                     .clicked()
                 {
                     self.start_play(self.active_play_mode);
@@ -1133,7 +1139,11 @@ impl EditorApp {
                     });
             } else {
                 if ui
-                    .add(egui::Button::new("■  Stop").fill(egui::Color32::from_rgb(115, 53, 53)))
+                    .add(
+                        Icon::Square
+                            .button("Stop")
+                            .fill(egui::Color32::from_rgb(115, 53, 53)),
+                    )
                     .clicked()
                 {
                     self.stop_play();
@@ -1143,7 +1153,11 @@ impl EditorApp {
                     .as_ref()
                     .is_some_and(|play| play.state() == RuntimeState::Paused);
                 if ui
-                    .button(if paused { "▶ Resume" } else { "Ⅱ Pause" })
+                    .add(if paused {
+                        Icon::Play.button("Resume")
+                    } else {
+                        Icon::Pause.button("Pause")
+                    })
                     .clicked()
                 {
                     self.control_play(if paused {
@@ -1153,7 +1167,7 @@ impl EditorApp {
                     });
                 }
                 if ui
-                    .add_enabled(paused, egui::Button::new("▹ Frame"))
+                    .add_enabled(paused, Icon::StepForward.button("Frame"))
                     .clicked()
                 {
                     self.control_play(ControlRequest::FrameAdvance);
@@ -1313,15 +1327,9 @@ fn transform_mode_button(
     ui.painter().rect_filled(rect, 5.0, visuals.weak_bg_fill);
 
     let icon_source = match operation {
-        GizmoOperation::Translate => {
-            egui::include_image!("../../../assets/icons/material-design/axis-arrow.svg")
-        }
-        GizmoOperation::Rotate => {
-            egui::include_image!("../../../assets/icons/material-design/rotate-orbit.svg")
-        }
-        GizmoOperation::Scale => {
-            egui::include_image!("../../../assets/icons/material-design/resize.svg")
-        }
+        GizmoOperation::Translate => Icon::Move3d.source(),
+        GizmoOperation::Rotate => Icon::Rotate3d.source(),
+        GizmoOperation::Scale => Icon::Scaling.source(),
     };
     let icon_rect = egui::Rect::from_center_size(
         egui::pos2(rect.center().x, rect.top() + 15.0),
@@ -4153,7 +4161,7 @@ fn render_scene_hierarchy(
                 )
                 .show_header(ui, |ui| {
                     if snapshot.folder {
-                        ui.label("📁");
+                        ui.add(Icon::Folder.image(ui.visuals().text_color(), 18.0));
                     }
                     scene_entry_row(
                         ui,
@@ -4367,11 +4375,9 @@ fn render_project_directory(
         )
         .show_header(ui, |ui| {
             ui.add(
-                egui::Image::new(egui::include_image!(
-                    "../../../assets/icons/material-design/folder.svg"
-                ))
-                .fit_to_exact_size(egui::vec2(18.0, 18.0))
-                .tint(text_color),
+                egui::Image::new(Icon::Folder.source())
+                    .fit_to_exact_size(egui::vec2(18.0, 18.0))
+                    .tint(text_color),
             );
             action = project_entry_row(
                 ui,
@@ -5149,24 +5155,14 @@ fn project_file_icon(path: &Path) -> egui::ImageSource<'static> {
         Some("css") => {
             egui::include_image!("../../../assets/icons/material-design/language-css3.svg")
         }
-        Some("rscene") => {
-            egui::include_image!("../../../assets/icons/material-design/map-outline.svg")
-        }
-        Some("png" | "jpg" | "jpeg" | "tga" | "hdr") => {
-            egui::include_image!("../../../assets/icons/material-design/image-outline.svg")
-        }
-        Some("glb" | "gltf" | "obj") => {
-            egui::include_image!("../../../assets/icons/material-design/cube-outline.svg")
-        }
+        Some("rscene") => Icon::Map.source(),
+        Some("png" | "jpg" | "jpeg" | "tga" | "hdr") => Icon::Image.source(),
+        Some("glb" | "gltf" | "obj") => Icon::Box.source(),
         Some("wav" | "ogg" | "oga" | "opus" | "mp3" | "aac" | "m4a" | "flac") => {
-            egui::include_image!("../../../assets/icons/material-design/music-note-outline.svg")
+            Icon::FileMusic.source()
         }
-        Some("ron" | "toml" | "json") => {
-            egui::include_image!("../../../assets/icons/material-design/file-cog-outline.svg")
-        }
-        _ => {
-            egui::include_image!("../../../assets/icons/material-design/file-document-outline.svg")
-        }
+        Some("ron" | "toml" | "json") => Icon::FileCog.source(),
+        _ => Icon::FileText.source(),
     }
 }
 
