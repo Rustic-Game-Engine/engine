@@ -59,6 +59,20 @@ records retain that ID even if the source file moves. Rename an attached script 
 to run the renamed script without reattaching it or editing its source. This works
 for global startup, scene startup, and object component scripts, and also when
 moving a script or renaming/moving its containing folder in Explorer.
+The Inspector's **Gameplay scripts** list shows the current project-relative path;
+hover over it to see the stable Asset ID. Renaming the file updates this label too.
+
+Delete a script in **Explorer** to remove its registry entry and its links from
+objects, scene startup scripts, and global startup scripts. Deleting a folder
+also removes links to every registered script inside it. Links are removed from
+the open scene and saved project scenes, including legacy `.rscene` files;
+unrelated unsaved edits remain in the open scene. Scene **Undo** does not restore
+links to deleted scripts. The source and its metadata remain recoverable under
+`.rustic/trash/`; restoring or recreating a source requires registering and
+attaching it again through the editor.
+
+If a link file cannot be updated, deletion is undone and the Console reports the
+failure. Fix the reported file access or scene validation problem and retry.
 
 Web UI scripts must remain under `ui/`. If the editor cannot save the updated
 script registry, it undoes the move and reports the error in the Console; fix the

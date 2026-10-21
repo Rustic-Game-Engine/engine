@@ -1,5 +1,6 @@
 mod explorer_selection;
 mod play_session;
+mod script_links;
 mod ui_theme;
 mod viewport_keyboard;
 
@@ -1342,6 +1343,10 @@ impl eframe::App for EditorApp {
                 self.attach_project_script(&path, scope);
             }
             Some(ProjectFileAction::Refresh) => {
+                if let Ok(settings) = GameSettings::load(&project_root) {
+                    self.game_settings = settings;
+                }
+                self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
                 self.model_assets = load_project_model_assets(&project_root);
                 self.project_scan = Some(spawn_project_scan(project_root));
                 self.last_project_scan = Instant::now();
@@ -2465,7 +2470,7 @@ impl EditorViewer<'_> {
                     }
                     ProjectFileAction::Delete(sources) => selection_roots(sources)
                         .iter()
-                        .map(|source| delete_project_entry(self.project_root, source))
+                        .map(|source| delete_document_project_entry(self.document, source))
                         .collect(),
                     ProjectFileAction::Paste(destinations) => {
                         if let Some(mut clipboard) = ui.ctx().data_mut(|data| {
@@ -2884,7 +2889,11 @@ impl EditorViewer<'_> {
         for script in &mut scripts {
             ui.horizontal(|ui| {
                 changed |= ui.checkbox(&mut script.enabled, "Enabled").changed();
-                ui.monospace(script.script_id.to_string());
+                ui.label(script_links::script_label(
+                    &available_scripts,
+                    script.script_id,
+                ))
+                .on_hover_text(script.script_id.to_string());
             });
             for (name, value) in &mut script.properties {
                 ui.horizontal(|ui| {
@@ -4925,8 +4934,22 @@ fn relocate_project_entry(source: &Path, destination: &Path) -> Result<(), Strin
     Ok(())
 }
 
-fn delete_project_entry(root: &Path, source: &Path) -> Result<(), String> {
+fn delete_document_project_entry(
+    document: &mut AuthoringDocument,
+    source: &Path,
+) -> Result<(), String> {
+    if document.is_read_only() {
+        return Err("Cannot delete scripts in a read-only project".into());
+    }
+    let deleted = delete_project_entry(document.project().root(), source)?;
+    document
+        .remove_script_links(&deleted)
+        .map_err(|error| error.to_string())
+}
+
+fn delete_project_entry(root: &Path, source: &Path) -> Result<BTreeSet<ScriptId>, String> {
     let source_path = checked_project_path(root, source, false)?;
+    let links = script_links::ScriptLinkDeletion::prepare(root, source)?;
     // Keep deleted entries recoverable without showing them in the project tree.
     if root.join(".rustic").exists() {
         checked_project_path(root, Path::new(".rustic"), false)?;
@@ -4944,7 +4967,18 @@ fn delete_project_entry(root: &Path, source: &Path) -> Result<(), String> {
     let entry = trash.join(AssetId::new().to_string());
     std::fs::create_dir(&entry).map_err(|error| error.to_string())?;
     let destination = entry.join(source_path.file_name().ok_or("Entry has no name")?);
-    relocate_project_entry(&source_path, &destination)
+    relocate_project_entry(&source_path, &destination)?;
+    if let Err(error) = links.save() {
+        return match relocate_project_entry(&destination, &source_path) {
+            Ok(()) => Err(format!(
+                "Could not remove script links; deletion was undone: {error}"
+            )),
+            Err(rollback) => Err(format!(
+                "Could not remove script links: {error}; could not undo deletion: {rollback}"
+            )),
+        };
+    }
+    Ok(links.deleted_ids)
 }
 
 fn copy_tree(source: &Path, target: &Path) -> Result<(), String> {
@@ -5519,6 +5553,10 @@ mod explorer_tests {
             .find(|entry| entry.id == id)
             .unwrap();
         assert_eq!(entry.relative_path, Path::new(path));
+        assert_eq!(
+            Path::new(&script_links::script_label(&manifest.scripts, id)),
+            Path::new(path)
+        );
         // Play resolves the unchanged attachment ID through this registry and reads the source.
         engine_scripting::source_descriptor(root, entry, 1024).unwrap();
     }
@@ -5554,6 +5592,220 @@ mod explorer_tests {
             std::fs::read_to_string(root.join("scripts-other/controller.lua.rmeta")).unwrap(),
             "identity"
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "covers one delete, undo, save, and reopen lifecycle"
+    )]
+    fn deleting_scripts_removes_links_from_live_and_saved_scenes_and_settings() {
+        let temporary = TestProject::new();
+        let project = Project::create(
+            temporary.0.join("game"),
+            "Script links",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let root = project.root().to_path_buf();
+        let deleted = registered_script(&root, "scripts/behaviors/player.lua");
+        let nested = registered_script(&root, "scripts/behaviors/nested/start.js");
+        let retained = registered_script(&root, "scripts-other/keep.lua");
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let entity = document
+            .add_primitive("Player", Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+        document
+            .set_scripts(
+                entity,
+                vec![
+                    ScriptComponent::new(deleted),
+                    ScriptComponent::new(retained),
+                ],
+            )
+            .unwrap();
+        document
+            .set_scene_startup_scripts(vec![
+                ScriptReference::new(nested),
+                ScriptReference::new(retained),
+            ])
+            .unwrap();
+        document.save().unwrap();
+        let scene_path = document.scene_path().to_path_buf();
+        let other_scene = scene_path.with_file_name("other.scene");
+        std::fs::copy(&scene_path, &other_scene).unwrap();
+        let legacy_scene = scene_path.with_file_name("legacy.rscene");
+        std::fs::copy(&scene_path, &legacy_scene).unwrap();
+        let settings = GameSettings {
+            global_scripts: vec![
+                ScriptReference::new(deleted),
+                ScriptReference::new(retained),
+            ],
+            autosave: false,
+        };
+        settings.save(&root).unwrap();
+        document.set_name(entity, "Unsaved player".into()).unwrap();
+        // This edit must remain unsaved, and undo must not resurrect a dead link.
+        document
+            .set_scripts(
+                entity,
+                vec![
+                    ScriptComponent::new(deleted),
+                    ScriptComponent::new(nested),
+                    ScriptComponent::new(retained),
+                ],
+            )
+            .unwrap();
+        delete_document_project_entry(&mut document, Path::new("scripts/behaviors")).unwrap();
+        assert!(!root.join("scripts/behaviors").exists());
+        assert_script_link(&root, retained, "scripts-other/keep.lua");
+        let manifest = load_manifest(&std::fs::read(root.join("config/scripts.ron")).unwrap())
+            .unwrap()
+            .manifest;
+        assert_eq!(manifest.scripts.len(), 1);
+        let settings = GameSettings::load(&root).unwrap();
+        assert!(!settings.autosave);
+        assert_eq!(
+            settings.global_scripts,
+            vec![ScriptReference::new(retained)]
+        );
+        for path in [&scene_path, &other_scene, &legacy_scene] {
+            let loaded = engine_world::load_scene(&std::fs::read(path).unwrap()).unwrap();
+            assert!(!loaded.read_only);
+            assert_eq!(
+                loaded
+                    .document
+                    .entities
+                    .iter()
+                    .find(|snapshot| snapshot.id == entity)
+                    .unwrap()
+                    .name
+                    .as_deref(),
+                Some("Player")
+            );
+            assert_eq!(
+                loaded.document.startup_scripts,
+                vec![ScriptReference::new(retained)]
+            );
+            assert_eq!(
+                loaded
+                    .document
+                    .entities
+                    .iter()
+                    .find(|snapshot| snapshot.id == entity)
+                    .unwrap()
+                    .scripts,
+                vec![ScriptComponent::new(retained)]
+            );
+        }
+        assert_eq!(
+            document.world().snapshot(entity).unwrap().scripts,
+            vec![ScriptComponent::new(retained)]
+        );
+        assert_eq!(
+            document.scene_startup_scripts(),
+            &[ScriptReference::new(retained)]
+        );
+        assert!(document.is_modified());
+        assert_eq!(
+            document.world().snapshot(entity).unwrap().name.as_deref(),
+            Some("Unsaved player")
+        );
+        document.undo().unwrap();
+        assert_eq!(
+            document.world().snapshot(entity).unwrap().scripts,
+            vec![ScriptComponent::new(retained)]
+        );
+        document.redo().unwrap();
+        assert_eq!(
+            document.world().snapshot(entity).unwrap().scripts,
+            vec![ScriptComponent::new(retained)]
+        );
+        assert_eq!(
+            document.world().snapshot(entity).unwrap().name.as_deref(),
+            Some("Unsaved player")
+        );
+        document.save().unwrap();
+        assert!(!document.is_modified());
+        let reopened = AuthoringDocument::open(Project::open(&root).unwrap(), false).unwrap();
+        assert_eq!(
+            reopened.world().snapshot(entity).unwrap().scripts,
+            vec![ScriptComponent::new(retained)]
+        );
+    }
+
+    #[test]
+    fn failed_script_deletion_restores_source_metadata_registry_and_settings() {
+        let temporary = TestProject::new();
+        let project = Project::create(
+            temporary.0.join("game"),
+            "Rollback",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let root = project.root().to_path_buf();
+        let id = registered_script(&root, "scripts/player.lua");
+        std::fs::write(root.join("scripts/player.lua.rmeta"), "identity").unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let entity = document
+            .add_primitive("Player", Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+        document
+            .set_scripts(entity, vec![ScriptComponent::new(id)])
+            .unwrap();
+        document.save().unwrap();
+        let settings = GameSettings {
+            global_scripts: vec![ScriptReference::new(id)],
+            ..GameSettings::default()
+        };
+        settings.save(&root).unwrap();
+        let before = [
+            root.join("config/scripts.ron"),
+            root.join("settings.json"),
+            document.scene_path().to_path_buf(),
+        ]
+        .map(|path| {
+            let bytes = std::fs::read(&path).unwrap();
+            (path, bytes)
+        });
+        // Fail after the registry and global settings have already been saved.
+        let backup = AtomicFileService::backup_path(document.scene_path());
+        if backup.exists() {
+            std::fs::remove_file(&backup).unwrap();
+        }
+        std::fs::create_dir(&backup).unwrap();
+        let error = delete_document_project_entry(&mut document, Path::new("scripts/player.lua"))
+            .unwrap_err();
+        assert!(error.contains("deletion was undone"), "{error}");
+        assert_script_link(&root, id, "scripts/player.lua");
+        assert_eq!(
+            std::fs::read_to_string(root.join("scripts/player.lua.rmeta")).unwrap(),
+            "identity"
+        );
+        assert_eq!(
+            document.world().snapshot(entity).unwrap().scripts,
+            vec![ScriptComponent::new(id)]
+        );
+        assert!(!document.is_modified());
+        for (path, bytes) in before {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn deleting_one_script_preserves_siblings_and_recreation_gets_a_new_id() {
+        let project = TestProject::new();
+        let root = &project.0;
+        let deleted = registered_script(root, "scripts/player.lua");
+        let retained = registered_script(root, "scripts/player2.lua");
+        assert_eq!(
+            delete_project_entry(root, Path::new("scripts/player.lua")).unwrap(),
+            BTreeSet::from([deleted])
+        );
+        assert_script_link(root, retained, "scripts/player2.lua");
+        let recreated = registered_script(root, "scripts/player.lua");
+        assert_ne!(recreated, deleted);
+        assert_script_link(root, recreated, "scripts/player.lua");
     }
 
     #[test]
