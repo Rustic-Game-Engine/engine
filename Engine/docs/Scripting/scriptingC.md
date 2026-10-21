@@ -7,8 +7,11 @@ not parse requests, build commands, serialize JSON, or print responses.
 
 ## Setup and attachment
 
-1. Install Clang, GCC, or MSVC on PATH (C17). Restart the editor after changing PATH.
-   Run `cargo xtask doctor` from the Engine folder to check discovery.
+1. Install Clang, GCC, or MSVC (C17). On Windows, Rustic also checks the saved
+   system/user PATH and registered or standard LLVM install folders. After installation
+   or a saved PATH change, press **Play** to recheck. On other platforms, put the
+   compiler on PATH before starting the editor. Run `cargo xtask doctor` from the
+   Engine folder to check discovery.
 2. Open your game project and scene. Select a **Part** object for this movement example.
 3. Use **Programming > New Script > Object Component Script** and select C.
    Save the asset, then attach it to the selected object using
@@ -105,7 +108,10 @@ have three seconds to finish. An exception, invalid engine value, process exit,
 timeout, or rejected call disables the behavior. Failed build/reload validation
 keeps the last good instance running.
 
-- **Toolchain unavailable:** check PATH in the editor's environment, then restart it.
+- **Toolchain unavailable:** check that `clang.exe` (Windows) or your chosen C
+  compiler exists. On Windows, add a custom compiler folder to the saved user/system
+  PATH and press **Play** again. On other platforms, restart the editor after a PATH
+  change.
 - **Nothing moves:** check attachment, owner transform, Play focus, and held KeyW.
 - **Property rejected:** declare it in the editor and preserve its type.
 - **Wrong parent:** pass the ID returned by Find, not the path string.

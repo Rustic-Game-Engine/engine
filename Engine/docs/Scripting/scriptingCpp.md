@@ -5,7 +5,10 @@ compiles each `.cc`, `.cpp`, or `.cxx` behavior as C++20, and runs one isolated
 process per instance. The header parses protocol requests and exposes typed native
 helpers, so ordinary game code should not emit JSON.
 
-Install `clang++`, `g++`, or MSVC `cl` on `PATH`. Clang/GCC builds use `-Wall
+Install `clang++`, `g++`, or MSVC `cl` on `PATH`. On Windows, Rustic also checks
+the saved system/user PATH and registered or standard LLVM install folders; press
+**Play** after installation to recheck without reinstalling LLVM. A custom compiler
+folder can be added to the saved user/system PATH. Clang/GCC builds use `-Wall
 -Wextra -Werror -std=c++20`; MSVC uses `/nologo /W4`. The editor also writes an
 IntelliSense copy to `.rustic/generated/programming/rustic.hpp`, but Rustic supplies
 the authoritative temporary copy when building. Never edit or vendor the generated

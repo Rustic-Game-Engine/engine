@@ -22,6 +22,9 @@ mod java;
 mod luau;
 mod php;
 mod python;
+mod toolchain;
+
+use toolchain::find_executable;
 
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
@@ -1018,35 +1021,6 @@ fn run_checked(
             diagnostic_text(bytes),
         ))
     }
-}
-
-fn find_executable(candidates: &[&str]) -> Option<PathBuf> {
-    let paths = std::env::var_os("PATH")?;
-    let extensions: Vec<OsString> = if cfg!(windows) {
-        std::env::var_os("PATHEXT")
-            .unwrap_or_else(|| ".EXE;.CMD;.BAT;.COM".into())
-            .to_string_lossy()
-            .split(';')
-            .map(OsString::from)
-            .collect()
-    } else {
-        vec![OsString::new()]
-    };
-    for directory in std::env::split_paths(&paths) {
-        for candidate in candidates {
-            let direct = directory.join(candidate);
-            if direct.is_file() {
-                return Some(direct);
-            }
-            for extension in &extensions {
-                let path = directory.join(format!("{candidate}{}", extension.to_string_lossy()));
-                if path.is_file() {
-                    return Some(path);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn copy_safe_environment(command: &mut Command) {
