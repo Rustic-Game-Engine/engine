@@ -10,6 +10,7 @@ publish = false
 crossbeam-channel.workspace = true
 eframe.workspace = true
 engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
+engine-desktop = { path = "../../crates/engine-desktop", version = "0.1.0" }
 engine-platform = { path = "../../crates/engine-platform", version = "0.1.0" }
 engine-project = { path = "../../crates/engine-project", version = "0.1.0" }
 engine-scripting = { path = "../../crates/engine-scripting", version = "0.1.0" }

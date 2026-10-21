@@ -13,10 +13,24 @@ excludes prereleases. Drafts and unrelated tag formats are ignored.
 A newer Windows x64 installer downloads in the background. Its byte count and
 SHA-256 must match the asset metadata returned by GitHub's HTTPS API before Setup
 can run. Releases without a checksum or exactly one matching installer are skipped.
-Setup waits until Project Manager, all editors, runtimes and bundled workers have
-closed. Close Rustic normally after saving your work; the updater never forces an
-application closed, reboots Windows, or restarts the editor. Open Rustic again to
-use the installed version. Setup preserves its prior directory, installation scope,
+When an update is ready while Rustic is open, one window asks whether to install
+it. **Not now** or closing the prompt dismisses it for that release, including
+across restarts. A small **Update** button remains in the top-right title bar,
+immediately left of the minimize/maximize/close controls, in both Project Manager
+and the editor. Click it to install later. Newer releases can show a new prompt.
+
+Choosing **Install update** or **Update** gracefully closes the desktop windows.
+Editors ask to save unsaved scenes first; save failures leave the editor open.
+Active Play sessions stop and their runtime changes can be reviewed before closing.
+Canceling leaves the update available. Standalone games/workers must be closed
+separately: Setup waits until all Rustic processes from that installation exit.
+
+After successful installation, the updater reopens each window closed for the
+update, restoring every editor's original project, including paths with spaces or
+Unicode. It starts the newly installed executables as the original user. Failed
+installations do not replay session records. An automatic installation after a
+normal app exit does not reopen the app. The updater never force-closes an editor
+or reboots Windows. Setup preserves its prior directory, installation scope,
 language components and shortcut/PATH tasks. An all-users installation can require
 Windows' elevation prompt; Windows security prompts cannot be suppressed.
 

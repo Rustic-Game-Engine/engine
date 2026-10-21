@@ -11,7 +11,7 @@ mod vfs;
 pub use atomic_file::{AtomicFileService, AtomicWriteError, AtomicWriteOptions, RecoveryAction};
 pub use config::{ConfigDocument, ConfigError, ConfigLoad, ConfigSchema, ConfigStore};
 pub use crash_marker::{CrashMarkerError, StartupMarker, StartupRecord};
-pub use desktop_update::start_desktop_updater;
+pub use desktop_update::{DesktopUpdate, DesktopUpdateClient, start_desktop_updater};
 pub use paths::{NativePlatformPaths, PlatformError, PlatformPaths};
 pub use process::{
     NativeProcessLauncher, ProcessError, ProcessExit, ProcessLauncher, ProcessRequest,

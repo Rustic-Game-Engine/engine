@@ -1148,6 +1148,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "engine-desktop"
+version = "0.1.0"
+dependencies = [
+ "eframe",
+ "engine-platform",
+]
+
+[[package]]
 name = "engine-editor"
 version = "0.1.0"
 dependencies = [
@@ -1175,6 +1183,7 @@ dependencies = [
  "parking_lot",
  "ron",
  "serde",
+ "sha2",
  "tempfile",
  "thiserror 2.0.20",
  "uuid",
@@ -3513,6 +3522,7 @@ dependencies = [
  "embed-resource",
  "engine-assets",
  "engine-core",
+ "engine-desktop",
  "engine-editor",
  "engine-platform",
  "engine-play",
@@ -3534,6 +3544,7 @@ dependencies = [
  "eframe",
  "embed-resource",
  "engine-core",
+ "engine-desktop",
  "engine-platform",
  "engine-project",
  "engine-scripting",

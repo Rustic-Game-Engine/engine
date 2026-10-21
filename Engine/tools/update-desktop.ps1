@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string]$InstallDirectory = (Split-Path -Parent $PSScriptRoot),
+    [string]$StateDirectory,
     [switch]$FunctionsOnly
 )
 
@@ -103,20 +104,59 @@ function Write-UpdateLog([string]$Message) {
         -Value (('{0:u} ' -f [DateTime]::UtcNow) + $Message)
 }
 
+function Restart-DesktopSessions([string]$Directory, [string]$CacheDirectory, [string]$Tag) {
+    foreach ($record in @(Get-ChildItem -LiteralPath $CacheDirectory -Filter 'resume-*.txt' -File)) {
+        try {
+            $lines = @(Get-Content -LiteralPath $record.FullName -Encoding UTF8)
+            if ($lines.Count -lt 2 -or $lines[0] -cne $Tag) { continue }
+            $start = @{ WorkingDirectory = $Directory }
+            if ($lines[1] -eq 'project-manager') {
+                $start.FilePath = Join-Path $Directory 'rustic-project-manager.exe'
+            } elseif ($lines[1] -eq 'editor') {
+                if ($lines.Count -lt 3 -or -not [IO.Path]::IsPathRooted($lines[2]) -or
+                    -not (Test-Path -LiteralPath $lines[2] -PathType Container)) {
+                    throw 'The project to restore no longer exists.'
+                }
+                $start.FilePath = Join-Path $Directory 'rustic-editor.exe'
+                $quotedProject = $lines[2] -replace '(\\+)$', '$1$1'
+                $start.ArgumentList = '--project "' + $quotedProject + '"'
+            } else { throw 'Unknown desktop session type.' }
+            # This worker retains the original user's context even when Setup elevated.
+            Start-Process @start | Out-Null
+            Write-UpdateLog "Reopened $($lines[1]) after updating to $Tag."
+        } catch { Write-UpdateLog "Could not restore a desktop session: $($_.Exception.Message)" }
+        finally { Remove-Item -LiteralPath $record.FullName -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Invoke-DesktopUpdateCheck([string]$Directory, [string]$CacheDirectory) {
     $commitFile = Join-Path $Directory 'build-commit.txt'
     $commit = (Get-Content -LiteralPath $commitFile -Raw).Trim()
     $asset = Select-DesktopUpdate @(Get-PublishedReleases) $commit
-    if (-not $asset) { return $false }
+    if (-not $asset) { return $null }
     Write-UpdateLog "Downloading $($asset.name). Close Rustic to install the update."
+    Remove-Item -LiteralPath (Join-Path $CacheDirectory 'pending-update.txt') -Force -ErrorAction SilentlyContinue
     $installer = Save-VerifiedInstaller $asset $CacheDirectory
+    $tag = ($asset.browser_download_url -split '/')[-2]
+    # Publish only after verification. ASCII fields also decode identically in Rust.
+    $pending = Join-Path $CacheDirectory 'pending-update.txt'
+    $temporary = $pending + '.tmp'
+    [IO.File]::WriteAllText($temporary, "$commit`n$tag`n", [Text.Encoding]::ASCII)
+    Move-Item -LiteralPath $temporary -Destination $pending -Force
     while (Test-RusticRunning $Directory) { Start-Sleep -Seconds 5 }
-    if (-not (Test-Path -LiteralPath $commitFile)) { return $true }
-    if ((Get-Content -LiteralPath $commitFile -Raw).Trim() -ne $commit) { return $true }
-    Install-DesktopUpdate $installer $Directory $CacheDirectory
-    Write-UpdateLog 'Update installed. Start Rustic normally to use the new release.'
+    if (-not (Test-Path -LiteralPath $commitFile)) { return [pscustomobject]@{ Installed = $false; Tag = $tag } }
+    if ((Get-Content -LiteralPath $commitFile -Raw).Trim() -ne $commit) { return [pscustomobject]@{ Installed = $false; Tag = $tag } }
+    try { Install-DesktopUpdate $installer $Directory $CacheDirectory }
+    catch {
+        Remove-Item -LiteralPath (Join-Path $CacheDirectory 'install-request.txt') -Force -ErrorAction SilentlyContinue
+        Get-ChildItem -LiteralPath $CacheDirectory -Filter 'resume-*.txt' -File | Remove-Item -Force
+        throw
+    }
+    Write-UpdateLog 'Update installed.'
     Remove-Item -LiteralPath $installer -Force
-    return $true
+    Remove-Item -LiteralPath $pending -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath (Join-Path $CacheDirectory 'install-request.txt') -Force -ErrorAction SilentlyContinue
+    return [pscustomobject]@{ Installed = $true; Tag = $tag }
 }
 
 function Invoke-DesktopUpdater([string]$Directory) {
@@ -128,7 +168,9 @@ function Invoke-DesktopUpdater([string]$Directory) {
     $hasher = [Security.Cryptography.SHA256]::Create()
     try { $key = [BitConverter]::ToString($hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Directory.ToLowerInvariant()))).Replace('-', '') }
     finally { $hasher.Dispose() }
-    $script:CacheDirectory = Join-Path $env:LOCALAPPDATA "Rustic Game Engine\updates\$key"
+    $script:CacheDirectory = if ($StateDirectory) { $StateDirectory } else {
+        Join-Path $env:LOCALAPPDATA "Rustic Game Engine\updates\$key"
+    }
     New-Item -ItemType Directory -Force -Path $script:CacheDirectory | Out-Null
     # FileShare.None permits only one worker per installation, across launcher/editor instances.
     try { $lock = [IO.File]::Open((Join-Path $script:CacheDirectory 'updater.lock'), 'OpenOrCreate', 'ReadWrite', 'None') }
@@ -136,7 +178,18 @@ function Invoke-DesktopUpdater([string]$Directory) {
     try {
         do {
             try {
-                if (Invoke-DesktopUpdateCheck $Directory $script:CacheDirectory) { return }
+                $result = Invoke-DesktopUpdateCheck $Directory $script:CacheDirectory
+                if ($result) {
+                    # Release the worker lock before reopening apps: their new updater must
+                    # be able to acquire it and keep checking during the restored session.
+                    $lock.Dispose()
+                    $lock = $null
+                    if ($result.Installed) {
+                        try { Restart-DesktopSessions $Directory $script:CacheDirectory $result.Tag }
+                        catch { Write-UpdateLog "Could not restore desktop sessions: $($_.Exception.Message)" }
+                    }
+                    return
+                }
             } catch { Write-UpdateLog $_.Exception.Message }
             # Check hourly while Rustic is open; a later launch retries network/Setup failures.
             for ($tick = 0; $tick -lt 720; $tick++) {
@@ -144,7 +197,7 @@ function Invoke-DesktopUpdater([string]$Directory) {
                 Start-Sleep -Seconds 5
             }
         } while ($true)
-    } finally { $lock.Dispose() }
+    } finally { if ($lock) { $lock.Dispose() } }
 }
 
 if (-not $FunctionsOnly) { Invoke-DesktopUpdater $InstallDirectory }

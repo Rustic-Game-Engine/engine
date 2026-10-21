@@ -116,14 +116,45 @@ try {
         $script:Launches++
         [pscustomobject]@{ ExitCode = $script:SetupExitCode }
     }
-    Assert-Equal (Invoke-DesktopUpdateCheck $temp $temp) $true 'Successful background update'
+    Assert-Equal (Invoke-DesktopUpdateCheck $temp $temp).Installed $true 'Successful background update'
     Assert-Equal $script:Launches 1 'Launch Setup exactly once'
     Assert-Equal (Test-Path -LiteralPath $installer) $false 'Remove installer after success'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $false 'Clear pending UI status after success'
     $script:SetupExitCode = 5
+    Set-Content -LiteralPath (Join-Path $temp 'install-request.txt') -Value $next.tag_name
+    Set-Content -LiteralPath (Join-Path $temp 'resume-failure.txt') -Value 'must not replay'
     Assert-Throws { Invoke-DesktopUpdateCheck $temp $temp } 'Report installer failure for retry'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'install-request.txt')) $false 'Failed Setup must not close the next desktop session'
+    Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'resume-failure.txt')) $false 'Failed Setup clears restart records'
+    $pending = Get-Content -LiteralPath (Join-Path $temp 'pending-update.txt')
+    Assert-Equal $pending[0] $commit 'UI status identifies the installed build'
+    Assert-Equal $pending[1] $next.tag_name 'UI status identifies the verified release'
     $script:Launches = 0
     $asset.digest = 'sha256:' + ('0' * 64)
     Assert-Throws { Invoke-DesktopUpdateCheck $temp $temp } 'Checksum failure propagates before installation'
     Assert-Equal $script:Launches 0 'Never execute corrupt downloads'
+
+    # Only sessions closed for this successful update are restored. Preserve spaces/Unicode.
+    $project = Join-Path $temp ('M' + [char]0x0101 + 'ori game project')
+    New-Item -ItemType Directory -Path $project | Out-Null
+    $utf8 = [Text.UTF8Encoding]::new($false)
+    [IO.File]::WriteAllText((Join-Path $temp 'resume-1.txt'), "$($next.tag_name)`nproject-manager`n", $utf8)
+    [IO.File]::WriteAllText((Join-Path $temp 'resume-2.txt'), "$($next.tag_name)`neditor`n$project`n", $utf8)
+    [IO.File]::WriteAllText((Join-Path $temp 'resume-3.txt'), "v0.1-Pre-Alpha`nproject-manager`n", $utf8)
+    [IO.File]::WriteAllText((Join-Path $temp 'resume-4.txt'), "$($next.tag_name)`narbitrary-executable`n", $utf8)
+    $script:Restored = @()
+    function Start-Process {
+        param($FilePath, $ArgumentList, $WorkingDirectory)
+        $script:Restored += [pscustomobject]@{ Path = $FilePath; Arguments = $ArgumentList }
+        Assert-Equal $WorkingDirectory $temp 'Restore using the installed application directory'
+    }
+    Restart-DesktopSessions $temp $temp $next.tag_name
+    Assert-Equal $script:Restored.Count 2 'Restore only matching supported desktop sessions'
+    Assert-Equal $script:Restored[0].Path (Join-Path $temp 'rustic-project-manager.exe') 'Reopen latest Project Manager'
+    Assert-Equal $script:Restored[1].Path (Join-Path $temp 'rustic-editor.exe') 'Reopen latest editor'
+    Assert-Equal $script:Restored[1].Arguments ('--project "' + $project + '"') 'Reopen the exact project with quoted Unicode/spaces'
+    Assert-Equal @(Get-ChildItem -LiteralPath $temp -Filter 'resume-*.txt').Count 0 'Consume session records exactly once'
+    Restart-DesktopSessions $temp $temp $next.tag_name
+    Assert-Equal $script:Restored.Count 2 'Ordinary closed-app updates do not reopen applications'
     Write-Host 'Desktop updater regression tests passed.'
 } finally { Remove-Item -LiteralPath $temp -Recurse -Force }

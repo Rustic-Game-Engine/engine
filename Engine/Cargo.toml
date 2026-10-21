@@ -8,6 +8,7 @@ members = [
     "apps/setup-helper",
     "crates/engine-assets",
     "crates/engine-core",
+    "crates/engine-desktop",
     "crates/engine-editor",
     "crates/engine-play",
     "crates/engine-platform",
