@@ -190,7 +190,7 @@ static char *r_owned(const char *s,size_t length){if(r_query_owned_count>=8192)r
 static RQuerySave r_query_begin(const char *op){
     RQuerySave saved={0};saved.audio_devices=strcmp(op,"audio_get_output_devices")==0||strcmp(op,"audio_get_input_devices")==0;saved.source=(char*)malloc(strlen(r_source)+1);saved.pending=(char*)malloc(r_written+1);saved.tokens=(RToken*)malloc(r_count*sizeof(RToken));
     if(!saved.source||!saved.pending||!saved.tokens)r_fail("Rustic C: query snapshot allocation failed");
-    strcpy(saved.source,r_source);memcpy(saved.pending,r_output,r_written+1);memcpy(saved.tokens,r_tokens,r_count*sizeof(RToken));saved.count=r_count;saved.at=r_at;
+    memcpy(saved.source,r_source,strlen(r_source)+1);memcpy(saved.pending,r_output,r_written+1);memcpy(saved.tokens,r_tokens,r_count*sizeof(RToken));saved.count=r_count;saved.at=r_at;
     r_written=0;r_output[0]=0;r_append("{\"op\":");r_quote(op);return saved;
 }
 static void r_q_number(const char *key,double v){r_append(",");r_quote(key);r_append(":");r_double(v);}
@@ -237,7 +237,7 @@ static RQueryResult r_query_end(RQuerySave saved){
         }
     }
     for(size_t i=0;i<r_count;i++)free(r_tokens[i].decoded);
-    strcpy(r_source,saved.source);memcpy(r_tokens,saved.tokens,saved.count*sizeof(RToken));r_count=saved.count;r_at=saved.at;
+    memcpy(r_source,saved.source,strlen(saved.source)+1);memcpy(r_tokens,saved.tokens,saved.count*sizeof(RToken));r_count=saved.count;r_at=saved.at;
     free(saved.source);free(saved.pending);free(saved.tokens);r_written=r_commands=0;r_output[0]=0;r_append("{\"format_version\":1,\"commands\":[");return out;
 }
 static void r_edit_object_path(const char *source,const char *name,RusticValue value){r_command("edit_attribute");r_append(",\"source\":");r_quote(source);r_append(",\"name\":");r_quote(name);r_append(",\"value\":");r_write_value(value);r_append("}");}
