@@ -710,12 +710,12 @@ impl ProcessSession {
                     ));
                 }
             };
+            let response_received = std::time::Instant::now();
             let mut message: Value = serde_json::from_slice(&stdout_bytes).map_err(|e| {
                 ExternalRuntimeError::Runtime(language.display_name(), e.to_string())
             })?;
             crate::lua::normalize_query(&mut message);
             if let Some(query) = message.get("query") {
-                let query_started = std::time::Instant::now();
                 let result = (|| -> Result<Value, String> {
                     let host = host.ok_or("query host unavailable")?;
                     let mut host = host.lock().map_err(|_| "gameplay lock poisoned")?;
@@ -729,10 +729,6 @@ impl ProcessSession {
                     }
                     host.gameplay_query(query.clone())
                 })();
-                // The child is blocked waiting for Rust here. Asset loading,
-                // device work and host locking are not script execution time.
-                // Preserve the unused budget rather than resetting it per query.
-                deadline += query_started.elapsed();
                 let response = match result {
                     Ok(value) => json!({"result":value}),
                     Err(error) => json!({"error":error}),
@@ -744,6 +740,10 @@ impl ProcessSession {
                     .and_then(|()| self.stdin.write_all(b"\n"))
                     .and_then(|()| self.stdin.flush())
                     .map_err(|e| runtime_io(language, e))?;
+                // The child waits for Rust's reply. Decoding, host locking,
+                // engine work and delivering the reply are not script time.
+                // Preserve the unused budget rather than resetting it per query.
+                deadline += response_received.elapsed();
                 continue;
             }
             return serde_json::from_value(message).map_err(|e| {
