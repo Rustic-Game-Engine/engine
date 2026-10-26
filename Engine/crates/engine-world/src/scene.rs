@@ -481,6 +481,14 @@ fn decode_component<T: DeserializeOwned>(
 /// kind, is too old to migrate, or cannot be decoded as UTF-8/RON.
 #[allow(clippy::too_many_lines)]
 pub fn load_scene(bytes: &[u8]) -> Result<SceneLoad, SceneError> {
+    load_scene_with_policy(bytes, false)
+}
+
+#[allow(clippy::too_many_lines)]
+fn load_scene_with_policy(
+    bytes: &[u8],
+    allow_stale_checksum: bool,
+) -> Result<SceneLoad, SceneError> {
     let text = std::str::from_utf8(bytes).map_err(|error| SceneError::Parse(error.to_string()))?;
     let probe: VersionProbe =
         ron::from_str(text).map_err(|error| SceneError::Parse(error.to_string()))?;
@@ -538,9 +546,13 @@ pub fn load_scene(bytes: &[u8]) -> Result<SceneLoad, SceneError> {
     } else if let Some(expected) = &wire.checksum {
         let actual = checksum_wire(&wire)?;
         if *expected != actual {
-            corrupt = true;
+            corrupt = !allow_stale_checksum;
             diagnostics.push(SceneDiagnostic {
-                severity: SceneDiagnosticSeverity::Error,
+                severity: if allow_stale_checksum {
+                    SceneDiagnosticSeverity::Warning
+                } else {
+                    SceneDiagnosticSeverity::Error
+                },
                 entity: None,
                 component: None,
                 message: format!(
@@ -848,17 +860,34 @@ pub fn save_scene_atomic(
 ///
 /// Returns the primary [`SceneError`] when neither the primary nor backup is recoverable.
 pub fn load_scene_recovering(path: impl AsRef<Path>) -> Result<SceneLoad, SceneError> {
-    let path = path.as_ref();
+    load_scene_recovering_with(path.as_ref(), load_scene)
+}
+
+/// Loads an authoring scene, accepting stale checksums from external text edits.
+/// Component, environment and version validation still apply. A checksum-only
+/// mismatch is reported as a warning and does not replace edits with a backup.
+/// Saving refreshes the checksum and preserves the prior file as a backup.
+///
+/// # Errors
+/// Returns the primary scene error if neither the primary nor backup is recoverable.
+pub fn load_scene_recovering_for_editing(path: impl AsRef<Path>) -> Result<SceneLoad, SceneError> {
+    load_scene_recovering_with(path.as_ref(), |bytes| load_scene_with_policy(bytes, true))
+}
+
+fn load_scene_recovering_with(
+    path: &Path,
+    load: fn(&[u8]) -> Result<SceneLoad, SceneError>,
+) -> Result<SceneLoad, SceneError> {
     let primary = fs::read(path)
         .map_err(|error| io_error(path, error))
-        .and_then(|bytes| load_scene(&bytes));
+        .and_then(|bytes| load(&bytes));
     match primary {
         Ok(load) if !load.corrupt => Ok(load),
         primary_result => {
             let backup = backup_path(path);
             let recovered = fs::read(&backup)
                 .map_err(|error| io_error(&backup, error))
-                .and_then(|bytes| load_scene(&bytes));
+                .and_then(|bytes| load(&bytes));
             match recovered {
                 Ok(mut load) if !load.corrupt => {
                     load.source = RecoverySource::Backup;
@@ -997,6 +1026,47 @@ mod tests {
                 .schema_version,
             CURRENT_SCENE_VERSION
         );
+    }
+
+    #[test]
+    fn editing_load_only_relaxes_checksum_and_preserves_validation_and_runtime_integrity() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("other.scene");
+        let original = String::from_utf8(sample_document().to_bytes().unwrap()).unwrap();
+        let edited = original.replace("\"Golden\"", "\"Externally edited\"");
+        assert!(load_scene(edited.as_bytes()).unwrap().read_only);
+        fs::write(&path, edited).unwrap();
+        let editable = load_scene_recovering_for_editing(&path).unwrap();
+        assert!(!editable.read_only);
+        assert_eq!(editable.source, RecoverySource::Primary);
+        assert!(
+            editable
+                .diagnostics
+                .iter()
+                .any(|item| item.message.contains("checksum mismatch")
+                    && item.severity == SceneDiagnosticSeverity::Warning)
+        );
+
+        let mut damaged = SceneWire::from_document(&sample_document()).unwrap();
+        damaged.checksum = Some("stale".into());
+        damaged.entities[0]
+            .components
+            .iter_mut()
+            .find(|item| item.schema == TRANSFORM_SCHEMA)
+            .unwrap()
+            .payload = "broken".into();
+        fs::write(&path, serialize_wire(&damaged).unwrap()).unwrap();
+        let loaded = load_scene_recovering_for_editing(&path).unwrap();
+        assert!(loaded.read_only);
+        assert!(loaded.has_errors());
+        damaged = SceneWire::from_document(&sample_document()).unwrap();
+        damaged.environment.haze_density = -1.0;
+        fs::write(&path, serialize_wire(&damaged).unwrap()).unwrap();
+        assert!(load_scene_recovering_for_editing(&path).unwrap().read_only);
+        damaged = SceneWire::from_document(&sample_document()).unwrap();
+        damaged.schema_version += 1;
+        fs::write(&path, serialize_wire(&damaged).unwrap()).unwrap();
+        assert!(load_scene_recovering_for_editing(&path).unwrap().read_only);
     }
 
     #[test]
