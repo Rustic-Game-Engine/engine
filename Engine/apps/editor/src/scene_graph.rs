@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use eframe::egui;
-use egui_snarl::ui::{PinInfo, SnarlStyle, SnarlViewer};
+use egui_snarl::ui::{PinInfo, SnarlPin, SnarlStyle, SnarlViewer};
 use egui_snarl::{InPin, InPinId, NodeId, OutPin, OutPinId, Snarl};
 use engine_editor::AuthoringDocument;
 use engine_world::{EntityId, EntitySnapshot};
@@ -146,7 +146,7 @@ impl SnarlViewer<SceneNode> for SceneViewer<'_> {
         _pin: &InPin,
         ui: &mut egui::Ui,
         _snarl: &mut Snarl<SceneNode>,
-    ) -> PinInfo {
+    ) -> impl SnarlPin + 'static {
         ui.label("Parent");
         PinInfo::circle()
     }
@@ -156,7 +156,7 @@ impl SnarlViewer<SceneNode> for SceneViewer<'_> {
         _pin: &OutPin,
         ui: &mut egui::Ui,
         _snarl: &mut Snarl<SceneNode>,
-    ) -> PinInfo {
+    ) -> impl SnarlPin + 'static {
         ui.label("Children");
         PinInfo::circle()
     }

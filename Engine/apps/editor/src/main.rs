@@ -3512,18 +3512,6 @@ fn pick_scene(
     meshes
 }
 
-fn project_to_rect(view_projection: Mat4, point: Vec3, rect: egui::Rect) -> Option<egui::Pos2> {
-    let clip = view_projection * point.extend(1.0);
-    if clip.w <= 0.0 || !clip.is_finite() {
-        return None;
-    }
-    let ndc = clip.truncate() / clip.w;
-    Some(egui::pos2(
-        rect.left() + ndc.x.midpoint(1.0) * rect.width(),
-        rect.top() + (-ndc.y).midpoint(1.0) * rect.height(),
-    ))
-}
-
 fn viewport_ground_position(
     camera: EditorCamera,
     rect: egui::Rect,
@@ -5549,6 +5537,10 @@ mod explorer_tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the scene picker regression exercises one complete UI interaction"
+    )]
     fn project_settings_gear_opens_scene_picker_and_requests_selected_scene() {
         let temporary = TestProject::new();
         let project = Project::create(

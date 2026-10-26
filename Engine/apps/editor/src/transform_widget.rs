@@ -1,12 +1,13 @@
 use eframe::egui;
 use engine_editor::{EditorCamera, GizmoOperation, GizmoSettings, GizmoSpace};
 use engine_world::{EntityId, LocalTransform};
-use glam::Mat4;
+use glam::{Mat4, Quat, Vec3};
 use transform_gizmo_egui::{
     Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation,
     math::{DMat4, DQuat, DVec3, Transform},
 };
 
+#[derive(Clone, Copy)]
 pub struct Target {
     pub entity: EntityId,
     pub world: Mat4,
@@ -84,7 +85,7 @@ impl TransformWidget {
         );
         let (_, transforms) = self.gizmo.interact(ui, &[target])?;
         let after = transforms.first()?;
-        let translation = DVec3::from(after.translation).as_vec3();
+        let translation = Vec3::from_array(DVec3::from(after.translation).as_vec3().to_array());
         let result_world = if settings.operation == GizmoOperation::Translate {
             // Preserve the original linear transform, including parent-induced
             // shear, when only moving the pivot.
@@ -93,8 +94,8 @@ impl TransformWidget {
             moved
         } else {
             Mat4::from_scale_rotation_translation(
-                DVec3::from(after.scale).as_vec3(),
-                DQuat::from(after.rotation).as_quat(),
+                Vec3::from_array(DVec3::from(after.scale).as_vec3().to_array()),
+                Quat::from_array(DQuat::from(after.rotation).as_quat().to_array()),
                 translation,
             )
         };
@@ -121,7 +122,6 @@ fn local_from_world(parent: Mat4, world: Mat4) -> Option<LocalTransform> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::{Quat, Vec3};
 
     #[test]
     fn upstream_handle_owns_pointer_and_translates_in_camera_projection() {
