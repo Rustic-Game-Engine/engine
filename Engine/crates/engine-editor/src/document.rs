@@ -988,6 +988,38 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn opening_without_main_uses_top_scene_and_remains_editable() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("fallback"),
+            "Fallback",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let scenes = project.directory(VirtualDirectory::Scenes).unwrap();
+        let mut first = SceneDocument::new("First");
+        first.entities.push(engine_world::EntitySnapshot::default());
+        save_scene_atomic(scenes.join("a.scene"), &first).unwrap();
+        save_scene_atomic(scenes.join("z.rscene"), &SceneDocument::new("Last")).unwrap();
+        let mut document =
+            AuthoringDocument::open(Project::open(project.root()).unwrap(), false).unwrap();
+        assert_eq!(document.scene_path(), scenes.join("a.scene"));
+        assert_eq!(document.entity_snapshots().unwrap(), first.entities);
+        assert!(!document.is_read_only());
+        document.add_folder(None).unwrap();
+        document.save().unwrap();
+        assert_eq!(
+            load_scene_recovering(scenes.join("a.scene"))
+                .unwrap()
+                .document
+                .entities
+                .len(),
+            2
+        );
+        assert!(!scenes.join("main.scene").exists());
+    }
+
+    #[test]
     fn switching_scenes_saves_edits_and_replaces_objects_environment_and_history() {
         let temporary = tempdir().unwrap();
         let project = Project::create(

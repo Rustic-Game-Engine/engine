@@ -552,7 +552,8 @@ impl Project {
         self.descriptor.project_id
     }
 
-    /// Resolves the configured start scene, or the legacy main-scene default.
+    /// Resolves the configured start scene, main scene, or first scene by relative path.
+    /// Empty projects retain `main.scene` as the path for their first save.
     /// # Errors
     /// Returns an error for invalid scene or virtual-directory paths.
     pub fn start_scene_path(&self) -> Result<PathBuf, ProjectError> {
@@ -563,11 +564,16 @@ impl Project {
         }
         let preferred = scenes.join("main.scene");
         let legacy = scenes.join("main.rscene");
-        Ok(if preferred.is_file() || !legacy.is_file() {
-            preferred
-        } else {
-            legacy
-        })
+        if preferred.is_file() {
+            return Ok(preferred);
+        }
+        if legacy.is_file() {
+            return Ok(legacy);
+        }
+        let mut paths = Vec::new();
+        collect_scene_paths(&scenes, &mut paths)?;
+        paths.sort();
+        Ok(paths.into_iter().next().unwrap_or(preferred))
     }
 
     /// Persists a start-scene path relative to the configured scenes folder.
@@ -635,6 +641,41 @@ impl Project {
         self.descriptor.metadata.updated_unix_seconds = unix_seconds();
         write_descriptor(&self.root, &self.descriptor, true)
     }
+}
+
+fn collect_scene_paths(directory: &Path, paths: &mut Vec<PathBuf>) -> Result<(), ProjectError> {
+    let io_error = |source| ProjectError::Io {
+        path: directory.to_path_buf(),
+        source,
+    };
+    for entry in fs::read_dir(directory).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let kind = entry.file_type().map_err(io_error)?;
+        let path = entry.path();
+        if kind.is_dir()
+            && !matches!(
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .as_str(),
+                ".git" | ".tools" | ".rustic" | "target" | "cache" | "temp" | "builds" | "logs"
+            )
+        {
+            collect_scene_paths(&path, paths)?;
+        } else if kind.is_file()
+            && path
+                .extension()
+                .and_then(|value| value.to_str())
+                .is_some_and(|extension| {
+                    extension.eq_ignore_ascii_case("scene")
+                        || extension.eq_ignore_ascii_case("rscene")
+                })
+        {
+            paths.push(path);
+        }
+    }
+    Ok(())
 }
 
 fn validate_scene_path(path: &Path) -> Result<(), ProjectError> {

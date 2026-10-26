@@ -6,6 +6,47 @@ use std::fs;
 use tempfile::tempdir;
 
 #[test]
+fn start_scene_falls_back_to_top_scene_and_preserves_main_and_explicit_priority() {
+    let temp = tempdir().unwrap();
+    let mut options = CreateProjectOptions::new("Fallback", ProjectTemplate::Blank);
+    options.directories.scenes = "levels/worlds".into();
+    let mut project = Project::create_with_options(temp.path().join("game"), options).unwrap();
+    let scenes = project.directory(VirtualDirectory::Scenes).unwrap();
+    assert_eq!(
+        project.start_scene_path().unwrap(),
+        scenes.join("main.scene")
+    );
+    fs::create_dir_all(scenes.join("a-level")).unwrap();
+    fs::create_dir_all(scenes.join(".rustic")).unwrap();
+    fs::write(scenes.join(".rustic/ignored.scene"), "").unwrap();
+    for name in ["z.scene", "b.RSCENE", "a-level/intro.scene", "ignored.txt"] {
+        fs::write(scenes.join(name), "").unwrap();
+    }
+    assert_eq!(
+        project.start_scene_path().unwrap(),
+        scenes.join("a-level/intro.scene")
+    );
+    fs::write(scenes.join("main.rscene"), "").unwrap();
+    assert_eq!(
+        project.start_scene_path().unwrap(),
+        scenes.join("main.rscene")
+    );
+    fs::write(scenes.join("main.scene"), "").unwrap();
+    assert_eq!(
+        project.start_scene_path().unwrap(),
+        scenes.join("main.scene")
+    );
+    project.set_start_scene("z.scene").unwrap();
+    assert_eq!(
+        Project::open(project.root())
+            .unwrap()
+            .start_scene_path()
+            .unwrap(),
+        scenes.join("z.scene")
+    );
+}
+
+#[test]
 fn start_scene_is_optional_backward_compatible_and_uses_custom_scene_directory() {
     let temp = tempdir().unwrap();
     let mut options = CreateProjectOptions::new("Start", ProjectTemplate::Blank);
