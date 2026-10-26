@@ -136,7 +136,7 @@ mod tests {
         let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
         let frame = |widget: &mut TransformWidget, events| {
             let mut result = None;
-            let _ = context.run_ui(
+            let mut output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(rect),
                     events,
@@ -157,6 +157,7 @@ mod tests {
                     );
                 },
             );
+            output.textures_delta.clear();
             result
         };
         let start = egui::pos2(440.0, 300.0);
