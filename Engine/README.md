@@ -53,8 +53,8 @@ or import a project and starts the editor as a separate native process.
 ## Windows installer
 
 Installed Windows builds check GitHub Releases for updates on launch and hourly
-while Rustic is open. Newer releases download automatically and prompt once per
-release; a small **Update** title-bar button remains after dismissal. Updating
+while Rustic is open, including when an earlier update is waiting. Newer releases
+download automatically and prompt once per release in a focused Rustic window; a small **Update** title-bar button remains after dismissal. Updating
 asks to save unsaved scenes, closes Rustic gracefully, then reopens its windows
 and projects after installation succeeds. Updates after a normal exit do not
 reopen the app. Windows may request

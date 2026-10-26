@@ -107,6 +107,9 @@ function Wait-DesktopExit([string]$Directory, [string]$CacheDirectory, [string]$
         $request = if (Test-Path -LiteralPath $requestFile) {
             [IO.File]::ReadAllText($requestFile)
         } else { '' }
+        # A dismissed update must not pin the worker to that release forever.
+        # Finish any graceful-close request before looking for a newer release.
+        if ($ticks -ge 3600 -and -not $request) { return $false }
         if ($request -cne $lastRequest) { $requestWait = 0; $lastRequest = $request }
         if ($request) {
             $requestWait++
@@ -134,6 +137,7 @@ function Wait-DesktopExit([string]$Directory, [string]$CacheDirectory, [string]$
         Start-Sleep -Seconds 1
         $ticks++
     }
+    return $true
 }
 
 function Install-DesktopUpdate([string]$Installer, [string]$Directory, [string]$LogDirectory) {
@@ -193,7 +197,9 @@ function Invoke-DesktopUpdateCheck([string]$Directory, [string]$CacheDirectory) 
     [IO.File]::WriteAllText($temporary, "$commit`n$tag`n", [Text.Encoding]::ASCII)
     Move-Item -LiteralPath $temporary -Destination $pending -Force
     Write-UpdateLog 'Installer verified and ready. Waiting for Rustic to close.'
-    Wait-DesktopExit $Directory $CacheDirectory $tag
+    if (-not (Wait-DesktopExit $Directory $CacheDirectory $tag)) {
+        return [pscustomobject]@{ Installed = $false; Refresh = $true; Tag = $tag }
+    }
     if (-not (Test-Path -LiteralPath $commitFile)) { return [pscustomobject]@{ Installed = $false; Tag = $tag } }
     if ((Get-Content -LiteralPath $commitFile -Raw).Trim() -ne $commit) { return [pscustomobject]@{ Installed = $false; Tag = $tag } }
     Write-UpdateLog 'Starting Setup. See update-setup.log for installation progress.'
@@ -231,6 +237,7 @@ function Invoke-DesktopUpdater([string]$Directory) {
             try {
                 $result = Invoke-DesktopUpdateCheck $Directory $script:CacheDirectory
                 if ($result) {
+                    if ($result.PSObject.Properties['Refresh'] -and $result.Refresh) { continue }
                     # Release the worker lock before reopening apps: their new updater must
                     # be able to acquire it and keep checking during the restored session.
                     $lock.Dispose()

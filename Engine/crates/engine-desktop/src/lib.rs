@@ -9,8 +9,7 @@ use std::time::{Duration, Instant};
 /// Keeps an update available after its single notification has been dismissed.
 pub struct DesktopUpdates {
     client: Option<DesktopUpdateClient>,
-    pending: Option<DesktopUpdate>,
-    prompt_open: bool,
+    notification: UpdateNotification,
     last_poll: Option<Instant>,
     error: Option<String>,
     install_requested: bool,
@@ -25,8 +24,7 @@ impl Default for DesktopUpdates {
         };
         Self {
             client,
-            pending: None,
-            prompt_open: false,
+            notification: UpdateNotification::default(),
             last_poll: None,
             error,
             install_requested: false,
@@ -35,12 +33,43 @@ impl Default for DesktopUpdates {
     }
 }
 
+/// Background windows must not consume a release's one-time notification.
+#[derive(Default)]
+struct UpdateNotification {
+    pending: Option<DesktopUpdate>,
+    prompt_open: bool,
+    prompt_checked: bool,
+}
+
+impl UpdateNotification {
+    fn refresh(
+        &mut self,
+        pending: Option<DesktopUpdate>,
+        focused: bool,
+        claim: impl FnOnce(&DesktopUpdate) -> std::io::Result<bool>,
+    ) -> std::io::Result<()> {
+        if self.pending != pending {
+            self.pending = pending;
+            self.prompt_open = false;
+            self.prompt_checked = false;
+        }
+        if focused
+            && !self.prompt_checked
+            && let Some(update) = &self.pending
+        {
+            self.prompt_open = claim(update)?;
+            self.prompt_checked = true;
+        }
+        Ok(())
+    }
+}
+
 impl DesktopUpdates {
     /// Draws the title bar and one-time prompt; returns a graceful-update request.
     pub fn show(&mut self, ui: &mut egui::Ui, title: &str) -> bool {
         self.poll(ui.ctx());
-        let mut install = title_bar(ui, title, self.pending.is_some());
-        if self.prompt_open {
+        let mut install = title_bar(ui, title, self.notification.pending.is_some());
+        if self.notification.prompt_open {
             let mut open = true;
             egui::Window::new("Update available")
                 .collapsible(false)
@@ -48,7 +77,7 @@ impl DesktopUpdates {
                 .open(&mut open)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui, |ui| {
-                    if let Some(update) = &self.pending {
+                    if let Some(update) = &self.notification.pending {
                         ui.label(format!("{} is ready to install.", update.tag));
                     }
                     ui.label("Install the latest update now?");
@@ -58,17 +87,17 @@ impl DesktopUpdates {
                     ui.horizontal(|ui| {
                         if ui.button("Install update").clicked() {
                             install = true;
-                            self.prompt_open = false;
+                            self.notification.prompt_open = false;
                         }
                         if ui.button("Not now").clicked() {
-                            self.prompt_open = false;
+                            self.notification.prompt_open = false;
                         }
                     });
                 });
-            self.prompt_open &= open;
+            self.notification.prompt_open &= open;
         }
         if install {
-            self.prompt_open = false;
+            self.notification.prompt_open = false;
         }
         install || self.install_requested
     }
@@ -85,23 +114,18 @@ impl DesktopUpdates {
         let Some(client) = &self.client else { return };
         match client.pending() {
             Ok(pending) => {
-                if self.pending != pending {
-                    self.prompt_open =
-                        pending
-                            .as_ref()
-                            .is_some_and(|update| match client.claim_prompt(update) {
-                                Ok(claimed) => claimed,
-                                Err(error) => {
-                                    self.error = Some(error.to_string());
-                                    false
-                                }
-                            });
-                    self.pending = pending;
+                let focused = context.input(|input| input.viewport().focused.unwrap_or(false));
+                if let Err(error) = self
+                    .notification
+                    .refresh(pending, focused, |update| client.claim_prompt(update))
+                {
+                    self.error = Some(error.to_string());
                 }
             }
             Err(error) => self.error = Some(error.to_string()),
         }
         let requested = self
+            .notification
             .pending
             .as_ref()
             .is_some_and(|update| client.install_requested(update));
@@ -111,7 +135,8 @@ impl DesktopUpdates {
 
     /// Coordinates graceful closure in other windows after the current editor is safe.
     pub fn request_install(&mut self, project: Option<&std::path::Path>) -> bool {
-        let Some((client, update)) = self.client.as_ref().zip(self.pending.as_ref()) else {
+        let Some((client, update)) = self.client.as_ref().zip(self.notification.pending.as_ref())
+        else {
             return false;
         };
         match client
@@ -292,6 +317,66 @@ fn window_resize_handles(context: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_window_leaves_prompt_for_the_focused_editor() {
+        let update = Some(DesktopUpdate {
+            tag: "v2.1-Pre-Alpha".into(),
+        });
+        let mut launcher = UpdateNotification::default();
+        let mut editor = UpdateNotification::default();
+        launcher
+            .refresh(update.clone(), false, |_| panic!("background claim"))
+            .unwrap();
+        assert_eq!(launcher.pending, update);
+        assert!(!launcher.prompt_open);
+        editor.refresh(update.clone(), true, |_| Ok(true)).unwrap();
+        assert!(editor.prompt_open);
+        // Repeated polling and focus changes preserve the current prompt.
+        editor
+            .refresh(update.clone(), false, |_| panic!("duplicate claim"))
+            .unwrap();
+        assert!(editor.prompt_open);
+        editor.prompt_open = false;
+        editor
+            .refresh(update.clone(), true, |_| panic!("dismissed prompt"))
+            .unwrap();
+        assert!(!editor.prompt_open);
+        // The shared client's claim reports that the editor already notified.
+        launcher
+            .refresh(update.clone(), true, |_| Ok(false))
+            .unwrap();
+        assert!(!launcher.prompt_open);
+        assert_eq!(launcher.pending, update);
+        let newer = Some(DesktopUpdate {
+            tag: "v2.2-Pre-Alpha".into(),
+        });
+        launcher
+            .refresh(newer.clone(), false, |_| panic!("background claim"))
+            .unwrap();
+        launcher.refresh(newer, true, |_| Ok(true)).unwrap();
+        assert!(launcher.prompt_open);
+    }
+
+    #[test]
+    fn failed_prompt_claim_can_retry_and_removed_updates_close_the_prompt() {
+        let update = Some(DesktopUpdate {
+            tag: "v2.1-Pre-Alpha".into(),
+        });
+        let mut notification = UpdateNotification::default();
+        assert!(
+            notification
+                .refresh(update.clone(), true, |_| Err(std::io::Error::other("busy")))
+                .is_err()
+        );
+        notification.refresh(update, true, |_| Ok(true)).unwrap();
+        assert!(notification.prompt_open);
+        notification
+            .refresh(None, true, |_| panic!("no pending update"))
+            .unwrap();
+        assert!(!notification.prompt_open);
+        assert!(notification.pending.is_none());
+    }
 
     fn frame(context: &egui::Context, input: egui::RawInput, ui: impl FnMut(&mut egui::Ui)) {
         let mut output = context.run_ui(input, ui);
