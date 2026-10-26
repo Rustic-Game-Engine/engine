@@ -1633,7 +1633,11 @@ impl Behavior<EditorTab> for EditorViewer<'_> {
             // Kept as a compatibility fallback for an in-memory legacy dock.
             EditorTab::ContentBrowser => self.project_explorer(ui),
             EditorTab::Console => self.console(ui),
-            EditorTab::SceneGraph => self.scene_graph.show(ui, self.document),
+            EditorTab::SceneGraph => {
+                let selected = self.document.selected();
+                self.scene_graph.show(ui, self.document);
+                self.request_preview |= self.document.selected() != selected;
+            }
         }
         UiResponse::None
     }
