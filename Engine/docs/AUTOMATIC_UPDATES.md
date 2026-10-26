@@ -5,7 +5,9 @@ when Project Manager or the editor starts. Older installations need one manual
 upgrade from [GitHub Releases](https://github.com/Rustic-Game-Engine/engine/releases)
 to receive this feature. No Rust toolchain or GitHub login is needed.
 
-The updater checks on launch and every hour while Rustic is open. It includes the
+The updater checks on launch and every hour while Rustic is open, including while
+a previously downloaded update is waiting for the apps to close. A newer release
+replaces the waiting update after its installer has been verified. It includes the
 project's `vM.m-Pre-Alpha` releases, orders versions numerically, and also recognizes
 `vM.m.p` stable releases. GitHub's latest-release shortcut is not used because it
 excludes prereleases. Drafts and unrelated tag formats are ignored.
@@ -13,8 +15,9 @@ excludes prereleases. Drafts and unrelated tag formats are ignored.
 A newer Windows x64 installer downloads in the background. Its byte count and
 SHA-256 must match the asset metadata returned by GitHub's HTTPS API before Setup
 can run. Releases without a checksum or exactly one matching installer are skipped.
-When an update is ready while Rustic is open, one window asks whether to install
-it. **Not now** or closing the prompt dismisses it for that release, including
+When an update is ready while Rustic is open, the focused window asks whether to
+install it. Background or minimized windows leave the notification for the next
+focused Rustic window; they still show the **Update** button. **Not now** or closing the prompt dismisses it for that release, including
 across restarts. A small **Update** button remains in the top-right title bar,
 immediately left of the minimize/maximize/close controls, in both Project Manager
 and the editor. Click it to install later. Newer releases can show a new prompt.
@@ -60,6 +63,9 @@ A file lock prevents duplicate workers from the same
 user and installation. Network/API rate-limit and Setup failures leave the current
 application usable and retry after an hour while it remains open or on a later
 launch. If download completed but Setup has not started, close every Rustic process.
+If no popup appears, focus Project Manager or the editor and wait a second. A
+previously claimed notification is remembered across restarts; use the **Update**
+button if it was already shown, including in a background window on older builds.
 If a release is missing its installer/checksum, use its release page or wait for a
 complete release. Do not edit `build-commit.txt` to force an update.
 

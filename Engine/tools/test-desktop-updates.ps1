@@ -142,6 +142,21 @@ try {
     Assert-Equal $script:Launches 0 'Never execute corrupt downloads'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $false 'Only verified installers are advertised as ready'
 
+    # A desktop left open must discover releases newer than its dismissed update.
+    $asset.digest = $digest
+    $script:Waits = 0
+    function Test-RusticRunning { param($Directory); return $true }
+    $refresh = Invoke-DesktopUpdateCheck $temp $temp
+    Assert-Equal $refresh.Refresh $true 'Return to release discovery while a verified update waits'
+    Assert-Equal $script:Waits 3600 'Refresh pending releases hourly without busy polling'
+    Assert-Equal $script:Launches 0 'Refreshing must not start Setup while Rustic is open'
+    Assert-Equal (Get-Content -LiteralPath (Join-Path $temp 'pending-update.txt'))[1] $next.tag_name 'Keep verified update visible during refresh'
+    $newest = New-Release 'v1.1-Pre-Alpha' ('c' * 40)
+    $releases = @($current, $next, $newest)
+    $script:SetupExitCode = 0
+    function Test-RusticRunning { param($Directory); return $false }
+    Assert-Equal (Invoke-DesktopUpdateCheck $temp $temp).Tag $newest.tag_name 'Discover and install a newer release after refresh'
+
     # A remaining game/worker cannot keep closed desktop windows unavailable.
     $script:Waits = 0
     function Test-RusticRunning { param($Directory); return $script:Waits -lt 122 }
