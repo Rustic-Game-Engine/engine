@@ -113,8 +113,9 @@ shared gameplay signals through `Events.on`, `once`, `emit`, `connect`, and
 
 All source must be UTF-8 and at most 1 MiB. Play uses an immutable project snapshot.
 Reload validates before swapping at a simulation boundary; a failed reload leaves the
-last good instance running. External callbacks have a three-second deadline and a
-1 MiB response limit. See each language guide for its exact callback and API surface.
+last good instance running. External callbacks have a cumulative three-second script-response budget and a
+1 MiB response limit. Rust time spent servicing synchronous engine queries, such as
+reading audio assets, is excluded; the script budget does not reset between queries. See each language guide for its exact callback and API surface.
 
 See [Edit scene objects](sceneObjects.md) to target built-in properties on another
 object using `rustic.game.<scene-name>.<hierarchy>` in native language syntax.

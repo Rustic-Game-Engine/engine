@@ -102,7 +102,9 @@ in this build. Collision callbacks remain unavailable. API 1.1 provides cross-la
 
 Each instance runs in its own process with a safe environment allowlist and a
 temporary working directory. Sources and responses are limited to 1 MiB; callbacks
-have three seconds to finish. An exception, invalid engine value, process exit,
+have a cumulative three-second script-response budget. Time spent by Rust servicing
+synchronous engine queries, such as loading audio files, is excluded. The budget
+does not reset between queries. An exception, invalid engine value, process exit,
 timeout, or rejected call disables the behavior. Failed build/reload validation
 keeps the last good instance running.
 

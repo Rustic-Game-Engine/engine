@@ -26,8 +26,10 @@ implicitly granted.
 
 External programs start only after the user explicitly enters Play. They inherit a
 small environment allowlist, run in an adapter-owned temporary working directory,
-receive no editor/backend objects, have a three-second callback deadline, and have
-bounded stdout/stderr. Failure disables only that behavior. Runtime replacement builds
+receive no editor/backend objects, have a cumulative three-second script-response
+budget per callback, and have bounded stdout/stderr. Rust time spent servicing
+synchronous engine queries is excluded from that budget; queries do not reset the
+remaining script time. Failure disables only that behavior. Runtime replacement builds
 beside the active generation and preserves the previous program if compilation fails.
 
 External toolchains are optional dependencies and are never silently emulated.
