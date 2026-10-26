@@ -262,8 +262,11 @@ rustic-editor ---- rustic-asset-worker pool
 The Project Manager (`rustic-project-manager`) and editor are different executables
 and different interfaces. Closing
 an editor returns naturally to the still-running launcher when it was launcher-
-started. Opening a project obtains an advisory project lock; read-only open and
-explicit stale-lock recovery are supported.
+started. Opening a project obtains an operating-system writer lock. A second editor
+opens read-only while the first holds the lock. Closing or crashing the editor releases
+the lock automatically; leftover PID metadata is quarantined on the next writable
+open and cannot by itself make a project read-only. The persistent
+`temp/editor.writer.lock` file is a lock target, not evidence of a running editor.
 
 The editor and Project Manager use bundled Lucide icons for interface controls,
 folders, and non-script file types. Move, Rotate, and Scale retain their text labels;
@@ -501,9 +504,13 @@ engine resources. A descriptor matching the initial `engine-project` schema is:
 The optional `start_scene` field in `project.engine` stores the selected start scene
 as a path relative to the configured scenes folder. The editor persists it through
 **Change scene → right-click a scene → Set as start scene** and follows it on the
-next project open. Without this field, the editor uses `main.scene`, with
-`main.rscene` as the legacy fallback. The template manifest records the initial
-project seed and does not override this choice.
+next project open. Without this field, the editor uses `main.scene`, then legacy
+`main.rscene`. If neither exists, it opens the top scene in the **Change scene**
+list (the first relative path in sorted order, including subfolders and both scene
+extensions). If there are no scenes, it opens an editable empty Main scene whose
+first save creates `main.scene`. An explicit start scene takes priority over all
+fallbacks; a missing explicit scene is reported as an error so it can be restored.
+The template manifest records the initial project seed and does not override this choice.
 
 Rendering defaults, input maps, logging defaults, and other evolving settings are
 versioned resources below `config/`, referenced by asset/resource ID as

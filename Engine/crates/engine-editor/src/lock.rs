@@ -1,9 +1,7 @@
 use serde::{Deserialize, Serialize};
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-#[cfg(windows)]
-use std::process::Command;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -40,6 +38,9 @@ pub enum ProjectAccess {
 pub struct ProjectLock {
     path: PathBuf,
     token: Uuid,
+    // Keep a stable inode: deleting this file would let concurrent openers lock
+    // different files at the same path. The OS releases it even after a crash.
+    _writer: File,
 }
 
 impl ProjectLock {
@@ -56,20 +57,40 @@ impl ProjectLock {
                 source,
             })?;
         }
-        match create_lock(&path) {
-            Ok(lock) => Ok(ProjectAccess::Writable(lock)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                let record = fs::read_to_string(&path)
+        let writer_path = path.with_file_name("editor.writer.lock");
+        let writer = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&writer_path)
+            .map_err(|source| ProjectLockError::Io {
+                path: writer_path.clone(),
+                source,
+            })?;
+        match writer.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => {
+                let owner_process_id = fs::read_to_string(&path)
                     .ok()
-                    .and_then(|value| ron::from_str::<LockRecord>(&value).ok());
-                if record.as_ref().is_some_and(|record| {
-                    record.format_version == LOCK_FORMAT_VERSION
-                        && process_is_alive(record.process_id)
-                }) {
-                    return Ok(ProjectAccess::ReadOnly {
-                        owner_process_id: record.map(|record| record.process_id),
-                    });
-                }
+                    .and_then(|value| ron::from_str::<LockRecord>(&value).ok())
+                    .map(|record| record.process_id);
+                return Ok(ProjectAccess::ReadOnly { owner_process_id });
+            }
+            Err(TryLockError::Error(source)) => {
+                return Err(ProjectLockError::Io {
+                    path: writer_path,
+                    source,
+                });
+            }
+        }
+        match create_lock(&path) {
+            Ok(token) => Ok(ProjectAccess::Writable(Self {
+                path,
+                token,
+                _writer: writer,
+            })),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let quarantine =
                     path.with_file_name(format!("editor.lock.stale-{}", Uuid::new_v4()));
                 fs::rename(&path, &quarantine).map_err(|source| ProjectLockError::Io {
@@ -77,7 +98,13 @@ impl ProjectLock {
                     source,
                 })?;
                 create_lock(&path)
-                    .map(ProjectAccess::Writable)
+                    .map(|token| {
+                        ProjectAccess::Writable(Self {
+                            path: path.clone(),
+                            token,
+                            _writer: writer,
+                        })
+                    })
                     .map_err(|source| ProjectLockError::Io { path, source })
             }
             Err(source) => Err(ProjectLockError::Io { path, source }),
@@ -85,7 +112,7 @@ impl ProjectLock {
     }
 }
 
-fn create_lock(path: &Path) -> Result<ProjectLock, std::io::Error> {
+fn create_lock(path: &Path) -> Result<Uuid, std::io::Error> {
     let token = Uuid::new_v4();
     let record = LockRecord {
         format_version: LOCK_FORMAT_VERSION,
@@ -97,10 +124,7 @@ fn create_lock(path: &Path) -> Result<ProjectLock, std::io::Error> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(text.as_bytes())?;
     file.sync_all()?;
-    Ok(ProjectLock {
-        path: path.to_path_buf(),
-        token,
-    })
+    Ok(token)
 }
 
 impl Drop for ProjectLock {
@@ -115,33 +139,54 @@ impl Drop for ProjectLock {
     }
 }
 
-fn process_is_alive(process_id: u32) -> bool {
-    if process_id == std::process::id() {
-        return true;
-    }
-    #[cfg(windows)]
-    {
-        let filter = format!("PID eq {process_id}");
-        Command::new("tasklist")
-            .args(["/FI", &filter, "/FO", "CSV", "/NH"])
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .is_some_and(|output| {
-                let text = String::from_utf8_lossy(&output.stdout);
-                !text.contains("No tasks") && text.contains(&process_id.to_string())
-            })
-    }
-    #[cfg(not(windows))]
-    {
-        PathBuf::from("/proc").join(process_id.to_string()).is_dir()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn lock_is_released_when_owner_exits_without_dropping() {
+        const CHILD_ROOT: &str = "RUSTIC_LOCK_TEST_CHILD_ROOT";
+        if let Some(root) = std::env::var_os(CHILD_ROOT) {
+            let access = ProjectLock::acquire(Path::new(&root)).unwrap();
+            assert!(matches!(access, ProjectAccess::Writable(_)));
+            // Simulate abrupt termination: ProjectLock::drop does not run.
+            std::process::exit(0);
+        }
+        let temporary = tempdir().unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "lock::tests::lock_is_released_when_owner_exits_without_dropping",
+                "--nocapture",
+            ])
+            .env(CHILD_ROOT, temporary.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        assert!(temporary.path().join("temp/editor.lock").is_file());
+        assert!(matches!(
+            ProjectLock::acquire(temporary.path()).unwrap(),
+            ProjectAccess::Writable(_)
+        ));
+    }
+
+    #[test]
+    fn stale_metadata_with_reused_live_pid_does_not_make_project_read_only() {
+        let temporary = tempdir().unwrap();
+        fs::create_dir_all(temporary.path().join("temp")).unwrap();
+        let path = temporary.path().join("temp/editor.lock");
+        let record = LockRecord {
+            format_version: LOCK_FORMAT_VERSION,
+            process_id: std::process::id(),
+            token: Uuid::new_v4(),
+        };
+        fs::write(&path, ron::ser::to_string(&record).unwrap()).unwrap();
+        assert!(matches!(
+            ProjectLock::acquire(temporary.path()).unwrap(),
+            ProjectAccess::Writable(_)
+        ));
+    }
 
     #[test]
     fn live_lock_is_read_only_and_drop_releases_it() {

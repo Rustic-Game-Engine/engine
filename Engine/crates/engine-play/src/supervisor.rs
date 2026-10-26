@@ -632,8 +632,16 @@ mod tests {
             thread::sleep(Duration::from_millis(200));
             Ok(())
         });
+        // Windows forced termination is asynchronous: taskkill can return
+        // before the process handle is signaled. Observe exit with a bounded
+        // wait, and always clean up even if the watcher failed to terminate it.
+        let status = wait_for_exit(&mut child, Duration::from_secs(5)).unwrap();
+        terminate_tree_and_reap(&mut child).unwrap();
         assert!(matches!(result, Err(SupervisorError::ReadyTimedOut)));
-        assert!(child.try_wait().unwrap().is_some());
+        assert!(
+            status.is_some(),
+            "readiness deadline must terminate the child"
+        );
     }
 
     #[test]
