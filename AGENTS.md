@@ -3,6 +3,33 @@
 `Engine/` contains the Rust game engine workspace and its engine-specific instructions.
 Run engine commands from that folder; the repository root is not a Cargo project.
 
+# Required engine UI stack and appearance
+
+All native engine UI work must follow these upstream implementations and demos:
+
+- [egui demo](https://www.egui.rs/#demo): use standard egui widgets, layouts,
+  fonts, spacing, interaction states, and built-in dark/light themes.
+- [egui_tiles](https://github.com/rerun-io/egui_crates/tree/main/crates/egui_tiles):
+  use its native tabs, splits, docking, and drag/drop behavior for editor panels.
+- [egui-snarl](https://zakarumych.github.io/egui-snarl/): use its node, pin, wire,
+  canvas, selection, pan, and zoom components for node graphs.
+- [transform-gizmo](https://urholaukkarinen.github.io/transform-gizmo/): use
+  `transform-gizmo-egui` for viewport translation, rotation, scale, hit testing,
+  and snapping, retaining the upstream handle appearance and interaction.
+
+These are mandatory implementation and visual references, not inspiration for
+custom substitutes. Do not introduce another UI/docking/graph/gizmo framework,
+hand-drawn replacements for these controls, custom palettes, widget skins, or
+per-panel theme overrides. Read colors and dimensions from the active egui style;
+preserve upstream component defaults. Scene content, renderer overlays, and
+bundled content icons may retain their domain-specific visuals. Keep compatible
+egui versions across the four libraries; check the resolved dependency graph.
+Verify theme consistency in the editor and Project Manager, docking, graph
+navigation, viewport input ownership, parented transforms, and undo/redo when
+changing the respective paths. Keep scene/undo/persistence models independent
+of widget state. New UI must have a working application path, not just an unused
+dependency or a visual mockup.
+
 The Next.js documentation site lives at the root of the separate
 [docs repository](https://github.com/Rustic-Game-Engine/docs). Its lint, build,
 and deployment workflows run there.

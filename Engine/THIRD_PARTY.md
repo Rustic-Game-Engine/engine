@@ -23,6 +23,8 @@ license policy on the complete transitive graph.
 | `symphonia` | Bundled pure Rust MP3, AAC-LC (ADTS/M4A), and FLAC decoding | MPL-2.0 | Asset source limits, incremental PCM limits, validated mixer samples, corpus tests, and the isolated worker contain decoder failures |
 | `ogg`, `opus-pure` | Ogg codec detection and bundled pure Rust mono/stereo Opus decoding with encoder-delay and end-padding trimming | BSD-3-Clause | Validated container packets, bounded decoded PCM, corpus tests, and the isolated worker contain decoder failures |
 | `interprocess` | Local authenticated editor/runtime IPC transport | MIT OR Apache-2.0 | Versioned framing, one-use secrets, payload limits, deadlines, and process supervision wrap it |
+| `transform-gizmo-egui` / `transform-gizmo` | Standard 3D viewport transform handles, picking, and snapping | MIT OR Apache-2.0 | Results are validated and converted from world to local transforms before authoring preview and undo |
+| `egui-snarl` | Scene hierarchy graph nodes, pins, wires, and canvas interaction | MIT OR Apache-2.0 | Graph state is a disposable view of the authoring document; wires cannot mutate parent links |
 | `egui_tiles` | Dockable native editor layout | MIT OR Apache-2.0 | Only editor UI state depends on it; authoring state remains in testable engine models |
 | Material Design Icons (Pictogrammers) | Embedded upstream SVG script-language icons | Apache-2.0 | Icons are compiled into the editor, so rendering never depends on network availability |
 | Lucide Icons | Embedded SVG interface, file-type, transform, playback, and window-control icons | ISC AND MIT | Icons are compiled into the desktop applications and tinted locally; no runtime network access |
