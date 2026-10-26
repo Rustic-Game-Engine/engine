@@ -333,134 +333,113 @@ impl eframe::App for ProjectManagerApp {
             }
         }
 
-        egui::Panel::top("project_manager_header")
-            .frame(
-                egui::Frame::new()
-                    .fill(ui.visuals().panel_fill)
-                    .inner_margin(egui::Margin::symmetric(24, 16)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.vertical(|ui| {
-                        ui.heading("Projects");
-                        ui.label(
-                            egui::RichText::new("RUSTIC GAME ENGINE")
-                                .size(11.0)
-                                .strong()
-                                .color(ui_theme::MUTED),
-                        );
-                    });
-                    ui.add_space(8.0);
+        egui::Panel::top("project_manager_header").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.heading("Projects");
                     ui.label(
-                        egui::RichText::new(format!("v{}", EngineVersion::CURRENT))
+                        egui::RichText::new("RUSTIC GAME ENGINE")
                             .small()
-                            .color(ui_theme::MUTED),
+                            .strong()
+                            .color(ui.visuals().weak_text_color()),
                     );
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add(
-                                Icon::Plus
-                                    .button("New project")
-                                    .fill(ui_theme::ACCENT)
-                                    .stroke(egui::Stroke::NONE),
-                            )
-                            .clicked()
-                            && self.model.catalog_writable()
-                        {
-                            self.create.visible = true;
-                        }
-                        if ui.button("Import…").clicked() {
-                            self.dialogs.import = true;
-                        }
-                    });
                 });
-                ui.add_space(12.0);
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.search)
-                            .hint_text("Search by project name or location…")
-                            .desired_width(360.0),
-                    );
-                    egui::ComboBox::from_id_salt("project_sort")
-                        .selected_text(self.sort.label())
-                        .show_ui(ui, |ui| {
-                            for sort in ProjectSort::ALL {
-                                ui.selectable_value(&mut self.sort, sort, sort.label());
-                            }
-                        });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("Diagnostics").clicked() {
-                            self.dialogs.diagnostics = true;
-                        }
-                        if ui.button("Settings").clicked() {
-                            self.dialogs.settings = true;
-                        }
-                    });
-                });
-            });
-
-        egui::Panel::bottom("project_manager_status")
-            .frame(
-                egui::Frame::new()
-                    .inner_margin(egui::Margin::symmetric(18, 8))
-                    .stroke(egui::Stroke::new(1.0, ui_theme::BORDER)),
-            )
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if self.model.pending_jobs() > 0 {
-                        ui.spinner();
-                        ui.label(format!("{} background job(s)", self.model.pending_jobs()));
-                        ui.separator();
-                    }
-                    ui.label(self.current_status());
-                    if (self.ui_status.is_some() || self.model.status().is_some())
-                        && ui.small_button("Clear").clicked()
+                ui.add_space(8.0);
+                ui.label(
+                    egui::RichText::new(format!("v{}", EngineVersion::CURRENT))
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(Icon::Plus.button("New project")).clicked()
+                        && self.model.catalog_writable()
                     {
-                        self.clear_status();
+                        self.create.visible = true;
+                    }
+                    if ui.button("Import…").clicked() {
+                        self.dialogs.import = true;
                     }
                 });
             });
+            ui.add_space(12.0);
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.search)
+                        .hint_text("Search by project name or location…")
+                        .desired_width(360.0),
+                );
+                egui::ComboBox::from_id_salt("project_sort")
+                    .selected_text(self.sort.label())
+                    .show_ui(ui, |ui| {
+                        for sort in ProjectSort::ALL {
+                            ui.selectable_value(&mut self.sort, sort, sort.label());
+                        }
+                    });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Diagnostics").clicked() {
+                        self.dialogs.diagnostics = true;
+                    }
+                    if ui.button("Settings").clicked() {
+                        self.dialogs.settings = true;
+                    }
+                });
+            });
+        });
 
-        egui::CentralPanel::default()
-            .frame(egui::Frame::new().inner_margin(egui::Margin::same(24)))
-            .show(ui, |ui| {
-                let projects = self
-                    .model
-                    .visible_records(&self.search, self.sort.catalog());
-                if projects.is_empty() {
-                    ui.vertical_centered(|ui| {
-                        ui.add_space(110.0);
-                        ui.heading(if self.search.trim().is_empty() {
-                            "Your projects will appear here"
-                        } else {
-                            "No matching projects"
-                        });
-                        ui.label(
-                            egui::RichText::new(if self.search.trim().is_empty() {
-                                "Create a new project or import an existing project.engine folder."
-                            } else {
-                                "Try another project name or location."
-                            })
-                            .color(ui_theme::MUTED),
-                        );
-                        ui.add_space(14.0);
-                        if self.search.trim().is_empty()
-                            && ui
-                                .add(ui_theme::primary_button("Create your first project"))
-                                .clicked()
-                        {
-                            self.create.visible = true;
-                        }
-                    });
-                } else {
-                    egui::ScrollArea::vertical().show(ui, |ui| {
-                        for record in projects {
-                            self.project_card(ui, &record);
-                            ui.add_space(8.0);
-                        }
-                    });
+        egui::Panel::bottom("project_manager_status").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if self.model.pending_jobs() > 0 {
+                    ui.spinner();
+                    ui.label(format!("{} background job(s)", self.model.pending_jobs()));
+                    ui.separator();
+                }
+                ui.label(self.current_status());
+                if (self.ui_status.is_some() || self.model.status().is_some())
+                    && ui.small_button("Clear").clicked()
+                {
+                    self.clear_status();
                 }
             });
+        });
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            let projects = self
+                .model
+                .visible_records(&self.search, self.sort.catalog());
+            if projects.is_empty() {
+                ui.vertical_centered(|ui| {
+                    ui.add_space(110.0);
+                    ui.heading(if self.search.trim().is_empty() {
+                        "Your projects will appear here"
+                    } else {
+                        "No matching projects"
+                    });
+                    ui.label(
+                        egui::RichText::new(if self.search.trim().is_empty() {
+                            "Create a new project or import an existing project.engine folder."
+                        } else {
+                            "Try another project name or location."
+                        })
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.add_space(14.0);
+                    if self.search.trim().is_empty()
+                        && ui
+                            .add(ui_theme::primary_button("Create your first project"))
+                            .clicked()
+                    {
+                        self.create.visible = true;
+                    }
+                });
+            } else {
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for record in projects {
+                        self.project_card(ui, &record);
+                        ui.add_space(8.0);
+                    }
+                });
+            }
+        });
         self.create_dialog(ui);
         self.import_dialog(ui);
         self.settings_dialog(ui);
@@ -470,75 +449,72 @@ impl eframe::App for ProjectManagerApp {
 
 impl ProjectManagerApp {
     fn project_card(&mut self, ui: &mut egui::Ui, record: &ProjectRecord) {
-        egui::Frame::new()
-            .fill(ui_theme::SURFACE)
-            .stroke(egui::Stroke::new(1.0, ui_theme::BORDER))
-            .corner_radius(8.0)
-            .inner_margin(egui::Margin::same(14))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    egui::Frame::new()
-                        .fill(egui::Color32::from_rgb(69, 48, 34))
-                        .corner_radius(7.0)
-                        .show(ui, |ui| {
-                            ui.allocate_ui(egui::vec2(68.0, 68.0), |ui| {
-                                ui.centered_and_justified(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("R")
-                                            .size(28.0)
-                                            .strong()
-                                            .color(ui_theme::ACCENT),
-                                    );
-                                })
-                            });
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                egui::Frame::new()
+                    .fill(ui.visuals().faint_bg_color)
+                    .show(ui, |ui| {
+                        ui.allocate_ui(egui::vec2(68.0, 68.0), |ui| {
+                            ui.centered_and_justified(|ui| {
+                                ui.label(
+                                    egui::RichText::new("R")
+                                        .heading()
+                                        .strong()
+                                        .color(ui.visuals().selection.stroke.color),
+                                );
+                            })
                         });
-                    ui.add_space(6.0);
-                    ui.vertical(|ui| {
-                        ui.label(
-                            egui::RichText::new(&record.name)
-                                .size(18.0)
-                                .strong()
-                                .color(ui_theme::TEXT),
-                        );
-                        ui.label(
-                            egui::RichText::new(record.path.display().to_string())
-                                .color(ui_theme::MUTED),
-                        );
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "{:?}   ·   Engine {}{}",
-                                record.template,
-                                record.engine_version.as_deref().unwrap_or("current"),
-                                if record.thumbnail.is_some() {
-                                    "  ·  thumbnail cached"
-                                } else {
-                                    ""
-                                }
-                            ))
-                            .small()
-                            .color(ui_theme::MUTED),
-                        );
-                        if !record.available {
-                            ui.colored_label(ui_theme::WARNING, "Project unavailable or invalid");
-                        }
                     });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .small_button("Remove")
-                            .on_hover_text("Remove from this list; project files stay on disk")
-                            .clicked()
-                        {
-                            self.model.remove(record.id);
-                        }
-                        if ui
-                            .add_enabled(record.available, ui_theme::primary_button("Open project"))
-                            .clicked()
-                        {
-                            self.model.request_open(record.id);
-                        }
-                    });
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(&record.name)
+                            .heading()
+                            .strong()
+                            .color(ui.visuals().text_color()),
+                    );
+                    ui.label(
+                        egui::RichText::new(record.path.display().to_string())
+                            .color(ui.visuals().weak_text_color()),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "{:?}   ·   Engine {}{}",
+                            record.template,
+                            record.engine_version.as_deref().unwrap_or("current"),
+                            if record.thumbnail.is_some() {
+                                "  ·  thumbnail cached"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .small()
+                        .color(ui.visuals().weak_text_color()),
+                    );
+                    if !record.available {
+                        ui.colored_label(
+                            ui.visuals().warn_fg_color,
+                            "Project unavailable or invalid",
+                        );
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .small_button("Remove")
+                        .on_hover_text("Remove from this list; project files stay on disk")
+                        .clicked()
+                    {
+                        self.model.remove(record.id);
+                    }
+                    if ui
+                        .add_enabled(record.available, ui_theme::primary_button("Open project"))
+                        .clicked()
+                    {
+                        self.model.request_open(record.id);
+                    }
                 });
             });
+        });
     }
 
     fn create_dialog(&mut self, ui: &mut egui::Ui) {
@@ -676,7 +652,7 @@ impl ProjectManagerApp {
                     egui::RichText::new(
                         "Manage optional language toolchains used by project scripts.",
                     )
-                    .color(ui_theme::MUTED),
+                    .color(ui.visuals().weak_text_color()),
                 );
                 for language in optional_toolchain_languages() {
                     let availability = probe_language_toolchain(language);
@@ -684,11 +660,11 @@ impl ProjectManagerApp {
                         ui.label(language.display_name());
                         if availability.available {
                             ui.colored_label(
-                                ui_theme::SUCCESS,
+                                ui.visuals().text_color(),
                                 availability.version.as_deref().unwrap_or("Installed"),
                             );
                         } else {
-                            ui.colored_label(ui_theme::WARNING, "Not installed");
+                            ui.colored_label(ui.visuals().warn_fg_color, "Not installed");
                             if ui.button("Install").clicked() {
                                 self.ui_status =
                                     Some(match launch_toolchain_manager(&[language]) {

@@ -10,6 +10,7 @@ use std::path::Path;
 pub enum EditorTab {
     Viewport3d,
     Viewport2d,
+    SceneGraph,
     Hierarchy,
     Inspector,
     ContentBrowser,
@@ -30,6 +31,7 @@ impl EditorTab {
         match self {
             Self::Viewport3d => "3D Viewport",
             Self::Viewport2d => "2D Viewport",
+            Self::SceneGraph => "Scene Graph",
             Self::Hierarchy => "Game Project Explorer",
             Self::Inspector => "Inspector",
             Self::ContentBrowser => "Content Browser",

@@ -1,6 +1,8 @@
 mod explorer_selection;
 mod play_session;
+mod scene_graph;
 mod script_links;
+mod transform_widget;
 mod ui_theme;
 mod viewport_keyboard;
 
@@ -16,9 +18,9 @@ use engine_core::{
 };
 use engine_desktop::icons::Icon;
 use engine_editor::{
-    AuthoringDocument, ConsoleEntry, EditorCamera, EditorTab, EditorWorkspace, GizmoAxis,
-    GizmoOperation, GizmoSettings, GizmoSpace, PickMesh, ProjectAccess, ProjectLock,
-    RuntimeConsole, WorldRay, apply_gizmo_delta, grid_lines, pick_meshes,
+    AuthoringDocument, ConsoleEntry, EditorCamera, EditorTab, EditorWorkspace, GizmoOperation,
+    GizmoSettings, GizmoSpace, PickMesh, ProjectAccess, ProjectLock, RuntimeConsole, WorldRay,
+    grid_lines, pick_meshes,
 };
 use engine_platform::{AtomicFileService, ConfigStore};
 use engine_play::{ControlRequest, PlayMode, RuntimeChangeSet, RuntimeState};
@@ -153,6 +155,8 @@ struct EditorApp {
     viewport_extent: [u32; 2],
     gizmo: GizmoSettings,
     gizmo_drag: Option<GizmoDrag>,
+    gizmo_widget: transform_widget::TransformWidget,
+    scene_graph: scene_graph::SceneGraph,
     render_world: RenderWorldBuffer,
     model_assets: BTreeMap<AssetId, ModelArtifact>,
     detach_inspector: bool,
@@ -261,6 +265,8 @@ impl EditorApp {
             viewport_extent: [640, 480],
             gizmo: GizmoSettings::default(),
             gizmo_drag: None,
+            gizmo_widget: transform_widget::TransformWidget::default(),
+            scene_graph: scene_graph::SceneGraph::default(),
             render_world: RenderWorldBuffer::new(),
             model_assets,
             detach_inspector: false,
@@ -1163,8 +1169,14 @@ impl EditorApp {
                     self.dock = default_dock(&self.workspace.tabs);
                 }
                 ui.separator();
+                egui::widgets::global_theme_preference_buttons(ui);
+                ui.separator();
                 ui.label("Panels");
-                for panel in [EditorTab::Viewport3d, EditorTab::Viewport2d] {
+                for panel in [
+                    EditorTab::Viewport3d,
+                    EditorTab::Viewport2d,
+                    EditorTab::SceneGraph,
+                ] {
                     if !self.workspace.tabs.contains(&panel)
                         && ui.button(format!("Open {}", panel.title())).clicked()
                     {
@@ -1273,25 +1285,18 @@ impl EditorApp {
             ui.label(
                 egui::RichText::new(&self.document.project().metadata().name)
                     .strong()
-                    .color(ui_theme::TEXT),
+                    .color(ui.visuals().text_color()),
             );
             if self.document.is_modified() {
-                ui.add(Icon::Circle.image(ui_theme::WARNING, 12.0));
-                ui.colored_label(ui_theme::WARNING, "Unsaved");
+                ui.add(Icon::Circle.image(ui.visuals().warn_fg_color, 12.0));
+                ui.colored_label(ui.visuals().warn_fg_color, "Unsaved");
             }
             if self.document.is_read_only() {
-                ui.colored_label(ui_theme::WARNING, "READ ONLY");
+                ui.colored_label(ui.visuals().warn_fg_color, "READ ONLY");
             }
             ui.separator();
             if self.play.is_none() {
-                if ui
-                    .add(
-                        Icon::Play
-                            .button("Play")
-                            .fill(egui::Color32::from_rgb(45, 100, 70)),
-                    )
-                    .clicked()
-                {
+                if ui.add(Icon::Play.button("Play")).clicked() {
                     self.start_play(self.active_play_mode);
                 }
                 egui::ComboBox::from_id_salt("play-mode")
@@ -1306,14 +1311,7 @@ impl EditorApp {
                         }
                     });
             } else {
-                if ui
-                    .add(
-                        Icon::Square
-                            .button("Stop")
-                            .fill(egui::Color32::from_rgb(115, 53, 53)),
-                    )
-                    .clicked()
-                {
+                if ui.add(Icon::Square.button("Stop")).clicked() {
                     self.stop_play();
                 }
                 let paused = self
@@ -1487,38 +1485,28 @@ fn transform_mode_button(
     operation: GizmoOperation,
     label: &str,
 ) -> egui::Response {
-    let desired_size = egui::vec2(48.0, 46.0);
-    let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click());
-    let visuals = ui
-        .style()
-        .interact_selectable(&response, current == operation);
-    ui.painter().rect_filled(rect, 5.0, visuals.weak_bg_fill);
-
-    let icon_source = match operation {
-        GizmoOperation::Translate => Icon::Move3d.source(),
-        GizmoOperation::Rotate => Icon::Rotate3d.source(),
-        GizmoOperation::Scale => Icon::Scaling.source(),
+    let icon = match operation {
+        GizmoOperation::Translate => Icon::Move3d,
+        GizmoOperation::Rotate => Icon::Rotate3d,
+        GizmoOperation::Scale => Icon::Scaling,
     };
-    let icon_rect = egui::Rect::from_center_size(
-        egui::pos2(rect.center().x, rect.top() + 15.0),
-        egui::vec2(24.0, 24.0),
-    );
-    ui.put(
-        icon_rect,
-        egui::Image::new(icon_source).tint(visuals.fg_stroke.color),
-    );
-    ui.painter().text(
-        egui::pos2(rect.center().x, rect.bottom() - 5.0),
-        egui::Align2::CENTER_BOTTOM,
-        label,
-        egui::FontId::proportional(10.5),
-        visuals.fg_stroke.color,
-    );
-    response.on_hover_text(format!("{label} tool"))
+    ui.add(icon.button(label).selected(current == operation))
+        .on_hover_text(format!("{label} tool"))
 }
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let scene_was_modified = self.document.is_modified();
+        // Finish even if release happens outside the viewport or another tab is active.
+        if !ui.input(|input| input.pointer.primary_down())
+            && let Some(drag) = self.gizmo_drag.take()
+            && let Err(error) =
+                self.document
+                    .commit_transform_drag(drag.entity, drag.before, drag.after)
+        {
+            self.console
+                .push(simple_console(Severity::Error, "gizmo", error.to_string()));
+        }
         self.poll_background(ui.ctx());
         let title = format!(
             "{} — Rustic Editor",
@@ -1530,15 +1518,7 @@ impl eframe::App for EditorApp {
         if self.updates.take_cancellation() {
             self.update_close_requested = false;
         }
-        let scene_was_modified = self.document.is_modified();
-        egui::Panel::top("editor-toolbar")
-            .frame(
-                egui::Frame::new()
-                    .fill(ui_theme::PANEL)
-                    .stroke(egui::Stroke::new(1.0, ui_theme::BORDER))
-                    .inner_margin(egui::Margin::symmetric(10, 6)),
-            )
-            .show(ui, |ui| self.top_bar(ui));
+        egui::Panel::top("editor-toolbar").show(ui, |ui| self.top_bar(ui));
         if self.detach_inspector {
             let selection = self
                 .document
@@ -1576,6 +1556,8 @@ impl eframe::App for EditorApp {
             viewport_extent: &mut self.viewport_extent,
             gizmo: &mut self.gizmo,
             gizmo_drag: &mut self.gizmo_drag,
+            gizmo_widget: &mut self.gizmo_widget,
+            scene_graph: &mut self.scene_graph,
             model_assets: &mut self.model_assets,
             project_file_action: &mut project_file_action,
         };
@@ -1615,6 +1597,8 @@ struct EditorViewer<'a> {
     viewport_extent: &'a mut [u32; 2],
     gizmo: &'a mut GizmoSettings,
     gizmo_drag: &'a mut Option<GizmoDrag>,
+    gizmo_widget: &'a mut transform_widget::TransformWidget,
+    scene_graph: &'a mut scene_graph::SceneGraph,
     model_assets: &'a mut BTreeMap<AssetId, ModelArtifact>,
     project_file_action: &'a mut Option<ProjectFileAction>,
 }
@@ -1649,6 +1633,7 @@ impl Behavior<EditorTab> for EditorViewer<'_> {
             // Kept as a compatibility fallback for an in-memory legacy dock.
             EditorTab::ContentBrowser => self.project_explorer(ui),
             EditorTab::Console => self.console(ui),
+            EditorTab::SceneGraph => self.scene_graph.show(ui, self.document),
         }
         UiResponse::None
     }
@@ -1698,7 +1683,7 @@ impl EditorViewer<'_> {
                 }
             }
         });
-        let frame = egui::Frame::NONE.fill(egui::Color32::from_rgb(23, 27, 34));
+        let frame = egui::Frame::NONE.fill(ui.visuals().extreme_bg_color);
         let (body, dropped) = ui.dnd_drop_zone::<ViewportDrop, _>(frame, |ui| {
             let size = ui.available_size().max(egui::vec2(64.0, 64.0));
             let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
@@ -1722,13 +1707,13 @@ impl EditorViewer<'_> {
                 );
             } else {
                 ui.painter()
-                    .rect_filled(rect, 0.0, egui::Color32::from_rgb(23, 27, 34));
+                    .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
                 ui.painter().text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
                     self.preview_status,
-                    egui::FontId::proportional(16.0),
-                    egui::Color32::LIGHT_GRAY,
+                    egui::TextStyle::Body.resolve(ui.style()),
+                    ui.visuals().text_color(),
                 );
             }
             response
@@ -1759,8 +1744,11 @@ impl EditorViewer<'_> {
         if self.playing {
             self.play_viewport_input(ui, &response);
         } else if !is_2d {
-            self.viewport_input(ui, &response);
+            let was_dragging = self.gizmo_drag.is_some();
             self.gizmo_overlay(ui, response.rect);
+            if !was_dragging && self.gizmo_drag.is_none() && !self.gizmo_widget.is_focused() {
+                self.viewport_input(ui, &response);
+            }
         }
         if let Some(ViewportDrop::File(path)) = dropped.as_deref() {
             if path.extension().is_some_and(|extension| {
@@ -2028,12 +2016,13 @@ impl EditorViewer<'_> {
         self.request_preview = true;
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "keep translation and scale interaction in one immediate-mode layout"
-    )]
     fn gizmo_overlay(&mut self, ui: &egui::Ui, rect: egui::Rect) {
+        if self.document.is_read_only() {
+            self.gizmo_widget.reset();
+            return;
+        }
         let Some(entity) = self.document.selected() else {
+            self.gizmo_widget.reset();
             return;
         };
         let Ok(snapshot) = self.document.world().snapshot(entity) else {
@@ -2042,294 +2031,35 @@ impl EditorViewer<'_> {
         let Ok(world) = self.document.world().world_transform(entity) else {
             return;
         };
-        let aspect = rect.width() / rect.height().max(1.0);
-        let view_projection = self.camera.view_projection(aspect);
-        let origin_world = world.0.transform_point3(Vec3::ZERO);
-        let Some(origin) = project_to_rect(view_projection, origin_world, rect) else {
-            return;
-        };
-        if self.gizmo.operation == GizmoOperation::Rotate {
-            self.rotation_gizmo_overlay(
-                ui,
-                rect,
+        let parent = snapshot
+            .parent
+            .and_then(|id| self.document.world().world_transform(id).ok())
+            .map_or(Mat4::IDENTITY, |world| world.0);
+        if let Some(after) = self.gizmo_widget.interact(
+            ui,
+            rect,
+            *self.camera,
+            transform_widget::Target {
                 entity,
-                snapshot.local_transform,
-                view_projection,
-                origin_world,
-                origin,
-            );
-            return;
-        }
-        let active_axis = self.gizmo_drag.as_ref().map(|drag| drag.axis);
-        let center_rect = egui::Rect::from_center_size(origin, egui::vec2(13.0, 13.0));
-        ui.painter()
-            .rect_filled(center_rect, 1.5, egui::Color32::from_rgb(72, 76, 82));
-        ui.painter().rect_stroke(
-            center_rect,
-            1.5,
-            egui::Stroke::new(1.0, egui::Color32::from_rgb(205, 209, 215)),
-            egui::StrokeKind::Outside,
-        );
-        for (axis, color) in [
-            (GizmoAxis::X, egui::Color32::from_rgb(224, 67, 54)),
-            (GizmoAxis::Y, egui::Color32::from_rgb(112, 205, 58)),
-            (GizmoAxis::Z, egui::Color32::from_rgb(57, 126, 231)),
-        ] {
-            let axis_world = if self.gizmo.space == GizmoSpace::Local {
-                snapshot.local_transform.rotation * axis.vector()
-            } else {
-                axis.vector()
-            };
-            let offset = projected_gizmo_axis(*self.camera, origin_world, axis_world);
-            // Do not amplify a nearly end-on axis into a full-length handle.
-            // Keep an active handle available so its release still commits.
-            let offset = if offset.length() >= 8.0 {
-                offset
-            } else if let Some(drag) = self.gizmo_drag.as_ref()
-                && drag.axis == axis
+                world: world.0,
+                parent,
+            },
+            *self.gizmo,
+        ) {
+            if after
+                .matrix()
+                .abs_diff_eq(snapshot.local_transform.matrix(), 1.0e-6)
             {
-                drag.pointer_direction * 8.0
-            } else {
-                continue;
-            };
-            let direction = offset.normalized();
-            let end = origin + offset;
-            let display_color = if active_axis == Some(axis) {
-                egui::Color32::from_rgb(255, 214, 71)
-            } else {
-                color
-            };
-            ui.painter()
-                .line_segment([origin, end], egui::Stroke::new(3.0, display_color));
-            match self.gizmo.operation {
-                GizmoOperation::Translate => {
-                    let perpendicular = egui::vec2(-direction.y, direction.x);
-                    ui.painter().add(egui::Shape::convex_polygon(
-                        vec![
-                            end + direction * 9.0,
-                            end - direction * 5.0 + perpendicular * 6.0,
-                            end - direction * 5.0 - perpendicular * 6.0,
-                        ],
-                        display_color,
-                        egui::Stroke::NONE,
-                    ));
-                }
-                GizmoOperation::Scale => {
-                    ui.painter().rect_filled(
-                        egui::Rect::from_center_size(end, egui::vec2(12.0, 12.0)),
-                        1.0,
-                        display_color,
-                    );
-                }
-                GizmoOperation::Rotate => {}
+                return;
             }
-            ui.painter().text(
-                end + direction * 17.0,
-                egui::Align2::CENTER_CENTER,
-                match axis {
-                    GizmoAxis::X => "X",
-                    GizmoAxis::Y => "Y",
-                    GizmoAxis::Z => "Z",
-                },
-                egui::FontId::proportional(11.0),
-                display_color,
-            );
-            let interaction = ui.interact(
-                egui::Rect::from_two_pos(origin, end + direction * 10.0).expand(8.0),
-                egui::Id::new(("viewport-gizmo", entity.to_string(), axis as u8)),
-                if self.document.is_read_only() {
-                    egui::Sense::hover()
-                } else {
-                    egui::Sense::drag()
-                },
-            );
-            if interaction.hovered() && active_axis.is_none() {
-                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
-            }
-            if interaction.drag_started() {
-                *self.gizmo_drag = Some(GizmoDrag {
-                    entity,
-                    axis,
-                    before: snapshot.local_transform,
-                    after: snapshot.local_transform,
-                    amount: 0.0,
-                    pointer_direction: direction,
-                    last_pointer: interaction.interact_pointer_pos().unwrap_or(origin),
-                });
-            }
-            if interaction.dragged()
-                && let Some(mut drag) = *self.gizmo_drag
-                && drag.entity == entity
-                && drag.axis == axis
-            {
-                drag.amount = accumulate_gizmo_pointer_delta(
-                    drag.amount,
-                    interaction.drag_delta(),
-                    drag.pointer_direction,
-                    self.gizmo.operation,
-                );
-                if let Some(after) = apply_gizmo_delta(drag.before, axis, drag.amount, *self.gizmo)
-                {
-                    drag.after = after;
-                    if self.document.preview_transform(entity, after).is_ok() {
-                        *self.gizmo_drag = Some(drag);
-                        self.request_preview = true;
-                    }
-                }
-            }
-            if interaction.drag_stopped()
-                && let Some(drag) = self.gizmo_drag.take()
-                && let Err(error) =
-                    self.document
-                        .commit_transform_drag(drag.entity, drag.before, drag.after)
-            {
-                self.console
-                    .push(simple_console(Severity::Error, "gizmo", error.to_string()));
-            }
-        }
-    }
-
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "the rotation overlay needs the viewport projection and selected transform"
-    )]
-    #[allow(
-        clippy::too_many_lines,
-        reason = "keep rotation ring drawing and pointer interaction together"
-    )]
-    fn rotation_gizmo_overlay(
-        &mut self,
-        ui: &egui::Ui,
-        rect: egui::Rect,
-        entity: EntityId,
-        local_transform: LocalTransform,
-        view_projection: Mat4,
-        origin_world: Vec3,
-        origin: egui::Pos2,
-    ) {
-        const RING_RADIUS: f32 = 72.0;
-        const HIT_RADIUS: f32 = 9.0;
-        let axes = [
-            (GizmoAxis::X, egui::Color32::RED),
-            (GizmoAxis::Y, egui::Color32::GREEN),
-            (GizmoAxis::Z, egui::Color32::BLUE),
-        ];
-        let rings = axes.map(|(axis, color)| {
-            let axis_world = if self.gizmo.space == GizmoSpace::Local {
-                local_transform.rotation * axis.vector()
-            } else {
-                axis.vector()
-            };
-            (
-                axis,
-                color,
-                projected_rotation_ring(
-                    view_projection,
-                    origin_world,
-                    origin,
-                    axis_world,
-                    rect,
-                    RING_RADIUS,
-                ),
-            )
-        });
-
-        let pointer = ui.input(|input| input.pointer.hover_pos());
-        let active_axis = self.gizmo_drag.as_ref().map(|drag| drag.axis);
-        let hovered = pointer.and_then(|pointer| {
-            rings
-                .iter()
-                .filter_map(|(axis, _, points)| {
-                    ring_pointer_distance(points, pointer)
-                        .map(|(distance, tangent)| (*axis, distance, tangent))
-                })
-                .filter(|(_, distance, _)| *distance <= HIT_RADIUS)
-                .min_by(|left, right| left.1.total_cmp(&right.1))
-        });
-
-        ui.painter().circle_stroke(
-            origin,
-            RING_RADIUS + 5.0,
-            egui::Stroke::new(1.0, egui::Color32::from_gray(125)),
-        );
-
-        for (axis, color, points) in rings {
-            if points.len() < 2 {
-                continue;
-            }
-            let is_active = active_axis == Some(axis);
-            let is_hovered = hovered.is_some_and(|(hovered_axis, _, _)| hovered_axis == axis);
-            let stroke_width = if is_active || is_hovered { 5.0 } else { 3.0 };
-            let pointer_tangent = pointer.and_then(|pointer| {
-                ring_pointer_distance(&points, pointer).map(|(_, tangent)| tangent)
+            let drag = self.gizmo_drag.get_or_insert(GizmoDrag {
+                entity,
+                before: snapshot.local_transform,
+                after: snapshot.local_transform,
             });
-            ui.painter().add(egui::Shape::closed_line(
-                points,
-                egui::Stroke::new(stroke_width, color),
-            ));
-
-            let interaction_rect = if is_active {
-                rect
-            } else if is_hovered {
-                egui::Rect::from_center_size(pointer.unwrap_or(origin), egui::Vec2::splat(20.0))
-            } else {
-                egui::Rect::NOTHING
-            };
-            let interaction = ui.interact(
-                interaction_rect,
-                egui::Id::new(("viewport-gizmo", entity.to_string(), axis as u8)),
-                if self.document.is_read_only() || (!is_active && !is_hovered) {
-                    egui::Sense::hover()
-                } else {
-                    egui::Sense::drag()
-                },
-            );
-            if interaction.drag_started() {
-                let tangent = hovered.map_or(egui::Vec2::RIGHT, |(_, _, tangent)| tangent);
-                *self.gizmo_drag = Some(GizmoDrag {
-                    entity,
-                    axis,
-                    before: local_transform,
-                    after: local_transform,
-                    amount: 0.0,
-                    pointer_direction: tangent,
-                    last_pointer: interaction.interact_pointer_pos().unwrap_or(origin),
-                });
-            }
-            if interaction.dragged()
-                && let Some(mut drag) = *self.gizmo_drag
-                && drag.entity == entity
-                && drag.axis == axis
-            {
-                let current_pointer = interaction
-                    .interact_pointer_pos()
-                    .unwrap_or(drag.last_pointer);
-                let tangent = pointer_tangent.unwrap_or(drag.pointer_direction);
-                drag.amount = accumulate_gizmo_pointer_delta(
-                    drag.amount,
-                    current_pointer - drag.last_pointer,
-                    tangent,
-                    GizmoOperation::Rotate,
-                );
-                drag.pointer_direction = tangent;
-                drag.last_pointer = current_pointer;
-                if let Some(after) = apply_gizmo_delta(drag.before, axis, drag.amount, *self.gizmo)
-                {
-                    drag.after = after;
-                    if self.document.preview_transform(entity, after).is_ok() {
-                        *self.gizmo_drag = Some(drag);
-                        self.request_preview = true;
-                    }
-                }
-            }
-            if interaction.drag_stopped()
-                && let Some(drag) = self.gizmo_drag.take()
-                && let Err(error) =
-                    self.document
-                        .commit_transform_drag(drag.entity, drag.before, drag.after)
-            {
-                self.console
-                    .push(simple_console(Severity::Error, "gizmo", error.to_string()));
+            if self.document.preview_transform(entity, after).is_ok() {
+                drag.after = after;
+                self.request_preview = true;
             }
         }
     }
@@ -2344,7 +2074,7 @@ impl EditorViewer<'_> {
     )]
     fn project_explorer(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            ui.heading(egui::RichText::new("Project").color(ui_theme::TEXT));
+            ui.heading(egui::RichText::new("Project").color(ui.visuals().text_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("⚙", |ui| self.project_settings(ui))
                     .response
@@ -2430,7 +2160,8 @@ impl EditorViewer<'_> {
         let selected_folder = selected_scene_folder(self.document);
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(format!("{entity_count} entities")).color(ui_theme::MUTED),
+                egui::RichText::new(format!("{entity_count} entities"))
+                    .color(ui.visuals().weak_text_color()),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("+ Add", |ui| {
@@ -2618,7 +2349,7 @@ impl EditorViewer<'_> {
     fn file_explorer(&mut self, ui: &mut egui::Ui) {
         begin_explorer_selection(ui);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Filter").color(ui_theme::MUTED));
+            ui.label(egui::RichText::new("Filter").color(ui.visuals().weak_text_color()));
             ui.add(
                 egui::TextEdit::singleline(self.project_filter)
                     .hint_text("Filter files…")
@@ -2631,13 +2362,13 @@ impl EditorViewer<'_> {
                 ui.label(
                     egui::RichText::new(&tree.name)
                         .strong()
-                        .color(ui_theme::TEXT),
+                        .color(ui.visuals().text_color()),
                 );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new(format!("{} files", tree.file_count()))
                             .small()
-                            .color(ui_theme::MUTED),
+                            .color(ui.visuals().weak_text_color()),
                     );
                 });
             } else {
@@ -2864,12 +2595,12 @@ impl EditorViewer<'_> {
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
-                ui.label(egui::RichText::new("Nothing selected").size(16.0).strong());
+                ui.label(egui::RichText::new("Nothing selected").heading());
                 ui.label(
                     egui::RichText::new(
                         "Choose an entity in the Project panel to edit its properties.",
                     )
-                    .color(ui_theme::MUTED),
+                    .color(ui.visuals().weak_text_color()),
                 );
             });
             return;
@@ -2903,7 +2634,7 @@ impl EditorViewer<'_> {
             egui::RichText::new(entity.to_string())
                 .monospace()
                 .small()
-                .color(ui_theme::MUTED),
+                .color(ui.visuals().weak_text_color()),
         );
         let mut transform = snapshot.local_transform;
         let mut translation = transform.translation.to_array();
@@ -3035,7 +2766,7 @@ impl EditorViewer<'_> {
             ui.label(
                 egui::RichText::new("Changes are validated and can be undone.")
                     .small()
-                    .color(ui_theme::MUTED),
+                    .color(ui.visuals().weak_text_color()),
             );
         }
         self.script_inspector(ui, entity, snapshot.scripts);
@@ -3311,7 +3042,7 @@ fn transform_vector_row(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], s
     ui.horizontal(|ui| {
         ui.add_sized(
             [58.0, ui.spacing().interact_size.y],
-            egui::Label::new(egui::RichText::new(label).color(ui_theme::MUTED)),
+            egui::Label::new(egui::RichText::new(label).color(ui.visuals().weak_text_color())),
         );
         let available = ui.available_width();
         let field_width = ((available - ui.spacing().item_spacing.x * 2.0) / 3.0).max(42.0);
@@ -3334,106 +3065,8 @@ fn transform_vector_row(ui: &mut egui::Ui, label: &str, values: &mut [f32; 3], s
 #[derive(Clone, Copy)]
 struct GizmoDrag {
     entity: EntityId,
-    axis: GizmoAxis,
     before: LocalTransform,
     after: LocalTransform,
-    amount: f32,
-    pointer_direction: egui::Vec2,
-    last_pointer: egui::Pos2,
-}
-
-fn projected_gizmo_axis(camera: EditorCamera, origin_world: Vec3, axis_world: Vec3) -> egui::Vec2 {
-    let view = camera.view_matrix();
-    let origin = view.transform_point3(origin_world);
-    let axis = view.transform_vector3(axis_world);
-    if !origin.is_finite() || !axis.is_finite() || origin.z >= -camera.near {
-        return egui::Vec2::ZERO;
-    }
-    // The perspective derivative at the pivot gives the screen tangent without
-    // projecting a unit endpoint that may cross the camera plane. Retaining its
-    // magnitude makes an end-on axis shrink instead of spinning at full length.
-    let offset = egui::vec2(
-        axis.x - origin.x / origin.z * axis.z,
-        -(axis.y - origin.y / origin.z * axis.z),
-    ) * 72.0;
-    if !offset.is_finite() {
-        return egui::Vec2::ZERO;
-    }
-    offset / (offset.length() / 72.0).max(1.0)
-}
-
-fn projected_rotation_ring(
-    view_projection: Mat4,
-    origin_world: Vec3,
-    origin: egui::Pos2,
-    axis_world: Vec3,
-    rect: egui::Rect,
-    radius: f32,
-) -> Vec<egui::Pos2> {
-    const SEGMENTS: u16 = 64;
-    let reference = if axis_world.dot(Vec3::Y).abs() < 0.9 {
-        Vec3::Y
-    } else {
-        Vec3::X
-    };
-    let tangent = axis_world.cross(reference).normalize();
-    let bitangent = axis_world.cross(tangent).normalize();
-    let mut points = Vec::with_capacity(usize::from(SEGMENTS));
-    for index in 0..SEGMENTS {
-        let angle = f32::from(index) * std::f32::consts::TAU / f32::from(SEGMENTS);
-        let circle_point = origin_world + tangent * angle.cos() + bitangent * angle.sin();
-        let Some(projected) = project_to_rect(view_projection, circle_point, rect) else {
-            return Vec::new();
-        };
-        points.push(projected);
-    }
-    let projected_radius = points
-        .iter()
-        .map(|point| point.distance(origin))
-        .fold(0.0_f32, f32::max);
-    if projected_radius <= f32::EPSILON {
-        return Vec::new();
-    }
-    let scale = radius / projected_radius;
-    points
-        .into_iter()
-        .map(|point| origin + (point - origin) * scale)
-        .collect()
-}
-
-fn ring_pointer_distance(points: &[egui::Pos2], pointer: egui::Pos2) -> Option<(f32, egui::Vec2)> {
-    if points.len() < 2 {
-        return None;
-    }
-    let mut closest = (f32::INFINITY, egui::Vec2::RIGHT);
-    for index in 0..points.len() {
-        let start = points[index];
-        let end = points[(index + 1) % points.len()];
-        let segment = end - start;
-        let length_sq = segment.length_sq();
-        if length_sq <= f32::EPSILON {
-            continue;
-        }
-        let amount = ((pointer - start).dot(segment) / length_sq).clamp(0.0, 1.0);
-        let distance = pointer.distance(start + segment * amount);
-        if distance < closest.0 {
-            closest = (distance, segment.normalized());
-        }
-    }
-    closest.0.is_finite().then_some(closest)
-}
-
-fn accumulate_gizmo_pointer_delta(
-    amount: f32,
-    pointer_delta: egui::Vec2,
-    axis_direction: egui::Vec2,
-    operation: GizmoOperation,
-) -> f32 {
-    let sensitivity = match operation {
-        GizmoOperation::Rotate => 0.012,
-        GizmoOperation::Translate | GizmoOperation::Scale => 0.015,
-    };
-    amount + pointer_delta.dot(axis_direction) * sensitivity
 }
 
 fn rotation_degrees(rotation: Quat) -> [f32; 3] {
@@ -3453,104 +3086,6 @@ fn rotation_from_degrees(rotation: [f32; 3]) -> Quat {
 #[cfg(test)]
 mod gizmo_drag_tests {
     use super::*;
-
-    #[test]
-    fn end_on_handles_shrink_through_camera_alignment() {
-        let mut camera = EditorCamera {
-            yaw: 0.0,
-            pitch: 0.0,
-            ..EditorCamera::default()
-        };
-        assert!(projected_gizmo_axis(camera, Vec3::ZERO, Vec3::Z).length() < 0.001);
-        assert!((projected_gizmo_axis(camera, Vec3::ZERO, Vec3::X).length() - 72.0).abs() < 0.001);
-        let mut previous = egui::Vec2::ZERO;
-        for step in -100_i16..=100 {
-            camera.yaw = f32::from(step) * 0.0001;
-            let offset = projected_gizmo_axis(camera, Vec3::ZERO, Vec3::Z);
-            assert!(offset.is_finite());
-            assert!(offset.length() < 1.0);
-            if step > -100 {
-                assert!((offset - previous).length() < 0.01);
-            }
-            previous = offset;
-        }
-    }
-
-    #[test]
-    fn handles_remain_finite_close_to_camera_and_off_center() {
-        let camera = EditorCamera {
-            yaw: 0.0,
-            pitch: 0.0,
-            ..EditorCamera::default()
-        };
-        // The old unit endpoint lies behind the camera at this pivot.
-        let origin = camera.position() + Vec3::new(0.01, 0.0, -0.1);
-        let offset = projected_gizmo_axis(camera, origin, Vec3::Z);
-        assert!(offset.is_finite());
-        assert!(offset.x > 0.0);
-        assert!(offset.length() <= 72.0);
-        assert_eq!(
-            projected_gizmo_axis(camera, camera.position(), Vec3::Z),
-            egui::Vec2::ZERO
-        );
-    }
-
-    #[test]
-    fn rotated_axes_shrink_when_aligned_with_an_off_center_view_ray() {
-        let camera = EditorCamera::default();
-        let origin = Vec3::new(0.5, -0.3, 0.2);
-        let ray = (origin - camera.position()).normalize();
-        let rotation = Quat::from_rotation_arc(Vec3::Z, ray);
-        assert!(projected_gizmo_axis(camera, origin, rotation * Vec3::Z).length() < 0.001);
-        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-        let projection = camera.view_projection(rect.aspect_ratio());
-        let pivot = project_to_rect(projection, origin, rect).unwrap();
-        for axis in [Vec3::X, Vec3::Y] {
-            let axis = rotation * axis;
-            let tangent = project_to_rect(projection, origin + axis * 0.01, rect).unwrap() - pivot;
-            let handle = projected_gizmo_axis(camera, origin, axis);
-            assert!(handle.normalized().dot(tangent.normalized()) > 0.999);
-        }
-    }
-
-    #[test]
-    fn pointer_motion_accumulates_along_the_visible_axis() {
-        let direction = egui::Vec2::new(-1.0, 0.0);
-        let first = accumulate_gizmo_pointer_delta(
-            0.0,
-            egui::Vec2::new(-10.0, 4.0),
-            direction,
-            GizmoOperation::Translate,
-        );
-        let second = accumulate_gizmo_pointer_delta(
-            first,
-            egui::Vec2::new(-5.0, -8.0),
-            direction,
-            GizmoOperation::Translate,
-        );
-
-        assert!((first - 0.15).abs() < 1.0e-6);
-        assert!((second - 0.225).abs() < 1.0e-6);
-    }
-
-    #[test]
-    fn rotation_motion_accumulates_as_the_ring_tangent_changes() {
-        let first = accumulate_gizmo_pointer_delta(
-            0.0,
-            egui::Vec2::new(10.0, 0.0),
-            egui::Vec2::RIGHT,
-            GizmoOperation::Rotate,
-        );
-        let second = accumulate_gizmo_pointer_delta(
-            first,
-            egui::Vec2::new(0.0, 10.0),
-            egui::Vec2::DOWN,
-            GizmoOperation::Rotate,
-        );
-
-        assert!((first - 0.12).abs() < 1.0e-6);
-        assert!((second - 0.24).abs() < 1.0e-6);
-    }
 
     #[test]
     fn inspector_rotation_degrees_round_trip() {
@@ -3604,11 +3139,15 @@ fn spawn_viewport_renderer(
 
 fn default_dock(tabs: &[EditorTab]) -> Tree<EditorTab> {
     let mut tiles = egui_tiles::Tiles::default();
-    let viewport_tabs: Vec<_> = [EditorTab::Viewport3d, EditorTab::Viewport2d]
-        .into_iter()
-        .filter(|tab| tabs.contains(tab))
-        .map(|tab| tiles.insert_pane(tab))
-        .collect();
+    let viewport_tabs: Vec<_> = [
+        EditorTab::Viewport3d,
+        EditorTab::Viewport2d,
+        EditorTab::SceneGraph,
+    ]
+    .into_iter()
+    .filter(|tab| tabs.contains(tab))
+    .map(|tab| tiles.insert_pane(tab))
+    .collect();
     let viewports = tiles.insert_tab_tile(viewport_tabs);
     let left = tiles.insert_pane(EditorTab::Inspector);
     let console = tiles.insert_pane(EditorTab::Console);
@@ -4666,10 +4205,10 @@ fn render_project_directory(
     can_edit: bool,
     has_selected_object: bool,
 ) -> Option<ProjectFileAction> {
-    const FOLDER_TEXT: egui::Color32 = egui::Color32::from_rgb(207, 215, 225);
-    const EMPTY_TEXT: egui::Color32 = egui::Color32::from_rgb(105, 115, 128);
+    let folder_text = ui.visuals().text_color();
+    let empty_text = ui.visuals().weak_text_color();
     let is_empty = directory.directories.is_empty() && directory.files.is_empty();
-    let text_color = if is_empty { EMPTY_TEXT } else { FOLDER_TEXT };
+    let text_color = if is_empty { empty_text } else { folder_text };
     let mut action = None;
     let id = ui.make_persistent_id(("project-directory", &directory.relative_path));
     let (drop, dropped) = ui.dnd_drop_zone::<ViewportDrop, _>(egui::Frame::NONE, |ui| {
@@ -4694,7 +4233,7 @@ fn render_project_directory(
                 has_selected_object,
             );
             if is_empty {
-                ui.label(egui::RichText::new("empty").small().color(EMPTY_TEXT));
+                ui.label(egui::RichText::new("empty").small().color(empty_text));
             }
         });
         header.body(|ui| {
@@ -4750,19 +4289,19 @@ fn render_project_file(
     can_edit: bool,
     has_selected_object: bool,
 ) -> Option<ProjectFileAction> {
-    const FILE_TEXT: egui::Color32 = egui::Color32::from_rgb(190, 199, 211);
+    let file_text = ui.visuals().text_color();
     let icon = project_file_icon(&file.relative_path);
     ui.horizontal(|ui| {
         ui.add(
             egui::Image::new(icon)
                 .fit_to_exact_size(egui::vec2(18.0, 18.0))
-                .tint(FILE_TEXT),
+                .tint(file_text),
         );
         project_entry_row(
             ui,
             &file.name,
             &file.relative_path,
-            FILE_TEXT,
+            file_text,
             false,
             can_edit,
             has_selected_object,
@@ -6047,6 +5586,8 @@ mod explorer_tests {
                 viewport_extent: &mut [640, 480],
                 gizmo: &mut GizmoSettings::default(),
                 gizmo_drag: &mut None,
+                gizmo_widget: &mut transform_widget::TransformWidget::default(),
+                scene_graph: &mut scene_graph::SceneGraph::default(),
                 model_assets: &mut BTreeMap::new(),
                 project_file_action: &mut action,
             };

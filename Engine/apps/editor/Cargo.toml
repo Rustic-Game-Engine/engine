@@ -8,6 +8,8 @@ publish = false
 
 [dependencies]
 egui_tiles.workspace = true
+egui-snarl.workspace = true
+transform-gizmo-egui.workspace = true
 egui_extras.workspace = true
 eframe.workspace = true
 engine-assets = { path = "../../crates/engine-assets", version = "0.1.0" }

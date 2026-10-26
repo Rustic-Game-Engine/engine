@@ -28,3 +28,28 @@ inside the 3D viewport to leave any Inspector or Explorer rename field. Use
 **Home** to reset the view or select an object in the hierarchy and press **F**.
 
 The corresponding website guide is **Editor overview > Viewport tools**.
+
+## Standard UI and transform handles
+
+The editor and Project Manager use egui's built-in widget styling and themes.
+Select dark, light, or system appearance in the editor's **View** menu. Docking
+uses egui_tiles with its standard tab and split interactions.
+
+3D transform handles use transform-gizmo-egui with its default visuals. Select an
+object, choose **Move**, **Rotate**, or **Scale**, then choose **World** or **Local**
+axes. Enable **Snap** and adjust the adjacent increment for stepped changes. Drag a
+handle to preview the change and release to record one Undo entry, even outside
+the viewport. Handle interaction owns pointer input while manipulating objects.
+Read-only projects do not expose editable handles. Transforms that require shear
+beneath nonuniformly scaled parents are rejected; use a uniformly scaled parent
+or edit local values in Inspector.
+
+## Scene Graph
+
+Choose **View → Open Scene Graph** to inspect the loaded hierarchy using standard
+egui-snarl nodes, pins, wires, pan, and zoom. Each entity is a node; wires run from
+**Children** to **Parent**. Click a node name to select it in Inspector. Drag node
+headers to arrange the view. Node positions last while the scene remains loaded. To change parent
+links, use **Project → Scene**; the graph refreshes when shown. Wire gestures do
+not modify the scene. An empty scene prompts you to add objects in Project. This
+is a hierarchy viewer, not an executable visual scripting system.
