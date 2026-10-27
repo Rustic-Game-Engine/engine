@@ -293,7 +293,26 @@ impl EditorApp {
             },
         );
         app.refresh_preview();
+        app.log_scene_diagnostics();
         Ok(app)
+    }
+
+    fn log_scene_diagnostics(&mut self) {
+        for diagnostic in self.document.scene_diagnostics().to_vec() {
+            let severity = match diagnostic.severity {
+                engine_world::SceneDiagnosticSeverity::Warning => Severity::Warning,
+                engine_world::SceneDiagnosticSeverity::Error => Severity::Error,
+            };
+            self.log(
+                severity,
+                "scene.load",
+                format!(
+                    "{}: {}",
+                    self.document.scene_path().display(),
+                    diagnostic.message
+                ),
+            );
+        }
     }
 
     fn log(&mut self, severity: Severity, subsystem: &str, message: impl Into<String>) {
@@ -480,6 +499,7 @@ impl EditorApp {
                     "scene.external",
                     "Reloaded scene changes made outside Rustic",
                 );
+                self.log_scene_diagnostics();
             }
             Err(error) => {
                 if !self.external_scene_change_pending {
@@ -531,6 +551,7 @@ impl EditorApp {
                     "scene",
                     format!("Loaded scene {}", relative_path.display()),
                 );
+                self.log_scene_diagnostics();
             }
             Err(error) => self.log(
                 Severity::Error,

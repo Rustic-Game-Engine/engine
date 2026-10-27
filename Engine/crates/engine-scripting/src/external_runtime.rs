@@ -657,6 +657,16 @@ impl ProcessSession {
         request: &Invocation,
         host: Option<&Arc<Mutex<Box<dyn GameplayHost>>>>,
     ) -> Result<InvocationResponse, ExternalRuntimeError> {
+        self.invoke_with_timeout(language, request, host, CALLBACK_TIMEOUT)
+    }
+
+    fn invoke_with_timeout(
+        &mut self,
+        language: ScriptLanguage,
+        request: &Invocation,
+        host: Option<&Arc<Mutex<Box<dyn GameplayHost>>>>,
+        timeout: Duration,
+    ) -> Result<InvocationResponse, ExternalRuntimeError> {
         let bytes = serde_json::to_vec(request).map_err(|error| {
             ExternalRuntimeError::Runtime(language.display_name(), error.to_string())
         })?;
@@ -665,12 +675,15 @@ impl ProcessSession {
             .and_then(|()| self.stdin.write_all(b"\n"))
             .and_then(|()| self.stdin.flush())
             .map_err(|error| runtime_io(language, error))?;
-        let deadline = std::time::Instant::now() + CALLBACK_TIMEOUT;
+        let mut deadline = std::time::Instant::now() + timeout;
         for _ in 0..4096 {
-            let stdout_bytes = match self
-                .responses
-                .recv_timeout(deadline.saturating_duration_since(std::time::Instant::now()))
-            {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            let response = if remaining.is_zero() {
+                Err(mpsc::RecvTimeoutError::Timeout)
+            } else {
+                self.responses.recv_timeout(remaining)
+            };
+            let stdout_bytes = match response {
                 Ok(Ok(bytes)) => bytes,
                 Ok(Err(message)) => {
                     return Err(ExternalRuntimeError::Runtime(
@@ -683,7 +696,7 @@ impl ProcessSession {
                     let _ = self.child.wait();
                     return Err(ExternalRuntimeError::Timeout(
                         language.display_name(),
-                        CALLBACK_TIMEOUT,
+                        timeout,
                     ));
                 }
                 Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -697,6 +710,7 @@ impl ProcessSession {
                     ));
                 }
             };
+            let response_received = std::time::Instant::now();
             let mut message: Value = serde_json::from_slice(&stdout_bytes).map_err(|e| {
                 ExternalRuntimeError::Runtime(language.display_name(), e.to_string())
             })?;
@@ -726,6 +740,10 @@ impl ProcessSession {
                     .and_then(|()| self.stdin.write_all(b"\n"))
                     .and_then(|()| self.stdin.flush())
                     .map_err(|e| runtime_io(language, e))?;
+                // The child waits for Rust's reply. Decoding, host locking,
+                // engine work and delivering the reply are not script time.
+                // Preserve the unused budget rather than resetting it per query.
+                deadline += response_received.elapsed();
                 continue;
             }
             return serde_json::from_value(message).map_err(|e| {
@@ -1184,6 +1202,12 @@ mod tests {
         fn set_enabled(&mut self, _enabled: bool) {}
         fn gameplay_query(&mut self, query: Value) -> Result<Value, String> {
             match query["op"].as_str().unwrap_or("") {
+                "test_delay" => {
+                    std::thread::sleep(Duration::from_millis(
+                        query["milliseconds"].as_u64().unwrap(),
+                    ));
+                    Ok(Value::Null)
+                }
                 "capture_mic_start" => Ok(json!("mic-1")),
                 "capture_read" => {
                     assert_eq!(query["id"], "mic-1");
@@ -1635,6 +1659,97 @@ int main(){return rustic_run(RusticBehavior{.on_start=start});}"#,
             .is_err()
         );
         validate_web(b"body { color: red; }", "theme.css").unwrap();
+    }
+
+    #[test]
+    fn engine_queries_pause_the_budget_but_stalled_scripts_are_reaped() {
+        if !probe_language_toolchain(ScriptLanguage::Python).available {
+            return;
+        }
+        let source = br"import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    if request['callback'] != 'on_create':
+        print(json.dumps({'query': {'op': 'test_delay', 'milliseconds': 1200}}), flush=True)
+        json.loads(sys.stdin.readline())
+        if request['callback'] == 'update':
+            while True:
+                time.sleep(0.1)
+        time.sleep(0.1)
+    print(json.dumps({'format_version': 1, 'commands': []}), flush=True)
+";
+        let mut behavior = ExternalBehavior::load(
+            ScriptId::new(),
+            ScriptLanguage::Python,
+            source,
+            "query-budget.py",
+            Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            }),
+        )
+        .unwrap();
+        behavior.on_create().unwrap();
+        let request = behavior.invocation("on_start", None).unwrap();
+        let result = behavior.session.invoke_with_timeout(
+            ScriptLanguage::Python,
+            &request,
+            Some(&behavior.host),
+            Duration::from_secs(1),
+        );
+        result.expect("engine query time must not consume script time");
+        let request = behavior.invocation("update", Some(0.01)).unwrap();
+        let result = behavior.session.invoke_with_timeout(
+            ScriptLanguage::Python,
+            &request,
+            Some(&behavior.host),
+            Duration::from_secs(1),
+        );
+        assert!(matches!(
+            result,
+            Err(ExternalRuntimeError::Timeout("Python", _))
+        ));
+        assert!(behavior.session.child.try_wait().unwrap().is_some());
+    }
+
+    #[test]
+    fn script_response_budget_is_cumulative_and_stalled_children_are_reaped() {
+        if !probe_language_toolchain(ScriptLanguage::Python).available {
+            return;
+        }
+        let source = br"import json, sys, time
+for line in sys.stdin:
+    request = json.loads(line)
+    if request['callback'] != 'on_create':
+        for i in range(30):
+            time.sleep(0.1)
+            print(json.dumps({'query': {'op': 'test_delay', 'milliseconds': 10}}), flush=True)
+            json.loads(sys.stdin.readline())
+    print(json.dumps({'format_version': 1, 'commands': []}), flush=True)
+";
+        let mut behavior = ExternalBehavior::load(
+            ScriptId::new(),
+            ScriptLanguage::Python,
+            source,
+            "cumulative-budget.py",
+            Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.0; 3],
+            }),
+        )
+        .unwrap();
+        behavior.on_create().unwrap();
+        let request = behavior.invocation("on_start", None).unwrap();
+        let result = behavior.session.invoke_with_timeout(
+            ScriptLanguage::Python,
+            &request,
+            Some(&behavior.host),
+            Duration::from_secs(1),
+        );
+        assert!(
+            matches!(result, Err(ExternalRuntimeError::Timeout("Python", duration)) if duration == Duration::from_secs(1))
+        );
+        assert!(behavior.session.child.try_wait().unwrap().is_some());
     }
 
     #[test]

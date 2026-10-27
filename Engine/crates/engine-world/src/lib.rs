@@ -26,7 +26,7 @@ pub use render::{
 pub use scene::{
     CURRENT_SCENE_VERSION, EntitySnapshot, RawComponent, RecoverySource, SceneDiagnostic,
     SceneDiagnosticSeverity, SceneDocument, SceneError, SceneInstance, SceneLoad, load_scene,
-    load_scene_recovering, save_scene_atomic,
+    load_scene_recovering, load_scene_recovering_for_editing, save_scene_atomic,
 };
 pub use undo::{SceneEdit, UndoStack};
 pub use world::{EngineSystem, SceneWorld, SchedulePhase, WorldCommand, WorldError, WorldSystem};

@@ -116,7 +116,9 @@ stable IDs break ties. Process globals persist for that instance until it is des
 
 The process reads/writes newline-delimited protocol v1 internally. Do not print to
 standard output, because it is reserved for the SDK response. Callbacks have a
-three-second deadline and 1 MiB response limit. The process environment and working
+cumulative three-second script-response budget and 1 MiB response limit. Time
+spent by Rust servicing synchronous engine queries (such as audio file loading) is
+excluded; queries do not reset the remaining script budget. The process environment and working
 directory are isolated. Syntax/build failures prevent replacement; runtime failures
 disable the instance. Legacy C++ behavior members are the current native contract and
 remain backward compatible.

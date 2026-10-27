@@ -5,9 +5,9 @@ use engine_play::{
 };
 use engine_project::{Project, ProjectError, VirtualDirectory};
 use engine_world::{
-    EntitySnapshot, LocalTransform, PartAttributes, Primitive, RecoverySource, SceneDocument,
-    SceneEdit, SceneError, SceneWorld, ScriptComponent, ScriptReference, UndoStack, WorldError,
-    load_scene_recovering, save_scene_atomic,
+    EntitySnapshot, LocalTransform, PartAttributes, Primitive, RecoverySource, SceneDiagnostic,
+    SceneDocument, SceneEdit, SceneError, SceneWorld, ScriptComponent, ScriptReference, UndoStack,
+    WorldError, load_scene_recovering, load_scene_recovering_for_editing, save_scene_atomic,
 };
 use num_traits::ToPrimitive as _;
 use sha2::{Digest, Sha256};
@@ -59,6 +59,7 @@ pub struct AuthoringDocument {
     read_only: bool,
     project_read_only: bool,
     recovered_from_backup: bool,
+    scene_diagnostics: Vec<SceneDiagnostic>,
     removed_scripts: BTreeSet<ScriptId>,
     script_links_modified: bool,
 }
@@ -74,16 +75,18 @@ impl AuthoringDocument {
             return Self::open_scene(project, relative, read_only);
         }
         let scene_path = project.start_scene_path()?;
-        let (document, recovery_read_only, recovered_from_backup) = if scene_path.is_file() {
-            let loaded = load_scene_recovering(&scene_path)?;
-            (
-                loaded.document,
-                loaded.read_only,
-                loaded.source == RecoverySource::Backup,
-            )
-        } else {
-            (SceneDocument::new("Main"), false, false)
-        };
+        let (document, recovery_read_only, recovered_from_backup, diagnostics) =
+            if scene_path.is_file() {
+                let loaded = load_scene_recovering_for_editing(&scene_path)?;
+                (
+                    loaded.document,
+                    loaded.read_only,
+                    loaded.source == RecoverySource::Backup,
+                    loaded.diagnostics,
+                )
+            } else {
+                (SceneDocument::new("Main"), false, false, Vec::new())
+            };
         Self::from_scene(
             project,
             scene_path,
@@ -91,6 +94,7 @@ impl AuthoringDocument {
             read_only,
             recovery_read_only,
             recovered_from_backup,
+            diagnostics,
         )
     }
 
@@ -133,7 +137,7 @@ impl AuthoringDocument {
         if !canonical(&scene_path)?.starts_with(canonical(&scenes)?) {
             return Err(AuthoringError::UnsafeScenePath);
         }
-        let loaded = load_scene_recovering(&scene_path)?;
+        let loaded = load_scene_recovering_for_editing(&scene_path)?;
         Self::from_scene(
             project,
             scene_path,
@@ -141,6 +145,7 @@ impl AuthoringDocument {
             read_only,
             loaded.read_only,
             loaded.source == RecoverySource::Backup,
+            loaded.diagnostics,
         )
     }
 
@@ -173,6 +178,7 @@ impl AuthoringDocument {
         read_only: bool,
         recovery_read_only: bool,
         recovered_from_backup: bool,
+        scene_diagnostics: Vec<SceneDiagnostic>,
     ) -> Result<Self, AuthoringError> {
         let world = document.create_world()?;
         let mut undo = UndoStack::new();
@@ -189,6 +195,7 @@ impl AuthoringDocument {
             read_only: read_only || recovery_read_only,
             project_read_only: read_only,
             recovered_from_backup,
+            scene_diagnostics,
             removed_scripts: BTreeSet::new(),
             script_links_modified: false,
         })
@@ -262,6 +269,10 @@ impl AuthoringDocument {
 
     pub const fn is_read_only(&self) -> bool {
         self.read_only
+    }
+
+    pub fn scene_diagnostics(&self) -> &[SceneDiagnostic] {
+        &self.scene_diagnostics
     }
 
     pub const fn recovered_from_backup(&self) -> bool {
@@ -986,6 +997,65 @@ mod tests {
     use engine_project::ProjectTemplate;
     use glam::Vec3;
     use tempfile::tempdir;
+
+    #[test]
+    fn switching_to_externally_edited_scene_keeps_it_writable_and_uses_primary() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("external"),
+            "External",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let scenes = project.directory(VirtualDirectory::Scenes).unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        document.save().unwrap();
+        for (name, has_backup) in [("other.scene", false), ("nested/legacy.rscene", true)] {
+            let path = scenes.join(name);
+            if has_backup {
+                save_scene_atomic(&path, &SceneDocument::new("Old backup")).unwrap();
+            }
+            save_scene_atomic(&path, &SceneDocument::new("Other")).unwrap();
+            let edited = std::fs::read_to_string(&path)
+                .unwrap()
+                .replace("\"Other\"", "\"External name\"");
+            std::fs::write(&path, &edited).unwrap();
+            document.switch_scene(name).unwrap();
+            assert!(!document.is_read_only(), "{name} must remain editable");
+            assert!(
+                document
+                    .scene_diagnostics()
+                    .iter()
+                    .any(|item| item.message.contains("checksum mismatch"))
+            );
+            assert_eq!(
+                document.scene_name, "External name",
+                "must not load an older backup"
+            );
+            document.add_folder(None).unwrap();
+            document.save().unwrap();
+            let backup = engine_platform::AtomicFileService::backup_path(&path);
+            assert_eq!(std::fs::read_to_string(backup).unwrap(), edited);
+            assert!(!load_scene_recovering(&path).unwrap().read_only);
+            document.switch_scene("main.scene").unwrap();
+        }
+        let future = String::from_utf8(SceneDocument::new("Future").to_bytes().unwrap())
+            .unwrap()
+            .replace(
+                &format!("schema_version: {}", engine_world::CURRENT_SCENE_VERSION),
+                &format!(
+                    "schema_version: {}",
+                    engine_world::CURRENT_SCENE_VERSION + 1
+                ),
+            );
+        std::fs::write(scenes.join("future.scene"), future).unwrap();
+        document.switch_scene("future.scene").unwrap();
+        assert!(document.is_read_only());
+        assert!(!document.scene_diagnostics().is_empty());
+        document.switch_scene("main.scene").unwrap();
+        assert!(!document.is_read_only());
+        assert!(document.scene_diagnostics().is_empty());
+    }
 
     #[test]
     fn opening_without_main_uses_top_scene_and_remains_editable() {
