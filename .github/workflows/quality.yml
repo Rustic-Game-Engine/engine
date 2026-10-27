@@ -142,10 +142,16 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - name: Native, JVM, and PHP toolchains
+      - name: Native and PHP toolchains
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang g++ openjdk-21-jdk php-cli libwayland-dev libxkbcommon-dev libx11-dev
+          sudo apt-get install --yes clang g++ php-cli libwayland-dev libxkbcommon-dev libx11-dev
+      - name: Select cached Java 21 toolchain
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+          check-latest: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22'
