@@ -1,6 +1,8 @@
 # Explorer and asset management
 
-Prerequisites: a writable project and an existing asset file. Stop Play before reorganising project files. Switch **Project → Explorer** to browse directories; **Filter** matches names and project-relative paths.
+Prerequisites: a writable project and an existing asset file. Stop Play before reorganising project files. Switch **Explorer** to browse directories; **Filter** matches names and project-relative paths.
+
+**Explorer** and **Scene Explorer** are independent dock tabs. Drag a tab header to group it elsewhere, or drop on a docking preview at a panel edge to split the view. **Properties** edits the selected object; **Terminal** displays runtime logs. Use **View → Reset dock layout** to recover the default arrangement. Dock geometry resets on project reopening.
 
 ## Import a model
 
@@ -17,7 +19,7 @@ The project separates assets, scenes, scripts, `ui/` Web assets, and configurati
 
 ## Rename, move, copy, cut and delete
 
-Click an Explorer file or folder name once to highlight it. Double-click the name to edit it inline. Press **Enter** or click elsewhere to save; **Escape** cancels. Use a single filename, including its extension. Empty names, path separators and existing names are rejected; Console explains the failure. Scene-tab selection and rename controls keep their existing behavior.
+Click an Explorer file or folder name once to highlight it. Double-click the name to edit it inline. Press **Enter** or click elsewhere to save; **Escape** cancels. Use a single filename, including its extension. Empty names, path separators and existing names are rejected; Console explains the failure. Scene Explorer selection and rename controls keep their existing behavior.
 
 **Shift-click** adds files or folders to the selection. Holding Shift and the primary mouse button while moving over names also adds those items. **Ctrl-click** highlights the visible range between the last highlighted item and the new item, including both ends. The range follows the tree's displayed order and skips collapsed/filtered entries. Ctrl+Shift adds that range to the existing selection.
 
@@ -33,7 +35,7 @@ These controls require a writable project and stopped Play. Moves and renames ke
 
 Successful Explorer file operations reload imported models and refresh the viewport. Moving or renaming a model to another supported model extension preserves its Asset ID through the sidecar. Deleting a model or changing its extension to an unsupported one removes its cached geometry from rendering and picking; the scene object remains with its unresolved asset reference. Restore the source and sidecar to a supported path, then restart the editor or perform another Explorer file operation to reload it.
 
-World/Local space applies to scene transforms: switch to **Project → Scene**, right-click the object and choose **Use World Space** or **Use Local Space**. This changes the active transform gizmo axes without changing the object's transform.
+World/Local space applies to scene transforms: switch to **Scene Explorer**, right-click the object and choose **Use World Space** or **Use Local Space**. This changes the active transform gizmo axes without changing the object's transform.
 
 ## Known limitations and diagnosis
 

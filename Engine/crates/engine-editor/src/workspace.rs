@@ -19,10 +19,11 @@ pub enum EditorTab {
 }
 
 impl EditorTab {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Viewport3d,
         Self::Viewport2d,
         Self::Hierarchy,
+        Self::ContentBrowser,
         Self::Inspector,
         Self::Console,
     ];
@@ -32,10 +33,10 @@ impl EditorTab {
             Self::Viewport3d => "3D Viewport",
             Self::Viewport2d => "2D Viewport",
             Self::SceneGraph => "Scene Graph",
-            Self::Hierarchy => "Game Project Explorer",
-            Self::Inspector => "Inspector",
-            Self::ContentBrowser => "Content Browser",
-            Self::Console => "Console",
+            Self::Hierarchy => "Scene Explorer",
+            Self::Inspector => "Properties",
+            Self::ContentBrowser => "Explorer",
+            Self::Console => "Terminal",
             Self::Settings => "Settings",
         }
     }
@@ -88,6 +89,7 @@ impl EditorWorkspace {
                 | ProjectTemplate::TopDown => vec![
                     EditorTab::Viewport2d,
                     EditorTab::Hierarchy,
+                    EditorTab::ContentBrowser,
                     EditorTab::Inspector,
                     EditorTab::Console,
                 ],
@@ -95,6 +97,7 @@ impl EditorWorkspace {
                 _ => vec![
                     EditorTab::Viewport3d,
                     EditorTab::Hierarchy,
+                    EditorTab::ContentBrowser,
                     EditorTab::Inspector,
                     EditorTab::Console,
                 ],
@@ -105,7 +108,16 @@ impl EditorWorkspace {
 
     /// Converts the old all-tabs default to a template-aware layout while preserving custom sets.
     pub fn migrate_legacy_default_for_template(&mut self, template: ProjectTemplate) -> bool {
-        if self.tabs == EditorTab::ALL && template != ProjectTemplate::Blank {
+        let legacy_default = [
+            EditorTab::Viewport3d,
+            EditorTab::Viewport2d,
+            EditorTab::Hierarchy,
+            EditorTab::Inspector,
+            EditorTab::Console,
+        ];
+        if (self.tabs == EditorTab::ALL || self.tabs == legacy_default)
+            && template != ProjectTemplate::Blank
+        {
             self.tabs = Self::for_template(template).tabs;
             true
         } else {
@@ -113,24 +125,23 @@ impl EditorWorkspace {
         }
     }
 
-    /// Consolidates the legacy content browser into the project explorer panel.
-    pub fn consolidate_project_explorer(&mut self) -> bool {
-        let had_content_browser = self.tabs.contains(&EditorTab::ContentBrowser);
-        self.tabs.retain(|tab| *tab != EditorTab::ContentBrowser);
-        if had_content_browser && !self.tabs.contains(&EditorTab::Hierarchy) {
-            self.tabs.push(EditorTab::Hierarchy);
+    /// Splits the old combined project panel while retaining serialized tab identities.
+    pub fn separate_project_panels(&mut self) -> bool {
+        let before = self.clone();
+        if let Some(index) = self
+            .tabs
+            .iter()
+            .position(|tab| *tab == EditorTab::Hierarchy)
+            && !self.tabs.contains(&EditorTab::ContentBrowser)
+        {
+            self.tabs.insert(index + 1, EditorTab::ContentBrowser);
         }
-        for window in &mut self.windows {
-            if window.tab == EditorTab::ContentBrowser {
-                window.tab = EditorTab::Hierarchy;
-            }
-        }
-        let had_settings = self.tabs.contains(&EditorTab::Settings);
         self.tabs.retain(|tab| *tab != EditorTab::Settings);
         self.windows
             .retain(|window| window.tab != EditorTab::Settings);
-        had_content_browser || had_settings
+        *self != before
     }
+
     /// Loads settings, recovering missing data with defaults.
     ///
     /// # Errors
@@ -181,6 +192,57 @@ mod tests {
     use super::*;
     use engine_platform::AtomicFileService;
     use tempfile::tempdir;
+
+    #[test]
+    fn legacy_combined_panel_splits_without_losing_file_windows() {
+        let mut workspace = EditorWorkspace {
+            tabs: vec![
+                EditorTab::Viewport3d,
+                EditorTab::Hierarchy,
+                EditorTab::Settings,
+            ],
+            windows: vec![WorkspaceWindow {
+                tab: EditorTab::ContentBrowser,
+                position: [32.0, 32.0],
+                size: [500.0, 700.0],
+                monitor: 0,
+            }],
+            ..Default::default()
+        };
+        assert!(workspace.separate_project_panels());
+        assert_eq!(
+            workspace.tabs,
+            vec![
+                EditorTab::Viewport3d,
+                EditorTab::Hierarchy,
+                EditorTab::ContentBrowser,
+            ]
+        );
+        assert_eq!(workspace.windows[0].tab, EditorTab::ContentBrowser);
+        assert!(!workspace.separate_project_panels());
+    }
+
+    #[test]
+    fn old_default_retains_template_viewport_when_panels_split() {
+        let mut workspace = EditorWorkspace {
+            tabs: vec![
+                EditorTab::Viewport3d,
+                EditorTab::Viewport2d,
+                EditorTab::Hierarchy,
+                EditorTab::Inspector,
+                EditorTab::Console,
+            ],
+            ..Default::default()
+        };
+        workspace.tabs.push(EditorTab::Settings);
+        workspace.separate_project_panels();
+        assert!(workspace.migrate_legacy_default_for_template(ProjectTemplate::Empty2d));
+        assert_eq!(
+            workspace,
+            EditorWorkspace::for_template(ProjectTemplate::Empty2d)
+        );
+        assert!(workspace.tabs.contains(&EditorTab::ContentBrowser));
+    }
 
     #[test]
     fn workspace_round_trip_and_missing_monitor_recovery() {
