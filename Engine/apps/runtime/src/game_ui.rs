@@ -1,4 +1,5 @@
 use resvg::{tiny_skia, usvg};
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -15,6 +16,10 @@ impl GameUi {
         }
         let mut files = collect_files(&directory)?;
         files.sort();
+        // PHP behavior assets run through the gameplay host, which supplies the
+        // SDK and callback protocol. Running them again as pages bypasses that
+        // host and can fail on SDK imports or emit protocol JSON into the UI.
+        let php_behaviors = php_behavior_paths(root)?;
         let css = files
             .iter()
             .filter(|p| extension(p) == "css")
@@ -29,7 +34,7 @@ impl GameUi {
                     &std::fs::read_to_string(&path)
                         .map_err(|e| format!("could not read {}: {e}", path.display()))?,
                 ),
-                "php" => html.push_str(&render_php(&path)?),
+                "php" if !php_behaviors.contains(&path) => html.push_str(&render_php(&path)?),
                 _ => {}
             }
         }
@@ -100,20 +105,57 @@ fn extension(path: &Path) -> String {
         .unwrap_or("")
         .to_ascii_lowercase()
 }
+
+fn php_behavior_paths(root: &Path) -> Result<HashSet<PathBuf>, String> {
+    let path = root.join("config/scripts.ron");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(error) => return Err(format!("could not read {}: {error}", path.display())),
+    };
+    let loaded = engine_scripting::load_manifest(&bytes)
+        .map_err(|error| format!("could not load {}: {error}", path.display()))?;
+    Ok(loaded
+        .manifest
+        .scripts
+        .into_iter()
+        .filter(|entry| entry.language == engine_scripting::ScriptLanguage::Php)
+        .map(|entry| root.join(entry.relative_path))
+        .collect())
+}
+
 fn render_php(path: &Path) -> Result<String, String> {
+    // Resolve before changing cwd so relative snapshot roots do not repeat ui/.
+    let path = std::path::absolute(path)
+        .map_err(|e| format!("could not resolve PHP UI {}: {e}", path.display()))?;
     let output = Command::new("php")
-        .arg(path)
+        .args(["-d", "display_errors=stderr"])
+        .arg(&path)
         .current_dir(path.parent().unwrap_or(Path::new(".")))
         .output()
         .map_err(|e| format!("could not render {} (PHP is required): {e}", path.display()))?;
     if !output.status.success() {
-        return Err(format!(
-            "PHP UI {} failed: {}",
-            path.display(),
-            String::from_utf8_lossy(&output.stderr)
-        ));
+        return Err(php_failure(&path, &output));
     }
     String::from_utf8(output.stdout).map_err(|e| format!("PHP UI output is not UTF-8: {e}"))
+}
+
+fn php_failure(path: &Path, output: &std::process::Output) -> String {
+    let mut message = format!("PHP UI {} failed ({}).", path.display(), output.status);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    if !stderr.trim().is_empty() {
+        let _ = write!(message, "\nstderr: {}", stderr.trim());
+    }
+    if !stdout.trim().is_empty() {
+        let _ = write!(message, "\nstdout: {}", stdout.trim());
+    }
+    if stderr.trim().is_empty() && stdout.trim().is_empty() {
+        message.push_str(
+            " PHP produced no diagnostic output; check the page and PHP CLI configuration.",
+        );
+    }
+    message
 }
 
 fn html_to_svg(html: &str, css: &str) -> String {
@@ -204,4 +246,105 @@ fn escape(value: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine_scripting::{
+        ScriptApiVersion, ScriptId, ScriptLanguage, ScriptManifest, ScriptManifestEntry,
+        save_manifest_atomic,
+    };
+
+    #[test]
+    fn registered_php_behaviors_are_not_executed_as_ui_pages() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        std::fs::create_dir_all(root.join("ui/nested")).unwrap();
+        std::fs::create_dir_all(root.join("config")).unwrap();
+        let mut manifest = ScriptManifest::default();
+        // Include unused/disabled behaviors as well: registration identifies the
+        // asset's role even when no instance currently runs it.
+        for relative_path in ["ui/hardware.php", "ui/nested/unused.PHP"] {
+            std::fs::write(
+                root.join(relative_path),
+                "<?php require __DIR__ . '/rustic.php'; exit(99);",
+            )
+            .unwrap();
+            manifest.scripts.push(ScriptManifestEntry {
+                id: ScriptId::new(),
+                language: ScriptLanguage::Php,
+                relative_path: relative_path.into(),
+                api_version: ScriptApiVersion::CURRENT,
+                public_properties: Vec::new(),
+            });
+        }
+        save_manifest_atomic(&root.join("config/scripts.ron"), &manifest).unwrap();
+        assert!(GameUi::load(root).unwrap().tree.is_none());
+        std::fs::write(root.join("ui/index.html"), "<p>Game HUD</p>").unwrap();
+        assert!(GameUi::load(root).unwrap().tree.is_some());
+    }
+
+    #[test]
+    fn php_failure_includes_status_and_both_output_streams() {
+        #[cfg(unix)]
+        use std::os::unix::process::ExitStatusExt;
+        #[cfg(windows)]
+        use std::os::windows::process::ExitStatusExt;
+
+        let mut output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(256),
+            stdout: b"Fatal error: missing SDK".to_vec(),
+            stderr: Vec::new(),
+        };
+        let message = php_failure(Path::new("ui/hardware.php"), &output);
+        assert!(message.contains("ui/hardware.php"));
+        assert!(message.contains(&output.status.to_string()));
+        assert!(message.contains("stdout: Fatal error: missing SDK"));
+        output.stderr = b"PHP startup error".to_vec();
+        let message = php_failure(Path::new("ui/hardware.php"), &output);
+        assert!(message.contains("stderr: PHP startup error"));
+        assert!(message.contains("stdout: Fatal error: missing SDK"));
+        output.stdout.clear();
+        output.stderr.clear();
+        assert!(
+            php_failure(Path::new("ui/hardware.php"), &output)
+                .contains("PHP produced no diagnostic output")
+        );
+    }
+
+    #[test]
+    fn standalone_php_pages_render_and_report_errors() {
+        if !Command::new("php")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
+            eprintln!("skipping PHP page integration check: PHP CLI is unavailable");
+            return;
+        }
+        // Keep the path relative and include spaces to exercise command/cwd handling.
+        let directory = tempfile::Builder::new()
+            .prefix("php ui ")
+            .tempdir_in(".")
+            .unwrap();
+        let root = directory.path();
+        std::fs::create_dir(root.join("ui")).unwrap();
+        let page = root.join("ui/index.php");
+        std::fs::write(&page, "<?php echo '<p>PHP HUD</p>';").unwrap();
+        assert_eq!(render_php(&page).unwrap(), "<p>PHP HUD</p>");
+        assert!(GameUi::load(root).unwrap().tree.is_some());
+        std::fs::write(&page, "<?php echo 'stdout failure'; exit(23);").unwrap();
+        assert!(render_php(&page).unwrap_err().contains("stdout failure"));
+        std::fs::write(&page, "<?php missing_ui_function();").unwrap();
+        assert!(
+            render_php(&page)
+                .unwrap_err()
+                .contains("missing_ui_function")
+        );
+        std::fs::write(&page, "<?php exit(23);").unwrap();
+        let error = render_php(&page).unwrap_err();
+        assert!(error.contains("23"), "{error}");
+        assert!(error.contains("PHP produced no diagnostic output"));
+    }
 }
