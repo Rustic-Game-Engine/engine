@@ -144,7 +144,6 @@ struct EditorApp {
     last_scene_scan: Instant,
     scene_disk_snapshot: Option<Vec<u8>>,
     external_scene_change_pending: bool,
-    project_panel_mode: ProjectPanelMode,
     project_filter: String,
     preview: Option<egui::TextureHandle>,
     viewport_request: SyncSender<ViewportRenderRequest>,
@@ -192,7 +191,7 @@ impl EditorApp {
         let workspace_existed = workspace_path.is_file();
         let mut workspace = EditorWorkspace::load(&workspace_store, &workspace_path)
             .unwrap_or_else(|_| EditorWorkspace::for_template(template));
-        workspace.consolidate_project_explorer();
+        workspace.separate_project_panels();
         if workspace_existed {
             workspace.migrate_legacy_default_for_template(template);
         } else {
@@ -254,7 +253,6 @@ impl EditorApp {
             last_scene_scan: Instant::now(),
             scene_disk_snapshot,
             external_scene_change_pending: false,
-            project_panel_mode: ProjectPanelMode::Scene,
             project_filter: String::new(),
             preview: None,
             viewport_request,
@@ -1564,7 +1562,6 @@ impl eframe::App for EditorApp {
             project_root: &project_root,
             console: &mut self.console,
             project_tree: self.project_tree.as_ref(),
-            project_panel_mode: &mut self.project_panel_mode,
             project_filter: &mut self.project_filter,
             preview: self.preview.as_ref(),
             preview_status: &self.preview_status,
@@ -1605,7 +1602,6 @@ struct EditorViewer<'a> {
     project_root: &'a Path,
     console: &'a mut RuntimeConsole,
     project_tree: Option<&'a ProjectDirectory>,
-    project_panel_mode: &'a mut ProjectPanelMode,
     project_filter: &'a mut String,
     preview: Option<&'a egui::TextureHandle>,
     preview_status: &'a str,
@@ -1645,13 +1641,23 @@ impl Behavior<EditorTab> for EditorViewer<'_> {
         pane.title().into()
     }
 
+    fn simplification_options(&self) -> egui_tiles::SimplificationOptions {
+        // Keep a drag handle even when a pane is alone after splitting a tab group.
+        egui_tiles::SimplificationOptions {
+            all_panes_must_have_tabs: true,
+            ..Default::default()
+        }
+    }
+
     fn pane_ui(&mut self, ui: &mut egui::Ui, _tile_id: TileId, pane: &mut EditorTab) -> UiResponse {
         match pane {
             EditorTab::Viewport3d => self.viewport(ui, false),
             EditorTab::Viewport2d => self.viewport(ui, true),
-            EditorTab::Hierarchy => self.hierarchy(ui),
+            EditorTab::Hierarchy => {
+                self.project_header(ui);
+                self.scene_tree(ui);
+            }
             EditorTab::Inspector | EditorTab::Settings => self.inspector(ui),
-            // Kept as a compatibility fallback for an in-memory legacy dock.
             EditorTab::ContentBrowser => self.project_explorer(ui),
             EditorTab::Console => self.console(ui),
             EditorTab::SceneGraph => {
@@ -2089,15 +2095,12 @@ impl EditorViewer<'_> {
         }
     }
 
-    fn hierarchy(&mut self, ui: &mut egui::Ui) {
-        self.project_explorer(ui);
+    fn project_explorer(&mut self, ui: &mut egui::Ui) {
+        self.project_header(ui);
+        self.file_explorer(ui);
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        reason = "the project explorer keeps its compact tree and toolbar interaction together"
-    )]
-    fn project_explorer(&mut self, ui: &mut egui::Ui) {
+    fn project_header(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(egui::RichText::new("Project").color(ui.visuals().text_color()));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2106,21 +2109,7 @@ impl EditorViewer<'_> {
                     .on_hover_text("Project settings");
             });
         });
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.selectable_value(self.project_panel_mode, ProjectPanelMode::Scene, "Scene");
-            ui.selectable_value(
-                self.project_panel_mode,
-                ProjectPanelMode::Explorer,
-                "Explorer",
-            );
-        });
         ui.separator();
-
-        match *self.project_panel_mode {
-            ProjectPanelMode::Scene => self.scene_tree(ui),
-            ProjectPanelMode::Explorer => self.file_explorer(ui),
-        }
     }
 
     fn project_settings(&mut self, ui: &mut egui::Ui) {
@@ -3177,7 +3166,9 @@ fn default_dock(tabs: &[EditorTab]) -> Tree<EditorTab> {
     let left = tiles.insert_pane(EditorTab::Inspector);
     let console = tiles.insert_pane(EditorTab::Console);
     let center = tiles.insert_vertical_tile(vec![viewports, console]);
-    let hierarchy = tiles.insert_pane(EditorTab::Hierarchy);
+    let scene = tiles.insert_pane(EditorTab::Hierarchy);
+    let explorer = tiles.insert_pane(EditorTab::ContentBrowser);
+    let hierarchy = tiles.insert_tab_tile(vec![scene, explorer]);
     let root = tiles.insert_horizontal_tile(vec![left, center, hierarchy]);
     Tree::new("rustic-editor-dock", root, tiles)
 }
@@ -4057,13 +4048,6 @@ fn scene_entry_row(
             }
         }
     });
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum ProjectPanelMode {
-    #[default]
-    Scene,
-    Explorer,
 }
 
 #[derive(Clone, Debug)]
@@ -5444,6 +5428,127 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
 mod explorer_tests {
     use super::*;
 
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercises the real dock with pointer-driven tab moves"
+    )]
+    fn independent_panel_tabs_can_be_dragged_between_groups() {
+        let temporary = TestProject::new();
+        let project = Project::create(
+            temporary.0.join("game"),
+            "Game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.save().unwrap();
+        let root = document.project().root().to_path_buf();
+        let tree = scan_project_directory(&root, &root);
+        let mut action = None;
+        let mut viewer = EditorViewer {
+            document: &mut document,
+            project_root: &root,
+            console: &mut RuntimeConsole::default(),
+            project_tree: Some(&tree),
+            project_filter: &mut String::new(),
+            preview: None,
+            preview_status: "",
+            request_preview: false,
+            playing: false,
+            can_switch_scene: true,
+            play: None,
+            play_keys: BTreeSet::new(),
+            camera: &mut EditorCamera::default(),
+            viewport_extent: &mut [640, 480],
+            gizmo: &mut GizmoSettings::default(),
+            gizmo_drag: &mut None,
+            gizmo_widget: &mut transform_widget::TransformWidget::default(),
+            scene_graph: &mut scene_graph::SceneGraph::default(),
+            model_assets: &mut BTreeMap::new(),
+            project_file_action: &mut action,
+        };
+        for dark in [true, false] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut dock = default_dock(&EditorTab::ALL);
+            let mut time = 0.0;
+            let mut frame = |dock: &mut Tree<EditorTab>, events| {
+                time += 0.1;
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(1440.0, 900.0),
+                        )),
+                        time: Some(time),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| dock.ui(&mut viewer, ui),
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let output = frame(&mut dock, vec![]);
+            for tab in [
+                EditorTab::Hierarchy,
+                EditorTab::ContentBrowser,
+                EditorTab::Inspector,
+                EditorTab::Console,
+            ] {
+                text_position(&output, tab.title());
+            }
+            for (source, target) in [
+                (EditorTab::ContentBrowser, EditorTab::Inspector),
+                (EditorTab::Hierarchy, EditorTab::Console),
+                (EditorTab::Inspector, EditorTab::Console),
+                (EditorTab::Console, EditorTab::ContentBrowser),
+            ] {
+                let output = frame(&mut dock, vec![]);
+                let start = text_position(&output, source.title());
+                let end = text_position(&output, target.title());
+                frame(&mut dock, vec![egui::Event::PointerMoved(start)]);
+                frame(
+                    &mut dock,
+                    vec![pointer(start, egui::PointerButton::Primary, true)],
+                );
+                frame(
+                    &mut dock,
+                    vec![egui::Event::PointerMoved(start + egui::vec2(20.0, 10.0))],
+                );
+                frame(&mut dock, vec![egui::Event::PointerMoved(end)]);
+                frame(
+                    &mut dock,
+                    vec![pointer(end, egui::PointerButton::Primary, false)],
+                );
+                frame(&mut dock, vec![]);
+                let pane_id = |tab| {
+                    dock.tiles
+                        .iter()
+                        .find_map(|(id, tile)| {
+                            matches!(tile, egui_tiles::Tile::Pane(pane) if *pane == tab)
+                                .then_some(*id)
+                        })
+                        .unwrap()
+                };
+                assert_eq!(
+                    dock.tiles.parent_of(pane_id(source)),
+                    dock.tiles.parent_of(pane_id(target)),
+                    "{source:?} must join {target:?}"
+                );
+            }
+        }
+        assert!(
+            !viewer.document.is_modified(),
+            "docking must not edit the scene"
+        );
+    }
+
     fn scene_context_frame(
         context: &egui::Context,
         time: f64,
@@ -5590,7 +5695,6 @@ mod explorer_tests {
                 project_root: &root,
                 console: &mut RuntimeConsole::default(),
                 project_tree: Some(&tree),
-                project_panel_mode: &mut ProjectPanelMode::Scene,
                 project_filter: &mut String::new(),
                 preview: None,
                 preview_status: "",
@@ -6573,6 +6677,8 @@ mod explorer_tests {
         output
             .shapes
             .iter()
+            // Popups can repeat labels already visible in the file tree.
+            .rev()
             .find_map(|shape| {
                 if let egui::epaint::Shape::Text(text) = &shape.shape
                     && text.galley.job.text == label
