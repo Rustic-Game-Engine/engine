@@ -86,8 +86,9 @@ function Save-VerifiedInstaller($Asset, [string]$Directory) {
     }
 }
 
-function Test-RusticRunning([string]$Directory) {
+function Test-RusticRunning([string]$Directory, [switch]$IgnoreAgentBackends) {
     $names = @('rustic-project-manager', 'rustic-editor', 'rustic-runtime', 'rustic-asset-worker', 'rustic-agent-backend', 'rustic-luau-host', 'rustic-setup-helper')
+    if ($IgnoreAgentBackends) { $names = @($names | Where-Object { $_ -ne 'rustic-agent-backend' }) }
     foreach ($process in @(Get-Process -Name $names -ErrorAction SilentlyContinue)) {
         try {
             $path = $process.Path
@@ -98,12 +99,32 @@ function Test-RusticRunning([string]$Directory) {
     return $false
 }
 
+function Stop-IdleAgentBackends([string]$Directory) {
+    # MCP clients own these processes and keep their stdin open after Rustic exits.
+    # Keep them available until editors, games and other workers have all closed.
+    if (Test-RusticRunning $Directory -IgnoreAgentBackends) { return }
+    foreach ($process in @(Get-Process -Name 'rustic-agent-backend' -ErrorAction SilentlyContinue)) {
+        try {
+            $path = $process.Path
+            # Never terminate a backend whose installation cannot be established.
+            if ($path -and (Split-Path -Parent $path) -eq $Directory) {
+                Stop-Process -InputObject $process -Force -ErrorAction Stop
+                Write-UpdateLog "Stopped agent backend (PID $($process.Id)) for installation."
+            }
+        } catch { Write-UpdateLog "Could not stop agent backend (PID $($process.Id)): $($_.Exception.Message)" }
+    }
+}
+
 function Wait-DesktopExit([string]$Directory, [string]$CacheDirectory, [string]$Tag) {
     $requestFile = Join-Path $CacheDirectory 'install-request.txt'
     $lastRequest = ''
     $requestWait = 0
     $ticks = 0
-    while (Test-RusticRunning $Directory) {
+    while ($true) {
+        # Repeat on every poll: clients may have started more than one backend or
+        # restarted a disconnected one while the desktop was closing.
+        Stop-IdleAgentBackends $Directory
+        if (-not (Test-RusticRunning $Directory)) { return $true }
         $request = if (Test-Path -LiteralPath $requestFile) {
             [IO.File]::ReadAllText($requestFile)
         } else { '' }
@@ -137,7 +158,6 @@ function Wait-DesktopExit([string]$Directory, [string]$CacheDirectory, [string]$
         Start-Sleep -Seconds 1
         $ticks++
     }
-    return $true
 }
 
 function Install-DesktopUpdate([string]$Installer, [string]$Directory, [string]$LogDirectory) {

@@ -100,6 +100,70 @@ try {
     function Get-Process { param($Name, $ErrorAction); [pscustomobject]@{ Path = $null; ProcessName = 'rustic-runtime'; Id = 123 } }
     Assert-Equal (Test-RusticRunning $temp) $true 'Inaccessible process must block installation'
 
+    # MCP clients can keep several backends alive after all desktop windows close.
+    $editor = [pscustomobject]@{ Path = (Join-Path $temp 'rustic-editor.exe'); ProcessName = 'rustic-editor'; Id = 1 }
+    $backend1 = [pscustomobject]@{ Path = (Join-Path $temp 'rustic-agent-backend.exe'); ProcessName = 'rustic-agent-backend'; Id = 2 }
+    $backend2 = [pscustomobject]@{ Path = $backend1.Path; ProcessName = 'rustic-agent-backend'; Id = 3 }
+    $foreign = [pscustomobject]@{ Path = (Join-Path $temp 'other/rustic-agent-backend.exe'); ProcessName = 'rustic-agent-backend'; Id = 4 }
+    $unknown = [pscustomobject]@{ Path = $null; ProcessName = 'rustic-agent-backend'; Id = 5 }
+    $script:Processes = @($editor, $backend1, $backend2, $foreign)
+    $script:Stopped = @()
+    $script:FailStop = $false
+    function Get-Process {
+        param($Name, $ErrorAction)
+        $script:Processes | Where-Object {
+            $processName = $_.ProcessName
+            @($Name | Where-Object { $processName -like $_ }).Count -gt 0
+        }
+    }
+    function Stop-Process {
+        param($InputObject, [switch]$Force, $ErrorAction)
+        if ($script:FailStop) { throw 'Access denied' }
+        $script:Stopped += $InputObject.Id
+        $script:Processes = @($script:Processes | Where-Object { $_.Id -ne $InputObject.Id })
+    }
+    Stop-IdleAgentBackends $temp
+    Assert-Equal $script:Stopped.Count 0 'Keep MCP available while an editor is open'
+    foreach ($name in @('rustic-project-manager', 'rustic-runtime', 'rustic-asset-worker', 'rustic-luau-host', 'rustic-setup-helper')) {
+        $worker = [pscustomobject]@{ Path = (Join-Path $temp ($name + '.exe')); ProcessName = $name; Id = 6 }
+        $script:Processes = @($worker, $backend1)
+        Stop-IdleAgentBackends $temp
+        Assert-Equal $script:Stopped.Count 0 "Keep MCP available while $name is open"
+    }
+    $script:Processes = @($backend1, $backend2, $foreign)
+    # No explicit close request is required after a normal desktop exit.
+    Assert-Equal (Wait-DesktopExit $temp $temp $next.tag_name) $true 'Remaining backends cannot prevent installation'
+    Assert-Equal ($script:Stopped -join ',') '2,3' 'Stop every backend from this installation'
+    Assert-Equal $script:Processes[0].Id 4 'Leave other installations running'
+    $script:Processes = @($unknown)
+    Stop-IdleAgentBackends $temp
+    Assert-Equal $script:Stopped.Count 2 'Never stop a backend with an unknown executable path'
+    Assert-Equal (Test-RusticRunning $temp) $true 'An unknown backend still blocks Setup'
+    $script:Processes = @($backend1, $editor)
+    $editor.Path = $null
+    Stop-IdleAgentBackends $temp
+    Assert-Equal $script:Stopped.Count 2 'An inaccessible desktop process prevents backend cleanup'
+
+    # A failed termination must keep blocking Setup and be retried on the next poll.
+    $script:Processes = @($backend1, $backend2)
+    $script:FailStop = $true
+    Stop-IdleAgentBackends $temp
+    Assert-Equal (Test-RusticRunning $temp) $true 'Failed termination still blocks Setup'
+    Assert-Equal ((Get-Content -LiteralPath (Join-Path $temp 'update.log') -Raw) -match 'Access denied') $true 'Log termination failures'
+    $script:CleanupPolls = 0
+    function Start-Sleep {
+        param($Seconds)
+        $script:CleanupPolls++
+        if ($script:CleanupPolls -gt 1) { throw 'Backends were not retried promptly' }
+        $script:FailStop = $false
+        # Simulate a client starting another backend between updater polls.
+        $script:Processes += [pscustomobject]@{ Path = $backend1.Path; ProcessName = 'rustic-agent-backend'; Id = 7 }
+    }
+    Assert-Equal (Wait-DesktopExit $temp $temp $next.tag_name) $true 'Retry failed and newly started backends on each poll'
+    Assert-Equal ($script:Stopped -join ',') '2,3,2,3,7' 'Cleanup includes every remaining backend'
+    Remove-Item Function:Stop-Process
+    function Get-Process { param($Name, $ErrorAction); [pscustomobject]@{ Path = $null; ProcessName = 'rustic-runtime'; Id = 123 } }
+
     # Exercise the download -> wait -> install path without starting any executable.
     Set-Content -LiteralPath (Join-Path $temp 'build-commit.txt') -Value $commit
     Set-Content -LiteralPath (Join-Path $temp 'install-scope.txt') -Value 'currentuser'

@@ -26,7 +26,12 @@ Choosing **Install update** or **Update** gracefully closes the desktop windows.
 Editors ask to save unsaved scenes first; save failures leave the editor open.
 Active Play sessions stop and their runtime changes can be reviewed before closing.
 Canceling leaves the update available. Standalone games/workers must be closed
-separately: Setup waits until all Rustic processes from that installation exit.
+separately. Once the desktop windows, games and other workers have exited, the
+updater stops every `rustic-agent-backend` from that installation, including
+backends kept alive by external MCP clients. This also applies after a normal app
+exit without clicking **Update**. Backends from other installations remain running.
+Reconnect the Rustic MCP server in your agent client after installation to use the
+new backend. Setup waits until all Rustic processes from that installation exit.
 Windows opened after an update request stay open, so you can return to work while
 installation is waiting. If a requested update is still blocked after two minutes,
 the updater cancels that close request and restores the windows it already closed,
@@ -62,7 +67,12 @@ retries reuse an existing installer only after rechecking its size and SHA-256.
 A file lock prevents duplicate workers from the same
 user and installation. Network/API rate-limit and Setup failures leave the current
 application usable and retry after an hour while it remains open or on a later
-launch. If download completed but Setup has not started, close every Rustic process.
+launch. If download completed but Setup has not started, close remaining Rustic
+windows, standalone games and workers. Agent backends are stopped automatically
+once these close; termination failures are recorded in `update.log`. If a client
+continually restarts a backend, disconnect its Rustic MCP server until Setup
+finishes. Backends with unreadable installation paths still block Setup and must
+be closed separately.
 If no popup appears, focus Project Manager or the editor and wait a second. A
 previously claimed notification is remembered across restarts; use the **Update**
 button if it was already shown, including in a background window on older builds.
