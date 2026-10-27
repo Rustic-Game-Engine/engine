@@ -3,7 +3,7 @@ use engine_core::{
 };
 use engine_play::{
     AuthenticationToken, LocalEndpoint, PlayMode, RuntimeServerConfig, record_runtime_crash,
-    run_runtime_server_with_renderer,
+    run_runtime_server_with_viewport_renderer,
 };
 use glam::Mat4;
 
@@ -111,7 +111,7 @@ fn run(arguments: &[OsString]) -> Result<(), String> {
     if requires_native_window(mode, suppress_native_window) {
         run_windowed_runtime(config)
     } else {
-        render_runtime(config, None)
+        render_runtime(config, None, None)
     }
 }
 
@@ -127,11 +127,13 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
     let result_slot = Arc::clone(&server_result);
     let latest_frame = Arc::new(Mutex::new(None));
     let server_frames = Arc::clone(&latest_frame);
+    let viewport_extent = Arc::new(Mutex::new([1280, 720]));
+    let server_extent = Arc::clone(&viewport_extent);
     let server = thread::Builder::new()
         .name("rustic-runtime-server".to_owned())
         .spawn(move || {
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                render_runtime(config, Some(server_frames))
+                render_runtime(config, Some(server_frames), Some(server_extent))
             }))
             .unwrap_or_else(|payload| {
                 Err(format!(
@@ -156,6 +158,7 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
     event_loop.set_control_flow(ControlFlow::Wait);
     let mut window_app = RuntimeWindowApp::new(Arc::clone(&finished), title, size);
     window_app.latest_frame = latest_frame;
+    window_app.viewport_extent = viewport_extent;
     event_loop
         .run_app(&mut window_app)
         .map_err(|error| format!("native runtime event loop failed: {error}"))?;
@@ -186,6 +189,7 @@ struct RuntimeWindowApp {
     renderer: Option<SurfaceRenderer>,
     mesh: TexturedMesh,
     latest_frame: Arc<Mutex<Option<engine_play::BgraFrame>>>,
+    viewport_extent: Arc<Mutex<[u32; 2]>>,
     error: Option<String>,
 }
 
@@ -199,6 +203,7 @@ impl RuntimeWindowApp {
             renderer: None,
             mesh: frame_quad(),
             latest_frame: Arc::new(Mutex::new(None)),
+            viewport_extent: Arc::new(Mutex::new([1280, 720])),
             error: None,
         }
     }
@@ -226,6 +231,9 @@ impl RuntimeWindowApp {
             );
         } else if width > 0 && height > 0 {
             self.mesh.model_view_projection = frame_fit(width as f32 / height as f32);
+            if let Ok(mut extent) = self.viewport_extent.lock() {
+                *extent = engine_play::game_view_extent([width, height]);
+            }
         }
     }
 }
@@ -256,6 +264,9 @@ impl ApplicationHandler for RuntimeWindowApp {
         let size = window.inner_size();
         if size.width > 0 && size.height > 0 {
             self.mesh.model_view_projection = frame_fit(size.width as f32 / size.height as f32);
+            if let Ok(mut extent) = self.viewport_extent.lock() {
+                *extent = engine_play::game_view_extent([size.width, size.height]);
+            }
         }
         let renderer = match SurfaceRenderer::new(
             Arc::clone(&window),
@@ -397,10 +408,16 @@ fn frame_quad() -> TexturedMesh {
 fn render_runtime(
     config: RuntimeServerConfig,
     latest: Option<Arc<Mutex<Option<engine_play::BgraFrame>>>>,
+    native_extent: Option<Arc<Mutex<[u32; 2]>>>,
 ) -> Result<(), String> {
     let snapshot_root = config.snapshot_root.clone();
     let mut resources = None;
-    run_runtime_server_with_renderer(config, move |world, tick| {
+    run_runtime_server_with_viewport_renderer(config, move |world, tick, requested_extent| {
+        let [width, height] = if let Some(extent) = &native_extent {
+            *extent.lock().map_err(|_| "viewport extent lock poisoned")?
+        } else {
+            requested_extent
+        };
         // The first render happens after IPC authentication. Keep asset/UI/GPU
         // initialization here so its delays and failures use the readiness path.
         if resources.is_none() {
@@ -420,19 +437,19 @@ fn render_runtime(
             .ok_or("runtime renderer was not initialized")?;
         let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, models);
         let frame = renderer
-            .render(640, 360, &scene)
+            .render(width, height, &scene)
             .map_err(|e| e.to_string())?
             .ok_or("empty game frame")?;
         let mut pixels = frame.rgba8;
-        game_ui.composite_rgba(640, 360, &mut pixels)?;
+        game_ui.composite_rgba(width, height, &mut pixels)?;
         for pixel in pixels.as_chunks_mut::<4>().0 {
             pixel.swap(0, 2);
         }
         let frame = engine_play::BgraFrame {
             sequence: tick,
-            width: 640,
-            height: 360,
-            stride_bytes: 640 * 4,
+            width,
+            height,
+            stride_bytes: width * 4,
             pixels,
         };
         if let Some(latest) = &latest {

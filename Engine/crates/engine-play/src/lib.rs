@@ -15,6 +15,8 @@ mod script_runtime;
 pub mod simulation;
 pub mod snapshot;
 pub mod supervisor;
+pub mod viewport;
+pub use viewport::{MAX_GAME_DIMENSION, game_view_extent};
 
 pub use changes::{
     ApplyRuntimeChangesTransaction, MapChangeStore, RuntimeChange, RuntimeChangeError,
@@ -31,7 +33,7 @@ pub use protocol::{
 };
 pub use runtime_server::{
     RuntimeServerConfig, RuntimeServerError, record_runtime_crash, run_runtime_server,
-    run_runtime_server_with_renderer,
+    run_runtime_server_with_renderer, run_runtime_server_with_viewport_renderer,
 };
 pub use simulation::{
     ControlAck, ControlRequest, PlayMode, RuntimeSimulation, RuntimeState, SimulationError,

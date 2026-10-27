@@ -185,6 +185,20 @@ impl SupervisedRuntime {
         Ok(())
     }
 
+    /// Requests a physical pixel extent for embedded game rendering.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime terminated or the protocol send fails.
+    pub fn set_viewport_extent(&mut self, extent: [u32; 2]) -> Result<(), SupervisorError> {
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        self.connection
+            .as_mut()
+            .ok_or(SupervisorError::AlreadyTerminated)?
+            .send(request_id, &ProtocolMessage::ResizeViewport(extent))?;
+        Ok(())
+    }
+
     /// Sends a pause/resume/step/query request and waits for its barrier acknowledgement.
     ///
     /// # Errors
@@ -213,7 +227,7 @@ impl SupervisedRuntime {
                     return Ok(ack);
                 }
                 ProtocolMessage::Console(event) => self.console_events.push_back(*event),
-                ProtocolMessage::Frame(frame) => publish_frame(&self.frames, &frame)?,
+                ProtocolMessage::Frame(frame) => publish_frame(&mut self.frames, &frame)?,
                 ProtocolMessage::RuntimeChanges(changes) => self.runtime_changes = Some(changes),
                 ProtocolMessage::Error { code, message } => {
                     return Err(SupervisorError::Runtime { code, message });
@@ -249,7 +263,7 @@ impl SupervisedRuntime {
                     return Ok(entity);
                 }
                 ProtocolMessage::Console(event) => self.console_events.push_back(*event),
-                ProtocolMessage::Frame(frame) => publish_frame(&self.frames, &frame)?,
+                ProtocolMessage::Frame(frame) => publish_frame(&mut self.frames, &frame)?,
                 ProtocolMessage::RuntimeChanges(changes) => self.runtime_changes = Some(changes),
                 ProtocolMessage::Error { code, message } => {
                     return Err(SupervisorError::Runtime { code, message });
@@ -350,7 +364,7 @@ impl SupervisedRuntime {
                     });
                 }
                 ProtocolMessage::Console(event) => self.console_events.push_back(*event),
-                ProtocolMessage::Frame(frame) => publish_frame(&self.frames, &frame)?,
+                ProtocolMessage::Frame(frame) => publish_frame(&mut self.frames, &frame)?,
                 ProtocolMessage::Error { code, message } => {
                     return Err(SupervisorError::Runtime { code, message });
                 }
@@ -434,7 +448,7 @@ impl SupervisedRuntime {
             match connection.receive()?.message {
                 ProtocolMessage::Ready { .. } => return Ok(()),
                 ProtocolMessage::Console(event) => self.console_events.push_back(*event),
-                ProtocolMessage::Frame(frame) => publish_frame(&self.frames, &frame)?,
+                ProtocolMessage::Frame(frame) => publish_frame(&mut self.frames, &frame)?,
                 ProtocolMessage::Error { code, message } => {
                     return Err(SupervisorError::Runtime { code, message });
                 }
@@ -445,7 +459,11 @@ impl SupervisedRuntime {
     }
 }
 
-fn publish_frame(frames: &FrameRing, frame: &BgraFrame) -> Result<(), SupervisorError> {
+fn publish_frame(frames: &mut FrameRing, frame: &BgraFrame) -> Result<(), SupervisorError> {
+    // Allocate for the actual extent instead of preallocating three maximum-size frames.
+    if frames.limits() != FrameRingLimits::bgra(frame.width, frame.height)? {
+        *frames = FrameRing::new(3, FrameRingLimits::bgra(frame.width, frame.height)?)?;
+    }
     frames.publish(frame.width, frame.height, frame.stride_bytes, &frame.pixels)?;
     Ok(())
 }

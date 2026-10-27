@@ -17,6 +17,17 @@ pub const PROTOCOL_MAGIC: [u8; 8] = *b"RSTIPC01";
 /// Absolute allocation bound for one control/log message.
 pub const MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 const HEADER_BYTES: usize = 34;
+// Pixel messages have their own bound; control/log messages remain capped at 1 MiB.
+const MAX_FRAME_PAYLOAD_BYTES: usize =
+    crate::MAX_GAME_DIMENSION as usize * crate::MAX_GAME_DIMENSION as usize * 4 + 24;
+
+const fn payload_limit(kind: u8) -> usize {
+    if kind == 7 {
+        MAX_FRAME_PAYLOAD_BYTES
+    } else {
+        MAX_PAYLOAD_BYTES
+    }
+}
 
 /// IPC compatibility generation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -26,7 +37,7 @@ pub struct ProtocolVersion {
 }
 
 /// Protocol understood by this engine build.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 2, minor: 0 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 3, minor: 0 };
 
 /// Current values for the selected entity while the isolated runtime is active.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -203,6 +214,7 @@ pub enum ProtocolMessage {
     },
     Control(ControlRequest),
     InputKeys(Vec<String>),
+    ResizeViewport([u32; 2]),
     QueryEntity(String),
     LiveEntity(Option<LiveEntityProperties>),
     ControlAck(ControlAck),
@@ -240,6 +252,7 @@ impl ProtocolMessage {
             Self::Ready { .. } => 3,
             Self::Control(_) => 4,
             Self::InputKeys(_) => 13,
+            Self::ResizeViewport(_) => 16,
             Self::QueryEntity(_) => 14,
             Self::LiveEntity(_) => 15,
             Self::ControlAck(_) => 5,
@@ -397,7 +410,7 @@ fn encode_frame(
             frame.stride_bytes,
             u32::try_from(frame.pixels.len()).map_err(|_| ProtocolError::PayloadTooLarge {
                 found: frame.pixels.len(),
-                maximum: MAX_PAYLOAD_BYTES,
+                maximum: MAX_FRAME_PAYLOAD_BYTES,
             })?,
         ] {
             bytes.extend_from_slice(&value.to_le_bytes());
@@ -409,16 +422,17 @@ fn encode_frame(
             .map_err(|error| ProtocolError::Encode(error.to_string()))?
             .into_bytes()
     };
-    if payload.len() > MAX_PAYLOAD_BYTES {
+    let maximum = payload_limit(message.kind());
+    if payload.len() > maximum {
         return Err(ProtocolError::PayloadTooLarge {
             found: payload.len(),
-            maximum: MAX_PAYLOAD_BYTES,
+            maximum,
         });
     }
     let payload_length =
         u32::try_from(payload.len()).map_err(|_| ProtocolError::PayloadTooLarge {
             found: payload.len(),
-            maximum: MAX_PAYLOAD_BYTES,
+            maximum,
         })?;
     let mut frame = Vec::with_capacity(HEADER_BYTES + payload.len());
     frame.extend_from_slice(&PROTOCOL_MAGIC);
@@ -454,10 +468,11 @@ fn decode_frame(reader: &mut impl Read) -> Result<ReceivedMessage, ProtocolError
         u64::from_le_bytes(header[22..30].try_into().expect("fixed header range"));
     let payload_length =
         u32::from_le_bytes(header[30..34].try_into().expect("fixed header range")) as usize;
-    if payload_length > MAX_PAYLOAD_BYTES {
+    let maximum = payload_limit(kind);
+    if payload_length > maximum {
         return Err(ProtocolError::PayloadTooLarge {
             found: payload_length,
-            maximum: MAX_PAYLOAD_BYTES,
+            maximum,
         });
     }
     if deadline_unix_millis != 0 && deadline_unix_millis < unix_millis() {
@@ -512,8 +527,8 @@ fn decode_frame(reader: &mut impl Read) -> Result<ReceivedMessage, ProtocolError
 fn validate_pixel_frame(frame: &BgraFrame) -> Result<(), ProtocolError> {
     if frame.width == 0
         || frame.height == 0
-        || frame.width > 640
-        || frame.height > 360
+        || frame.width > crate::MAX_GAME_DIMENSION
+        || frame.height > crate::MAX_GAME_DIMENSION
         || frame.stride_bytes != frame.width * 4
         || frame.pixels.len() != (frame.stride_bytes * frame.height) as usize
     {
@@ -646,6 +661,52 @@ mod pixel_wire_tests {
             message
         );
     }
+    #[test]
+    fn high_resolution_frames_and_resize_requests_round_trip() {
+        let frame = BgraFrame {
+            sequence: 1,
+            width: 1920,
+            height: 1080,
+            stride_bytes: 1920 * 4,
+            pixels: vec![173; 1920 * 1080 * 4],
+        };
+        for message in [
+            ProtocolMessage::Frame(frame),
+            ProtocolMessage::ResizeViewport([3840, 2160]),
+        ] {
+            let bytes =
+                encode_frame(ProcessRole::Runtime, PROTOCOL_VERSION, 1, 0, &message).unwrap();
+            assert_eq!(
+                decode_frame(&mut std::io::Cursor::new(bytes))
+                    .unwrap()
+                    .message,
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn oversized_pixel_payload_is_rejected_before_allocation() {
+        let message = ProtocolMessage::Frame(BgraFrame {
+            sequence: 0,
+            width: 1,
+            height: 1,
+            stride_bytes: 4,
+            pixels: vec![0; 4],
+        });
+        let mut bytes =
+            encode_frame(ProcessRole::Runtime, PROTOCOL_VERSION, 1, 0, &message).unwrap();
+        bytes[30..34].copy_from_slice(
+            &u32::try_from(MAX_FRAME_PAYLOAD_BYTES + 1)
+                .unwrap()
+                .to_le_bytes(),
+        );
+        assert!(matches!(
+            decode_frame(&mut std::io::Cursor::new(bytes)),
+            Err(ProtocolError::PayloadTooLarge { .. })
+        ));
+    }
+
     #[test]
     fn malformed_pixel_frame_is_rejected() {
         let frame = BgraFrame {

@@ -7,6 +7,7 @@ mod ui_theme;
 mod viewport_keyboard;
 
 use eframe::egui;
+use egui::emath::GuiRounding as _;
 use egui_tiles::{Behavior, TileId, Tree, UiResponse};
 use engine_assets::{
     AssetMeta, DerivedArtifact, ImportRequest, ImporterRegistry, ModelArtifact, load_meta,
@@ -219,7 +220,7 @@ impl EditorApp {
         let project_scan = Some(spawn_project_scan(document.project().root().to_path_buf()));
         let scene_disk_snapshot = std::fs::read(document.scene_path()).ok();
         let (viewport_request, preview_result) =
-            spawn_viewport_renderer(document.project().root().to_path_buf());
+            spawn_viewport_renderer(document.project().root().to_path_buf(), context.clone());
         let game_settings = GameSettings::load(document.project().root()).unwrap_or_default();
         if !read_only
             && !document
@@ -1711,25 +1712,26 @@ impl EditorViewer<'_> {
         let frame = egui::Frame::NONE.fill(ui.visuals().extreme_bg_color);
         let (body, dropped) = ui.dnd_drop_zone::<ViewportDrop, _>(frame, |ui| {
             let size = ui.available_size().max(egui::vec2(64.0, 64.0));
-            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+            let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click_and_drag());
+            // Match the render target and image placement to physical pixel boundaries.
+            let rect = rect.round_to_pixels(ui.pixels_per_point());
+            response.rect = rect;
             if let Some(texture) = self.preview {
-                let rect = if self.playing {
-                    let aspect = 16.0 / 9.0;
+                // Preserve the last completed frame's aspect during asynchronous resize.
+                let rect = {
+                    let aspect = if self.playing {
+                        16.0 / 9.0
+                    } else {
+                        texture.size_vec2().x / texture.size_vec2().y
+                    };
                     let size = if rect.width() / rect.height() > aspect {
                         egui::vec2(rect.height() * aspect, rect.height())
                     } else {
                         egui::vec2(rect.width(), rect.width() / aspect)
                     };
                     egui::Rect::from_center_size(rect.center(), size)
-                } else {
-                    rect
                 };
-                ui.painter().image(
-                    texture.id(),
-                    rect,
-                    egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)),
-                    egui::Color32::WHITE,
-                );
+                egui::Image::from_texture(texture).paint_at(ui, rect);
             } else {
                 ui.painter()
                     .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
@@ -1767,6 +1769,12 @@ impl EditorViewer<'_> {
             self.request_preview = true;
         }
         if self.playing {
+            if let Some(play) = &mut self.play
+                && let Err(error) = play.set_viewport_extent(extent)
+            {
+                self.console
+                    .push(simple_console(Severity::Error, "runtime", error));
+            }
             self.play_viewport_input(ui, &response);
         } else if !is_2d {
             let was_dragging = self.gizmo_drag.is_some();
@@ -3132,6 +3140,7 @@ struct ViewportRenderRequest {
 
 fn spawn_viewport_renderer(
     project_root: PathBuf,
+    context: egui::Context,
 ) -> (
     SyncSender<ViewportRenderRequest>,
     Receiver<Result<Option<RenderedFrame>, String>>,
@@ -3145,17 +3154,23 @@ fn spawn_viewport_renderer(
                 Ok(renderer) => renderer,
                 Err(error) => {
                     let _ = result_sender.send(Err(error.to_string()));
+                    context.request_repaint();
                     return;
                 }
             };
             renderer.set_environment_root(project_root);
-            while let Ok(request) = request_receiver.recv() {
+            while let Ok(mut request) = request_receiver.recv() {
+                // Obsolete extents should not delay the newest camera/resize request.
+                for newer in request_receiver.try_iter() {
+                    request = newer;
+                }
                 let result = renderer
                     .render(request.width, request.height, &request.scene)
                     .map_err(|error| error.to_string());
                 if result_sender.send(result).is_err() {
                     break;
                 }
+                context.request_repaint();
             }
         })
         .expect("viewport renderer worker");
