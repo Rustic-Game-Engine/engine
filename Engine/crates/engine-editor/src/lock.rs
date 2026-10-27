@@ -40,7 +40,7 @@ pub struct ProjectLock {
     token: Uuid,
     // Keep a stable inode: deleting this file would let concurrent openers lock
     // different files at the same path. The OS releases it even after a crash.
-    _writer: File,
+    writer: File,
 }
 
 impl ProjectLock {
@@ -88,7 +88,7 @@ impl ProjectLock {
             Ok(token) => Ok(ProjectAccess::Writable(Self {
                 path,
                 token,
-                _writer: writer,
+                writer,
             })),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
                 let quarantine =
@@ -102,7 +102,7 @@ impl ProjectLock {
                         ProjectAccess::Writable(Self {
                             path: path.clone(),
                             token,
-                            _writer: writer,
+                            writer,
                         })
                     })
                     .map_err(|source| ProjectLockError::Io { path, source })
@@ -136,6 +136,10 @@ impl Drop for ProjectLock {
         if owned {
             let _ = fs::remove_file(&self.path);
         }
+        // A concurrent Unix fork can briefly inherit this open file description
+        // before exec closes it. Unlock explicitly so those inherited handles do
+        // not keep a closed editor's project read-only.
+        let _ = self.writer.unlock();
     }
 }
 
@@ -202,6 +206,27 @@ mod tests {
             ProjectLock::acquire(temporary.path()).unwrap(),
             ProjectAccess::Writable(_)
         ));
+    }
+
+    #[test]
+    fn dropping_owner_unlocks_even_when_a_duplicate_handle_remains_open() {
+        let temporary = tempdir().unwrap();
+        let ProjectAccess::Writable(owner) = ProjectLock::acquire(temporary.path()).unwrap() else {
+            panic!("the first editor must acquire the writer lock");
+        };
+        // A concurrent Unix process spawn can temporarily inherit this same open
+        // file description between fork and exec. A clone reproduces that lifetime.
+        let duplicate = owner.writer.try_clone().unwrap();
+        assert!(matches!(
+            ProjectLock::acquire(temporary.path()).unwrap(),
+            ProjectAccess::ReadOnly { .. }
+        ));
+        drop(owner);
+        assert!(matches!(
+            ProjectLock::acquire(temporary.path()).unwrap(),
+            ProjectAccess::Writable(_)
+        ));
+        drop(duplicate);
     }
 
     #[test]
