@@ -13,6 +13,13 @@ function Assert-Throws([scriptblock]$Action, [string]$Message) {
     try { & $Action } catch { $threw = $true }
     if (-not $threw) { throw $Message }
 }
+function New-SetupProcess([bool]$HasExited, [int]$ExitCode) {
+    $process = [pscustomobject]@{ HasExited = $HasExited; ExitCode = $ExitCode }
+    $process | Add-Member ScriptMethod Refresh { $this.HasExited = $script:SetupPolls -ge 2 }
+    $process | Add-Member ScriptMethod WaitForExit { }
+    $process | Add-Member ScriptMethod Dispose { $script:SetupDisposed = $true }
+    return $process
+}
 function New-Release([string]$Tag, [string]$Commit) {
     [pscustomobject]@{
         tag_name = $Tag; target_commitish = $Commit; draft = $false; prerelease = $true
@@ -161,6 +168,30 @@ try {
     }
     Assert-Equal (Wait-DesktopExit $temp $temp $next.tag_name) $true 'Retry failed and newly started backends on each poll'
     Assert-Equal ($script:Stopped -join ',') '2,3,2,3,7' 'Cleanup includes every remaining backend'
+    # An MCP client can reconnect after the desktop exit check and during Setup.
+    Set-Content -LiteralPath (Join-Path $temp 'install-scope.txt') -Value 'currentuser'
+    $helper = [pscustomobject]@{ Path = (Join-Path $temp 'rustic-setup-helper.exe'); ProcessName = 'rustic-setup-helper'; Id = 8 }
+    $script:Processes = @($helper, $backend1, $foreign)
+    $script:Stopped = @()
+    $script:SetupPolls = 0
+    $script:SetupDisposed = $false
+    function Start-Process {
+        param($FilePath, $ArgumentList, [switch]$PassThru)
+        New-SetupProcess $false 0
+    }
+    function Start-Sleep {
+        param($Seconds)
+        $script:SetupPolls++
+        $script:Processes += [pscustomobject]@{ Path = $backend1.Path; ProcessName = 'rustic-agent-backend'; Id = (8 + $script:SetupPolls) }
+    }
+    Install-DesktopUpdate $installer $temp $temp
+    Assert-Equal ($script:Stopped -join ',') '2,9,10' 'Stop reconnecting backends during Setup and at completion, even with its helper running'
+    Assert-Equal ($script:Processes.Id -join ',') '8,4' 'Leave Setup helper and foreign backend running'
+    Assert-Equal $script:SetupDisposed $true 'Dispose Setup process after monitoring'
+    $script:Processes = @($editor, $backend1)
+    $editor.Path = Join-Path $temp 'rustic-editor.exe'
+    Stop-IdleAgentBackends $temp -DuringInstall
+    Assert-Equal $script:Stopped.Count 3 'Reopened editors still protect their backends during Setup'
     Remove-Item Function:Stop-Process
     function Get-Process { param($Name, $ErrorAction); [pscustomobject]@{ Path = $null; ProcessName = 'rustic-runtime'; Id = 123 } }
 
@@ -185,16 +216,18 @@ try {
         Assert-Equal ($ArgumentList -contains '/currentuser') $true 'Preserve installation scope'
         Assert-Equal ($ArgumentList -contains ('/DIR="' + $temp + '"')) $true 'Preserve installation directory'
         $script:Launches++
-        [pscustomobject]@{ ExitCode = $script:SetupExitCode }
+        New-SetupProcess $true $script:SetupExitCode
     }
     Assert-Equal (Invoke-DesktopUpdateCheck $temp $temp).Installed $true 'Successful background update'
     Assert-Equal $script:Launches 1 'Launch Setup exactly once'
     Assert-Equal (Test-Path -LiteralPath $installer) $false 'Remove installer after success'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $false 'Clear pending UI status after success'
     $script:SetupExitCode = 5
+    $script:SetupDisposed = $false
     Set-Content -LiteralPath (Join-Path $temp 'install-request.txt') -Value $next.tag_name
     Set-Content -LiteralPath (Join-Path $temp 'resume-failure.txt') -Value 'must not replay'
     Assert-Throws { Invoke-DesktopUpdateCheck $temp $temp } 'Report installer failure for retry'
+    Assert-Equal $script:SetupDisposed $true 'Dispose Setup process after failure'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'install-request.txt')) $false 'Failed Setup must not close the next desktop session'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'resume-failure.txt')) $false 'Failed Setup clears restart records'
     $pending = Get-Content -LiteralPath (Join-Path $temp 'pending-update.txt')
@@ -206,13 +239,23 @@ try {
     Assert-Equal $script:Launches 0 'Never execute corrupt downloads'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $false 'Only verified installers are advertised as ready'
 
+    $script:CheckSeconds = 0
+    function Test-RusticRunning { param($Directory); return $true }
+    function Start-Sleep { param($Seconds); $script:CheckSeconds += $Seconds }
+    Assert-Equal (Wait-NextDesktopUpdateCheck $temp) $true 'Keep polling while Rustic runs'
+    Assert-Equal $script:CheckSeconds 120 'Check again after two minutes, including after failures'
+    function Test-RusticRunning { param($Directory); return $false }
+    Assert-Equal (Wait-NextDesktopUpdateCheck $temp) $false 'Stop worker when no Rustic process remains'
+    Assert-Equal $script:CheckSeconds 120 'Do not sleep after Rustic exits'
+    function Start-Sleep { param($Seconds); $script:Waits++ }
+
     # A desktop left open must discover releases newer than its dismissed update.
     $asset.digest = $digest
     $script:Waits = 0
     function Test-RusticRunning { param($Directory); return $true }
     $refresh = Invoke-DesktopUpdateCheck $temp $temp
     Assert-Equal $refresh.Refresh $true 'Return to release discovery while a verified update waits'
-    Assert-Equal $script:Waits 3600 'Refresh pending releases hourly without busy polling'
+    Assert-Equal $script:Waits 120 'Refresh pending releases every two minutes without busy polling'
     Assert-Equal $script:Launches 0 'Refreshing must not start Setup while Rustic is open'
     Assert-Equal (Get-Content -LiteralPath (Join-Path $temp 'pending-update.txt'))[1] $next.tag_name 'Keep verified update visible during refresh'
     $newest = New-Release 'v1.1-Pre-Alpha' ('c' * 40)
@@ -234,7 +277,7 @@ try {
     Set-Content -LiteralPath (Join-Path $temp 'install-request.txt') -Value "$($next.tag_name)`n$([guid]::NewGuid())"
     Set-Content -LiteralPath (Join-Path $temp 'pending-update.txt') -Value "$commit`n$($next.tag_name)"
     Set-Content -LiteralPath (Join-Path $temp 'resume-deferred.txt') -Value "$($next.tag_name)`nproject-manager"
-    Wait-DesktopExit $temp $temp $next.tag_name
+    Assert-Equal (Wait-DesktopExit $temp $temp $next.tag_name) $false 'Return to discovery after deferring a blocked update'
     Assert-Equal $script:DeferredRestores 1 'A blocked update restores closed windows exactly once'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'install-request.txt')) $false 'Deferral cancels the shared close request'
     Assert-Equal (Test-Path -LiteralPath (Join-Path $temp 'pending-update.txt')) $true 'Deferral keeps the Update button available'
