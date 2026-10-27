@@ -385,7 +385,9 @@ impl EditorApp {
         // Keep polling even when the UI is otherwise idle so changes saved by an
         // external editor become visible without requiring mouse movement.
         context.request_repaint_after(Duration::from_secs(1));
-        let preview = self.preview_result.try_recv().ok();
+        // Completion notifications can coalesce into one UI repaint. Consume the
+        // newest result so an older extent cannot hide the finished resize.
+        let preview = self.preview_result.try_iter().last();
         if let Some(result) = preview.filter(|_| self.play.is_none()) {
             match result {
                 Ok(Some(frame)) => {
