@@ -518,6 +518,27 @@ impl EditorApp {
             self.show_dependency_prompt = true;
             return;
         }
+        if self.document.needs_checksum_refresh() {
+            match self.document.save() {
+                Ok(()) => {
+                    self.scene_disk_snapshot = std::fs::read(self.document.scene_path()).ok();
+                    self.external_scene_change_pending = false;
+                    self.log(
+                        Severity::Info,
+                        "scene",
+                        "Refreshed scene checksum before playtest",
+                    );
+                }
+                Err(error) => {
+                    self.log(
+                        Severity::Error,
+                        "scene",
+                        format!("Could not refresh scene checksum: {error}"),
+                    );
+                    return;
+                }
+            }
+        }
         match EditorPlaySession::start(&self.document, mode) {
             Ok(play) => {
                 self.play = Some(play);

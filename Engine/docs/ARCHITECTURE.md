@@ -536,8 +536,12 @@ write-file, flush, atomic rename, and recoverable backup. Unknown future version
 read-only. When opening a scene for authoring, a stale checksum on otherwise valid
 data produces a Console warning and keeps the primary file editable. This supports
 external text edits without silently loading an older backup. Saving refreshes the
-checksum and retains the previous file as `.bak`. Invalid components/environment
-settings still trigger recovery or read-only access; strict non-authoring loaders
+checksum and retains the previous file as `.bak`. The editor tracks a checksum-only
+mismatch as pending persistence so autosave can repair it without a local edit.
+Playtest startup saves a pending checksum repair in writable projects, even with
+autosave disabled. Successful saves refresh load diagnostics; failed saves retain
+the pending repair. Read-only projects never rewrite the source scene. Invalid
+components/environment settings still trigger recovery or read-only access; strict non-authoring loaders
 continue to reject checksum mismatches. Entity/component ordering is deterministic
 for useful Git/Perforce diffs.
 Large source binaries use Git LFS or Perforce; `cache`, `temp`, `logs`, `.rustic/local`,
