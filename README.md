@@ -1,96 +1,146 @@
 # Rustic Game Engine
 
-Rustic Game Engine is a native 2D/3D engine and editor built in Rust with
-`egui`/`wgpu`. This repository contains the engine workspace in [`Engine/`](Engine/).
-See the [engine README](Engine/README.md) for implemented features, build details,
-and Windows installer instructions.
+A native 2D/3D game engine and editor built in Rust with `egui` and `wgpu`.
 
-## Repository layout
+Rustic brings project management, scene editing, asset importing, and
+playtesting into a native desktop application, with support for gameplay
+programming across multiple languages.
 
-- [`Engine/`](Engine/) contains the Rust workspace, applications, tooling, and
-  engine-local documentation in [`Engine/docs/`](Engine/docs/).
-- The Next.js documentation website lives at the root of the separate
-  [docs repository](https://github.com/Rustic-Game-Engine/docs). Run its lint,
-  build, and deployment workflows there.
+**Rustic is currently in pre-alpha. Features, APIs, and project formats
+may change as development continues.**
 
-Run engine commands from `Engine/`; the root of this repository is not a Cargo
-project.
+[Documentation](https://rustic-game-engine.pages.dev/) ·
+[Downloads](https://github.com/Rustic-Game-Engine/engine/releases) ·
+[Discussions](https://github.com/Rustic-Game-Engine/engine/discussions) ·
+[Report a bug](https://github.com/Rustic-Game-Engine/engine/issues)
 
-## Build and run
+## Features
 
-Install the Rust toolchain specified in
-[`Engine/rust-toolchain.toml`](Engine/rust-toolchain.toml), then run from this
-repository's root:
+- Native project manager and dockable editor.
+- 2D/3D scene authoring with entity hierarchies and undo support.
+- GPU rendering through `wgpu`.
+- Asset importing, caching, and background processing.
+- Embedded playtesting and separate runtime windows.
+- Live console output, script diagnostics, and hot reload.
+- Gameplay scripting across Lua, JavaScript, Python, C#, C/C++, Java,
+  PHP, and Web workflows.
+
+See the [engine documentation](Engine/README.md) for implementation
+details and current limitations.
+
+## Download and Install
+
+1. Choose a supported release from the table below.
+2. Expand **Assets** on its release page.
+3. Download and run the `RusticGameEngine-Setup-*.exe` installer.
+4. Open the project manager to create or import a project.
+
+The Windows installer includes the engine applications and bundled
+language support. Optional language toolchains can be selected during
+installation.
+
+Installed Windows builds support automatic updates. See the
+[update guide](Engine/docs/AUTOMATIC_UPDATES.md) for details.
+
+## Supported Versions
+
+The seven most recently published releases receive security updates,
+including prereleases. Each new release replaces the oldest supported
+release.
+
+This table updates automatically through GitHub Actions.
+
+<!-- supported-versions:start -->
+| Version | Supported | Download |
+| ------- | --------- | -------- |
+| v3.1-Pre-Alpha | ✅ Latest | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.1-Pre-Alpha) |
+| v3.0-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.0-Pre-Alpha) |
+| v2.9-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v2.9-Pre-Alpha) |
+| v2.8-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v2.8-Pre-Alpha) |
+| v2.7-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v2.7-Pre-Alpha) |
+| v2.6-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v2.6-Pre-Alpha) |
+| v2.5-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v2.5-Pre-Alpha) |
+<!-- supported-versions:end -->
+
+Download links open the release pages containing installers and source
+downloads. Versions outside this table are unsupported.
+
+## Build from Source
+
+Install Git and the Rust toolchain specified in
+[Engine/rust-toolchain.toml](Engine/rust-toolchain.toml).
+
+Clone the repository and run:
 
 ```sh
-cd Engine
+git clone https://github.com/Rustic-Game-Engine/engine.git
+cd engine/Engine
+
 cargo install cargo-deny --locked --version 0.20.2
 cargo xtask doctor
 cargo xtask test
 cargo xtask run project-manager
 ```
 
-The project manager creates or imports projects and launches the native editor.
-Start with the [gameplay programming guide](Engine/docs/GAMEPLAY_PROGRAMMING.md)
-for scripting, and read the [architecture](Engine/docs/ARCHITECTURE.md) and
-[roadmap](Engine/docs/ROADMAP.md) before changing subsystem boundaries or scope.
+The project manager creates or imports projects and launches the editor.
 
-## Contribution rules
+Run Cargo commands from `Engine/`; the repository root is not a Cargo
+workspace. Check the [engine README](Engine/README.md) for platform
+requirements and troubleshooting.
 
-See [pull request checks and review automation](.github/CI.md) for CI requirements
-and troubleshooting.
+### Build the Windows Installer
 
-Follow the repository's [`AGENTS.md`](AGENTS.md), the engine-specific
-[`Engine/AGENTS.md`](Engine/AGENTS.md), and
-[`Engine/CONTRIBUTING.md`](Engine/CONTRIBUTING.md).
-
-Whenever a change affects a script function, callback, Script API behavior, or
-other engine functionality, update the affected website documentation in the same
-task. In the docs repository, guides live in `docs/` and are served through
-`lib/docs.ts`; API pages are generated through `lib/api-docs.ts`. Make new guides
-reachable through `lib/docs-catalog.ts`. Keep the corresponding documentation in
-`Engine/docs` accurate, and include the companion docs pull request in the engine
-pull request when published documentation changes.
-
-Write for first-time users: explain what works and where, exact setup and
-attachment steps, copyable examples, expected results, current limitations, and
-how to diagnose common failures. Correct outdated claims and verify the website
-content against the implemented behavior before reporting completion.
-
-After code changes, build the Windows installer from PowerShell on Windows in
-`Engine/`:
+From PowerShell on Windows, inside `Engine/`:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\tools\build-windows-installer.ps1
 ```
 
-Confirm that a fresh `Engine/dist/RusticGameEngine-Setup-*.exe` was produced. If
-the build fails, report the failure and do not describe the task as fully complete.
+The installer is written to `Engine/dist/`.
 
-Finish the relevant validation and documentation, commit on a feature branch,
-push it, and open a pull request against the branch the work started from. Update
-an existing task pull request instead of creating a duplicate. Include a concise
-summary and the checks run in its description, then return its link.
+## Documentation
 
-Before reporting completion, apply at least one change-type label and every
-relevant area label:
+- [Gameplay programming](Engine/docs/GAMEPLAY_PROGRAMMING.md)
+- [Editor explorer](Engine/docs/EXPLORER.md)
+- [Viewport navigation](Engine/docs/VIEWPORT_NAVIGATION.md)
+- [Architecture](Engine/docs/ARCHITECTURE.md)
+- [Roadmap](Engine/docs/ROADMAP.md)
+- [Build and installer instructions](Engine/README.md)
 
-| Change type | Use for |
-| --- | --- |
-| `type:feature` | New functionality |
-| `type:fix` | Bug fixes |
-| `type:docs` | Documentation changes |
-| `type:refactor` | Restructuring without changing behavior |
-| `type:test` | Test additions or changes |
-| `type:chore` | Maintenance, dependencies, or tooling |
+The documentation website is maintained in the separate
+[docs repository](https://github.com/Rustic-Game-Engine/docs).
 
-| Area | Use for |
-| --- | --- |
-| `area:engine` | Changes to `Engine/`, including engine documentation |
-| `area:website` | Changes to the documentation site, including its removal from this repository |
-| `area:ci` | GitHub Actions, CI, or repository automation |
+## Repository Layout
 
-Choose labels for the actual changes. Root-level instructions-only changes use
-`type:docs` and need no area label. If authentication or permissions prevent
-pushing, opening the pull request, or labeling it, report the blocker and the
-remaining step explicitly.
+| Path | Contents |
+| ---- | -------- |
+| `Engine/` | Rust workspace, applications, tools, and engine components |
+| `Engine/docs/` | Engine guides and architecture documentation |
+| `.github/` | GitHub Actions and repository automation |
+
+## Contributing
+
+Bug reports, documentation improvements, tests, and code contributions
+are welcome.
+
+Read the [contribution guide](CONTRIBUTING.md),
+[engine contribution guide](Engine/CONTRIBUTING.md), and
+[CI requirements](.github/CI.md) before submitting changes.
+
+Contributors should follow [AGENTS.md](AGENTS.md),
+[Engine/AGENTS.md](Engine/AGENTS.md), and the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
+Changes to engine behavior or scripting APIs should include updates to
+the affected engine guides and website documentation.
+
+## Security
+
+Please report potential vulnerabilities privately.
+See the [Security Policy](SECURITY.md) for reporting instructions and
+response expectations.
+
+## License
+
+Rustic Game Engine is licensed under the
+[Apache License 2.0](LICENSE).
