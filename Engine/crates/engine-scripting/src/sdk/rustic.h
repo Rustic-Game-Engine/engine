@@ -171,12 +171,18 @@ static const struct {
 } rustic={{r_edit_object_attribute,r_object_attribute,r_recording_start,r_recording_stop,r_mic_start,r_mic_stop},r_entity_id,r_delta_time,r_fixed_delta_time,r_translation,r_set_translation,r_property,r_attribute,r_set_property,r_edit_attribute,r_input,r_key,r_events,r_any,r_log,r_enabled,r_find_live,r_object_attribute,r_edit_object_path,r_print,r_warn};
 static const struct {void (*add)(const char*,const char*),(*clone)(const char*,const char*);} instance={r_add,r_clone};
 
+static const char *r_scene_load(const char *scene);
+static void r_scene_unload(const char *scene);
+static void r_scene_switchTo(const char *scene);
+static bool r_scene_isLoaded(const char *scene);
+static RusticList r_scene_getLoaded(void);
+static const char *r_scene_getActive(void);
 static RusticValue r_environment_get(const char *field);
 static void r_environment_set(const char *field,RusticValue value);
 static void r_environment_sky(const char *path);
-static const struct {struct {RusticValue (*getEnvironment)(const char*);void (*setEnvironment)(const char*,RusticValue);void (*setSkyTexture)(const char*);const char *(*Find)(const char*);RusticList (*List)(const char*);} scene;void (*setCurrentCamera)(const char*);
+static const struct {struct {const char *(*load)(const char *scene);void (*unload)(const char *scene);void (*switchTo)(const char *scene);bool (*isLoaded)(const char *scene);RusticList (*getLoaded)(void);const char *(*getActive)(void);RusticValue (*getEnvironment)(const char*);void (*setEnvironment)(const char*,RusticValue);void (*setSkyTexture)(const char*);const char *(*Find)(const char*);RusticList (*List)(const char*);} scene;void (*setCurrentCamera)(const char*);
 RusticCaptureHandle (*startRecording)(const char*,const char*);void (*stopRecording)(const RusticCaptureHandle*);
-RusticCaptureHandle (*startHotMic)(void);void (*stopHotMic)(const RusticCaptureHandle*);} Game={{r_environment_get,r_environment_set,r_environment_sky,r_find,r_list},r_camera,r_recording_start,r_recording_stop,r_mic_start,r_mic_stop};
+RusticCaptureHandle (*startHotMic)(void);void (*stopHotMic)(const RusticCaptureHandle*);} Game={{r_scene_load,r_scene_unload,r_scene_switchTo,r_scene_isLoaded,r_scene_getLoaded,r_scene_getActive,r_environment_get,r_environment_set,r_environment_sky,r_find,r_list},r_camera,r_recording_start,r_recording_stop,r_mic_start,r_mic_stop};
 
 /* Queries preserve the lifecycle snapshot while flushing earlier writes in order. */
 typedef struct {char *source,*pending;RToken *tokens;size_t count,at;bool audio_devices;} RQuerySave;
@@ -288,6 +294,12 @@ static RusticList r_world_find_by_tag(const char* name){RQuerySave s=r_query_beg
 static RusticList r_world_find_in_radius(RusticVector3 center,double radius){RQuerySave s=r_query_begin("world_find_in_radius");r_q_value("center",r_vec(center));r_q_number("radius",radius);return r_query_end(s).list;}
 static const struct {RusticList(*find_by_tag)(const char*);RusticList(*find_in_radius)(RusticVector3,double);} World={r_world_find_by_tag,r_world_find_in_radius};
 
+static const char *r_scene_load(const char *scene){RQuerySave saved=r_query_begin("scene_load");r_q_string("scene",scene);return r_query_end(saved).value.string;}
+static void r_scene_unload(const char *scene){RQuerySave saved=r_query_begin("scene_unload");r_q_string("scene",scene);r_query_end(saved);}
+static void r_scene_switchTo(const char *scene){RQuerySave saved=r_query_begin("scene_switch");r_q_string("scene",scene);r_query_end(saved);}
+static bool r_scene_isLoaded(const char *scene){RQuerySave saved=r_query_begin("scene_is_loaded");r_q_string("scene",scene);return r_query_end(saved).value.boolean;}
+static RusticList r_scene_getLoaded(void){RQuerySave saved=r_query_begin("scene_loaded");return r_query_end(saved).list;}
+static const char *r_scene_getActive(void){RQuerySave saved=r_query_begin("scene_active");return r_query_end(saved).value.string;}
 static RusticValue r_environment_get(const char *field){RQuerySave s=r_query_begin("scene_environment_field");r_q_string("field",field);return r_query_end(s).value;}
 static void r_environment_set(const char *field,RusticValue value){RQuerySave s=r_query_begin("scene_environment");r_append(",\"settings\":{");r_quote(field);r_append(":");r_write_value(value);r_append("}");(void)r_query_end(s);}
 static void r_environment_sky(const char *path){r_environment_set("sky_image",(RusticValue){.type=RUSTIC_STRING,.string=path});}

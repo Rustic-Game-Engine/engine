@@ -1,3 +1,9 @@
+function Game.scene.load(scene) return rustic.query({op='scene_load' ,scene=scene}) end
+function Game.scene.unload(scene) return rustic.query({op='scene_unload' ,scene=scene}) end
+function Game.scene.switchTo(scene) return rustic.query({op='scene_switch' ,scene=scene}) end
+function Game.scene.isLoaded(scene) return rustic.query({op='scene_is_loaded' ,scene=scene}) end
+function Game.scene.getLoaded() return rustic.query({op='scene_loaded'}) end
+function Game.scene.getActive() local scene=rustic.query({op='scene_active'});if type(scene)=='string' then return scene end end
 -- Thin Lua binding: Rust owns all progress, curves, paths, and composition.
 function Game.scene.getEnvironment(field) return rustic.query(field and {op='scene_environment_field',field=field} or {op='scene_environment'}) end
 function Game.scene.setEnvironment(settings)
@@ -556,6 +562,11 @@ local function argument(value)
 end
 function __rustic_path_method(proxy,name)
     local source=rawget(proxy,'__source')
+    if source=='game.scene' then
+        for _,method in ipairs({'load','unload','switchTo','isLoaded','getLoaded','getActive'}) do
+            if name==method then return function(first,...) if first==proxy then return Game.scene[method](...) else return Game.scene[method](first,...) end end end
+        end
+    end
     local methods
     local target=proxy
     if string.sub(source,1,11)=='game.scene.' then methods=sceneMethods

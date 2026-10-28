@@ -70,6 +70,12 @@ const BRIDGE: &str = r#"
     debug: writeLog("debug")
   }), writable:false, configurable:false});
   const scene = new Proxy(Object.create(null), {get: (_, key) => {
+    if (key === "load") return scene => rustic.query({op:"scene_load",scene});
+    if (key === "unload") return scene => rustic.query({op:"scene_unload",scene});
+    if (key === "switchTo") return scene => rustic.query({op:"scene_switch",scene});
+    if (key === "isLoaded") return scene => rustic.query({op:"scene_is_loaded",scene});
+    if (key === "getLoaded") return () => rustic.query({op:"scene_loaded"});
+    if (key === "getActive") return () => rustic.query({op:"scene_active"});
     if (key === "getEnvironment") return field => rustic.query(field===undefined?{op:"scene_environment"}:{op:"scene_environment_field",field});
     if (key === "setEnvironment") return settings => {
       if (!settings || typeof settings !== "object" || Array.isArray(settings)) throw new TypeError("environment settings must be an object");

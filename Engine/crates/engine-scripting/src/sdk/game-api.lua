@@ -20,7 +20,7 @@
 ---@field getEnvironment fun(self:RusticGlobalApi):RusticSceneEnvironment
 ---@field setEnvironment fun(self:RusticGlobalApi,settings:table):RusticSceneEnvironment
 ---@class CanonicalRusticGame
----@field scene table<string,RusticSceneObject>
+---@field scene RusticSceneApi
 ---@field rustic RusticGlobalApi
 ---@type CanonicalRusticGame
 game=game

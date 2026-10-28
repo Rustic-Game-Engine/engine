@@ -22,7 +22,7 @@ return {
    document name, not the script filename or project name.
 2. Create a root object named **Room**, then a child named **Player**. Give siblings
    unique names. The full object path is `Room.Player`.
-3. Use **Programming > New Script > Object Component Script**, select Lua, and
+3. Use **Programming > Object Component Script**, select Lua, and
    paste the example. Save it. Select another object such as **Controller** and
    attach the script using **Programming > Attach Existing Script** or
    **+ Add Component** in the Inspector. Scene/global startup scripts can also
@@ -32,8 +32,10 @@ return {
    to return to the authored scene, or use the editor's runtime-change workflow
    when you want to retain supported changes.
 
-Only the currently loaded scene is accessible. Referring to another scene does
-not load it. Names are case-sensitive. Paths are resolved when a call applies;
+Only the active scene is accessible through object paths. Other loaded scenes
+retain their state until selected with `game.scene.switchTo(name)`. Use the
+[scene lifecycle API](/docs/guides/scene-lifecycle) to load and unload them.
+Referring to another scene does not load it. Names are case-sensitive. Paths are resolved when a call applies;
 if you rename or reparent an object, use its new path in subsequent calls.
 These functions edit engine attributes, not another script's public properties
 or arbitrary user-defined functions.
