@@ -10,6 +10,7 @@ mod ids;
 mod primitive;
 mod render;
 mod scene;
+mod scene_manager;
 mod undo;
 mod world;
 
@@ -28,5 +29,6 @@ pub use scene::{
     SceneDiagnosticSeverity, SceneDocument, SceneError, SceneInstance, SceneLoad, load_scene,
     load_scene_recovering, load_scene_recovering_for_editing, save_scene_atomic,
 };
+pub use scene_manager::{SceneManager, SceneManagerError};
 pub use undo::{SceneEdit, UndoStack};
 pub use world::{EngineSystem, SceneWorld, SchedulePhase, WorldCommand, WorldError, WorldSystem};
