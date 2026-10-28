@@ -1,0 +1,106 @@
+name: Bug report
+description: Report a problem with Rustic Game Engine.
+title: "[Bug]: "
+labels: ["type:fix"]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a problem with Rustic Game Engine.
+
+        Search existing issues before submitting a new report.
+        For security vulnerabilities, follow our
+        [Security Policy](https://github.com/Rustic-Game-Engine/engine/blob/main/SECURITY.md)
+        and report privately.
+
+  - type: input
+    id: version
+    attributes:
+      label: Engine version
+      description: Include the release tag or commit if building from source.
+      placeholder: "Example: v3.1-Pre-Alpha"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Installation method
+      options:
+        - Windows release installer
+        - Built from source
+        - GitHub Actions artifact
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: operating-system
+    attributes:
+      label: Operating system
+      description: Include the operating system version.
+      placeholder: "Example: Windows 11 24H2"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the problem and how it affects your work.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Provide clear steps and a minimal example where possible.
+      placeholder: |
+        1. Create a project using...
+        2. Open...
+        3. Select...
+        4. Observe...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: input
+    id: scripting-language
+    attributes:
+      label: Scripting language
+      description: If scripts are involved, include the language and toolchain version.
+      placeholder: "Example: JavaScript, Python 3.13, or not applicable"
+
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Relevant hardware
+      description: For rendering or performance problems, include your GPU, driver version, CPU, and RAM.
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and error messages
+      description: Paste relevant output. Remove credentials, personal information, and private file paths.
+      render: text
+
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshots or example project
+      description: Attach screenshots, recordings, or a minimal project that demonstrates the problem. Only share files you have permission to publish.
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Include workarounds, whether this worked in an earlier release, or anything else that may help.
