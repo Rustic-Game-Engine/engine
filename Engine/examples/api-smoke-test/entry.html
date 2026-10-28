@@ -17,8 +17,12 @@ function inspectApi() {
 }
 globalThis.behavior = {
   on_create() { inspectApi(); },
-  on_start() { const id=inspectApi(); instance.add("Part"); instance.clone(id); rustic.log("info", "Web API smoke test passed"); },
-  fixed_update() { inspectApi(); }, update() { inspectApi(); },
+  on_start() { inspectApi(); rustic.log("info", "Behavior started"); },
+  fixed_update(dt) {
+    const [x, y, z] = rustic.get_translation();
+    if (rustic.key("KeyW").held) rustic.set_translation(x, y, z + dt);
+  },
+  update() { inspectApi(); },
   on_destroy() { rustic.log("info", "Web behavior destroyed"); },
   on_stop() { rustic.log("info", "Web behavior stopped"); }
 };
