@@ -53,3 +53,7 @@ headers to arrange the view. Node positions last while the scene remains loaded.
 links, use **Project → Scene**; the graph refreshes when shown. Wire gestures do
 not modify the scene. An empty scene prompts you to add objects in Project. This
 is a hierarchy viewer, not an executable visual scripting system.
+
+## Resizing and display scaling
+
+The authoring viewport renders at its physical pixel size, including display DPI and editor UI scaling. While a resized frame renders in the background, the last completed frame retains its aspect ratio. The editor repaints when the renderer finishes and skips queued obsolete resize requests. To check sharpness, drag a viewport divider between wide and tall shapes and repeat after changing display scaling. Play, New Window, and Standalone retain a 16:9 game view and render at the physical size of the letterboxed area, up to 4096 pixels per axis.

@@ -124,6 +124,11 @@ impl FrameRing {
         })
     }
 
+    /// Returns the configured allocation bounds.
+    pub const fn limits(&self) -> FrameRingLimits {
+        self.limits
+    }
+
     /// Publishes a complete BGRA8 frame. An overrun replaces the oldest ring slot.
     ///
     /// # Errors

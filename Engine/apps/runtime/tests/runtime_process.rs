@@ -170,8 +170,16 @@ fn verify_play_modes(native_windows: bool) {
         }
         let mut runtime = spawn_runtime(&launch);
         let initial_frame = runtime.take_latest_frame().unwrap().unwrap();
-        assert_eq!((initial_frame.width, initial_frame.height), (640, 360));
-        let center = (180 * 640 + 320) * 4;
+        if native_windows {
+            assert!(initial_frame.width >= 640);
+            assert!(initial_frame.width <= engine_play::MAX_GAME_DIMENSION);
+        } else {
+            assert_eq!((initial_frame.width, initial_frame.height), (640, 360));
+        }
+        let center = usize::try_from(
+            (initial_frame.height / 2 * initial_frame.width + initial_frame.width / 2) * 4,
+        )
+        .unwrap();
         assert!(
             initial_frame.pixels[center + 2] > 100
                 && initial_frame.pixels[center + 2] > initial_frame.pixels[center] * 2,
@@ -208,6 +216,28 @@ fn verify_play_modes(native_windows: bool) {
             .unwrap();
         assert_eq!(frozen.state, RuntimeState::Paused);
         assert_eq!(frozen.fixed_tick, paused.fixed_tick);
+
+        if !native_windows {
+            for extent in [[1920, 1080], [1080, 1920], [640, 360]] {
+                runtime.set_viewport_extent(extent).unwrap();
+                let resized = runtime
+                    .control(ControlRequest::QueryState, Duration::from_secs(5))
+                    .unwrap();
+                assert_eq!(resized.fixed_tick, paused.fixed_tick);
+                let frame = runtime.take_latest_frame().unwrap().unwrap();
+                assert_eq!(
+                    [frame.width, frame.height],
+                    engine_play::game_view_extent(extent)
+                );
+                let center =
+                    usize::try_from((frame.height / 2 * frame.width + frame.width / 2) * 4)
+                        .unwrap();
+                assert!(
+                    frame.pixels[center + 2] > 100,
+                    "Resizing must retain the rendered scene"
+                );
+            }
+        }
 
         let stepped = runtime
             .control(ControlRequest::FrameAdvance, Duration::from_secs(2))

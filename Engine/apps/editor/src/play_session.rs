@@ -17,6 +17,7 @@ pub struct EditorPlaySession {
     fixed_tick: u64,
     last_frame_request: std::time::Instant,
     held_keys: BTreeSet<String>,
+    viewport_extent: Option<[u32; 2]>,
     live_entity: Option<LiveEntityProperties>,
     last_entity_request: std::time::Instant,
 }
@@ -107,6 +108,7 @@ impl EditorPlaySession {
             fixed_tick: 0,
             last_frame_request: std::time::Instant::now(),
             held_keys: BTreeSet::new(),
+            viewport_extent: None,
             live_entity: None,
             last_entity_request: std::time::Instant::now()
                 .checked_sub(Duration::from_secs(1))
@@ -164,6 +166,16 @@ impl EditorPlaySession {
         self.state = ack.state;
         self.fixed_tick = ack.fixed_tick;
         Ok(ack)
+    }
+
+    pub fn set_viewport_extent(&mut self, extent: [u32; 2]) -> Result<(), String> {
+        if self.mode == PlayMode::Play && self.viewport_extent != Some(extent) {
+            self.runtime
+                .set_viewport_extent(extent)
+                .map_err(|error| error.to_string())?;
+            self.viewport_extent = Some(extent);
+        }
+        Ok(())
     }
 
     pub fn set_input_keys(&mut self, keys: BTreeSet<String>) -> Result<(), String> {

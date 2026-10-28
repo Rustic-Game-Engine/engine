@@ -71,6 +71,22 @@ pub fn run_runtime_server_with_renderer(
     config: RuntimeServerConfig,
     render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,
 ) -> Result<(), RuntimeServerError> {
+    let mut render = render;
+    run_runtime_server_with_viewport_renderer(config, move |world, tick, _| render(world, tick))
+}
+
+/// Runs a renderer with the editor's requested physical game-view extent.
+///
+/// # Errors
+/// Returns snapshot, authentication, protocol, simulation, or synchronization errors.
+///
+/// # Panics
+/// Panics when the explicit `crash_after_ready` failure-injection flag is set.
+#[allow(clippy::needless_pass_by_value)]
+pub fn run_runtime_server_with_viewport_renderer(
+    config: RuntimeServerConfig,
+    render: impl FnMut(&engine_world::SceneWorld, u64, [u32; 2]) -> Result<BgraFrame, String>,
+) -> Result<(), RuntimeServerError> {
     let process = ProcessDescriptor {
         role: ProcessRole::Runtime,
         process_id: std::process::id(),
@@ -105,7 +121,7 @@ pub fn run_runtime_server_with_renderer(
 )]
 fn run_authenticated_session(
     config: &RuntimeServerConfig,
-    mut render: impl FnMut(&engine_world::SceneWorld, u64) -> Result<BgraFrame, String>,
+    mut render: impl FnMut(&engine_world::SceneWorld, u64, [u32; 2]) -> Result<BgraFrame, String>,
     connection: &mut AuthenticatedConnection,
     process: &ProcessDescriptor,
     logger: Option<&AsyncLogger>,
@@ -126,11 +142,12 @@ fn run_authenticated_session(
         config.mode,
         config.fixed_delta,
     )?));
+    let mut viewport_extent = [640, 360];
     // Finish renderer initialization before advancing simulation time.
     let first_frame = scripts
         .lock()
         .map_err(|_| RuntimeServerError::SimulationPoisoned)?
-        .render_world(|world| render(world, 0))
+        .render_world(|world| render(world, 0, viewport_extent))
         .map_err(RuntimeServerError::Scripts)?
         .map_err(RuntimeServerError::Render)?;
     let stopping = Arc::new(AtomicBool::new(false));
@@ -183,6 +200,10 @@ fn run_authenticated_session(
             }
             let request = match received.message {
                 ProtocolMessage::Control(request) => request,
+                ProtocolMessage::ResizeViewport(extent) => {
+                    viewport_extent = crate::game_view_extent(extent);
+                    continue;
+                }
                 ProtocolMessage::InputKeys(keys) => {
                     scripts
                         .lock()
@@ -299,7 +320,7 @@ fn run_authenticated_session(
                         scripts
                             .lock()
                             .map_err(|_| RuntimeServerError::SimulationPoisoned)?
-                            .render_world(|world| render(world, ack.fixed_tick))
+                            .render_world(|world| render(world, ack.fixed_tick, viewport_extent))
                             .map_err(RuntimeServerError::Scripts)?
                             .map_err(RuntimeServerError::Render)?,
                     ),
@@ -534,6 +555,81 @@ mod tests {
                 message: error.to_string(),
             }
         );
+    }
+
+    #[test]
+    fn viewport_resizes_reach_the_renderer_without_advancing_paused_simulation() {
+        let directory = tempfile::tempdir().unwrap();
+        let snapshot = SnapshotBuilder::new(directory.path().join("play"))
+            .stage(
+                PlayMode::Play,
+                SnapshotInput::new("scene/main.scene", b"scene".to_vec()),
+                &[],
+            )
+            .unwrap();
+        let config = startup_config(directory.path(), snapshot.root().to_path_buf());
+        let endpoint = config.endpoint.clone();
+        let token = config.authentication_token.clone();
+        let server = thread::spawn(move || {
+            run_runtime_server_with_viewport_renderer(config, |_, tick, [width, height]| {
+                Ok(BgraFrame {
+                    sequence: tick,
+                    width,
+                    height,
+                    stride_bytes: width * 4,
+                    pixels: vec![127; (width * height * 4) as usize],
+                })
+            })
+        });
+        let mut client = connect_authenticated(&endpoint, token, Duration::from_secs(5)).unwrap();
+        client
+            .set_receive_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        while !matches!(
+            client.receive().unwrap().message,
+            ProtocolMessage::Ready { .. }
+        ) {}
+        client
+            .send(1, &ProtocolMessage::Control(ControlRequest::Pause))
+            .unwrap();
+        let paused_tick = loop {
+            if let ProtocolMessage::ControlAck(ack) = client.receive().unwrap().message {
+                break ack.fixed_tick;
+            }
+        };
+        for extent in [[1920, 1080], [1080, 1920], [2560, 1080], [0, 0]] {
+            client
+                .send(2, &ProtocolMessage::ResizeViewport(extent))
+                .unwrap();
+            client
+                .send(3, &ProtocolMessage::Control(ControlRequest::QueryState))
+                .unwrap();
+            let mut rendered = false;
+            loop {
+                match client.receive().unwrap().message {
+                    ProtocolMessage::Frame(frame) => {
+                        assert_eq!([frame.width, frame.height], crate::game_view_extent(extent));
+                        assert_eq!(frame.sequence, paused_tick);
+                        rendered = true;
+                    }
+                    ProtocolMessage::ControlAck(ack) => {
+                        assert!(rendered);
+                        assert_eq!(ack.fixed_tick, paused_tick);
+                        break;
+                    }
+                    ProtocolMessage::Error { message, .. } => panic!("Resize failed: {message}"),
+                    _ => {}
+                }
+            }
+        }
+        client
+            .send(4, &ProtocolMessage::Control(ControlRequest::Stop))
+            .unwrap();
+        while !matches!(
+            client.receive().unwrap().message,
+            ProtocolMessage::ControlAck(_)
+        ) {}
+        assert!(server.join().unwrap().is_ok());
     }
 
     #[test]
