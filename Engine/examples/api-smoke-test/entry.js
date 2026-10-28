@@ -18,11 +18,13 @@ function inspectApi() {
 globalThis.behavior = {
   on_create() { inspectApi(); },
   on_start() {
-    const id = inspectApi();
-    instance.add("Part"); instance.clone(id);
-    rustic.log("info", "JavaScript API smoke test passed");
+    inspectApi();
+    rustic.log("info", "Behavior started");
   },
-  fixed_update(_) { inspectApi(); },
+  fixed_update(dt) {
+    const [x, y, z] = rustic.get_translation();
+    if (rustic.key("KeyW").held) rustic.set_translation(x, y, z + dt);
+  },
   update(_) { inspectApi(); },
   on_destroy() { rustic.log("info", "JavaScript behavior destroyed"); },
   on_stop() { rustic.log("info", "JavaScript behavior stopped"); },

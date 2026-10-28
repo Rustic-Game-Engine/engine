@@ -2263,6 +2263,135 @@ mod tests {
     #[test]
     #[allow(
         clippy::too_many_lines,
+        reason = "runs the shipped examples through all ten adapters"
+    )]
+    fn shipped_api_smoke_entries_move_only_while_w_is_held() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (
+                ScriptLanguage::Lua54,
+                "entry.lua",
+                include_bytes!("../../../examples/api-smoke-test/entry.lua").as_slice(),
+            ),
+            (
+                ScriptLanguage::Luau,
+                "entry.luau",
+                include_bytes!("../../../examples/api-smoke-test/entry.luau").as_slice(),
+            ),
+            (
+                ScriptLanguage::JavaScript,
+                "entry.js",
+                include_bytes!("../../../examples/api-smoke-test/entry.js").as_slice(),
+            ),
+            (
+                ScriptLanguage::Web,
+                "entry.html",
+                include_bytes!("../../../examples/api-smoke-test/entry.html").as_slice(),
+            ),
+            (
+                ScriptLanguage::Python,
+                "entry.py",
+                include_bytes!("../../../examples/api-smoke-test/entry.py").as_slice(),
+            ),
+            (
+                ScriptLanguage::C,
+                "entry.c",
+                include_bytes!("../../../examples/api-smoke-test/entry.c").as_slice(),
+            ),
+            (
+                ScriptLanguage::Cpp,
+                "entry.cpp",
+                include_bytes!("../../../examples/api-smoke-test/entry.cpp").as_slice(),
+            ),
+            (
+                ScriptLanguage::CSharp,
+                "entry.cs",
+                include_bytes!("../../../examples/api-smoke-test/entry.cs").as_slice(),
+            ),
+            (
+                ScriptLanguage::Java,
+                "RusticBehavior.java",
+                include_bytes!("../../../examples/api-smoke-test/RusticBehavior.java").as_slice(),
+            ),
+            (
+                ScriptLanguage::Php,
+                "entry.php",
+                include_bytes!("../../../examples/api-smoke-test/entry.php").as_slice(),
+            ),
+        ];
+        for &(language, name, source) in fixtures {
+            if !matches!(
+                language,
+                ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
+            ) && !engine_scripting::probe_language_toolchain(language).available
+            {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_API_ADAPTERS").is_none(),
+                    "{} toolchain required for smoke tests",
+                    language.display_name()
+                );
+                eprintln!(
+                    "SKIPPED API smoke {}: missing toolchain",
+                    language.display_name()
+                );
+                continue;
+            }
+            let temp = tempfile::tempdir().unwrap();
+            let mut scene = SceneWorld::new();
+            let entity = EntitySnapshot::default();
+            let id = entity.id;
+            scene
+                .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+                .unwrap();
+            let world = Arc::new(Mutex::new(scene));
+            let mut host = environment_host(&world);
+            host.entity = id;
+            host.entity_bound = true;
+            host.snapshot_root = temp.path().into();
+            host.set_translation([3.0, 2.0, 1.0]).unwrap();
+            let input = Arc::clone(&host.input_keys);
+            let logs = Arc::clone(&host.logs);
+            let observer = host.clone();
+            let mut behavior =
+                RuntimeBehavior::load(language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap_or_else(|error| panic!("{name} load: {error}"));
+            behavior
+                .on_create()
+                .unwrap_or_else(|error| panic!("{name} create: {error}"));
+            behavior
+                .on_start()
+                .unwrap_or_else(|error| panic!("{name} start: {error}"));
+            behavior.fixed_update(0.25).unwrap();
+            assert_eq!(observer.translation(), [3.0, 2.0, 1.0], "{name} idle");
+            input.lock().unwrap().insert("KeyW".into());
+            behavior.fixed_update(0.25).unwrap();
+            behavior.fixed_update(0.25).unwrap();
+            behavior.update(0.25).unwrap();
+            assert_eq!(observer.translation(), [3.0, 2.0, 1.5], "{name} held");
+            input.lock().unwrap().clear();
+            behavior.fixed_update(0.25).unwrap();
+            assert_eq!(observer.translation(), [3.0, 2.0, 1.5], "{name} released");
+            assert_eq!(
+                world.lock().unwrap().entity_ids().count(),
+                1,
+                "{name} spawned extra objects"
+            );
+            assert_eq!(
+                logs.lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|(_, message)| message == "Behavior started")
+                    .count(),
+                1,
+                "{name} start log"
+            );
+            behavior.on_stop().unwrap();
+            behavior.on_destroy().unwrap();
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
         reason = "one shared fixture harness verifies all ten adapters"
     )]
     fn audio_capture_and_live_reads_conform_in_every_available_adapter() {

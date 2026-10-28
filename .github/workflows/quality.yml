@@ -172,6 +172,8 @@ jobs:
         run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play environment -- --nocapture
       - name: Audio, capture and live reads across all adapters
         run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play audio_capture_and_live_reads_conform -- --nocapture
+      - name: Shipped API smoke entries across all adapters
+        run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play shipped_api_smoke_entries_move_only_while_w_is_held -- --nocapture
       - name: Entity foundations across all adapters
         env:
           RUSTIC_REQUIRE_ALL_ENTITY_ADAPTERS: '1'

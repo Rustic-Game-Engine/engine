@@ -24,12 +24,13 @@ end
 return {
   on_create = function() inspect_api() end,
   on_start = function()
-    local id = inspect_api()
-    instance.add("Part")
-    instance.clone(id)
-    rustic.log("info", "Lua API smoke test passed")
+    inspect_api()
+    rustic.log("info", "Behavior started")
   end,
-  fixed_update = function(_) inspect_api() end,
+  fixed_update = function(dt)
+    local x, y, z = rustic.get_translation()
+    if rustic.key("KeyW").held then rustic.set_translation(x, y, z + dt) end
+  end,
   update = function(_) inspect_api() end,
   on_destroy = function() rustic.log("info", "Lua behavior destroyed") end,
   on_stop = function() rustic.log("info", "Lua behavior stopped") end,
