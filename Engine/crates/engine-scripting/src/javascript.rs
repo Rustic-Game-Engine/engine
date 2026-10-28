@@ -1,5 +1,5 @@
 use crate::{EngineValue, EntityId, GameplayHost, ScriptId};
-use rquickjs::{Context, Runtime};
+use rquickjs::{CatchResultExt, Context, Runtime};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use std::sync::{Arc, Mutex};
@@ -133,8 +133,13 @@ pub fn validate_javascript(
         .map_err(|error| JavaScriptRuntimeError::Validation(error.to_string()))?;
     let (_runtime, context, _budget) = sandbox_runtime(u64::MAX)?;
     context
-        .with(|context| context.eval::<(), _>(format!("new Function({encoded})")))
-        .map_err(|error| JavaScriptRuntimeError::Validation(error.to_string()))
+        .with(|context| {
+            context
+                .eval::<(), _>(format!("new Function({encoded})"))
+                .catch(&context)
+                .map_err(|error| error.to_string())
+        })
+        .map_err(JavaScriptRuntimeError::Validation)
 }
 
 /// A sandboxed ECMAScript behavior using only the engine-owned command bridge.
@@ -201,7 +206,9 @@ impl JavaScriptBehavior {
                     "__rustic_query",
                     rquickjs::Function::new(
                         ctx.clone(),
-                        move |request: String| -> rquickjs::Result<String> {
+                        move |ctx: rquickjs::Ctx<'_>,
+                              request: String|
+                              -> rquickjs::Result<String> {
                             let response = (|| -> Result<serde_json::Value, String> {
                                 let envelope: serde_json::Value =
                                     serde_json::from_str(&request).map_err(|e| e.to_string())?;
@@ -216,11 +223,13 @@ impl JavaScriptBehavior {
                                 }
                                 host.gameplay_query(envelope["query"].clone())
                             })();
-                            match response {
-                                Ok(value) => serde_json::to_string(&value)
-                                    .map_err(|_| rquickjs::Error::Unknown),
-                                Err(_) => Err(rquickjs::Error::Unknown),
-                            }
+                            response
+                                .and_then(|value| {
+                                    serde_json::to_string(&value).map_err(|error| error.to_string())
+                                })
+                                .map_err(|message| {
+                                    rquickjs::Exception::throw_message(&ctx, &message)
+                                })
                         },
                     )?,
                 )
@@ -228,18 +237,32 @@ impl JavaScriptBehavior {
             .map_err(|e| JavaScriptRuntimeError::Runtime(e.to_string()))?;
         context
             .with(|context| {
-                context.eval::<(), _>(format!("{}\n{}", BRIDGE, include_str!("sdk/gameplay.js")))
+                context
+                    .eval::<(), _>(format!("{}\n{}", BRIDGE, include_str!("sdk/gameplay.js")))
+                    .catch(&context)
+                    .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         context
             .with(|context| {
-                context.eval::<(), _>("globalThis.behavior = Object.create(null);")?;
-                context.eval::<(), _>(text)
+                context
+                    .eval::<(), _>("globalThis.behavior = Object.create(null);")
+                    .catch(&context)
+                    .map_err(|error| error.to_string())?;
+                context
+                    .eval::<(), _>(text)
+                    .catch(&context)
+                    .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let behavior_type = context
-            .with(|context| context.eval::<String, _>("typeof globalThis.behavior"))
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .with(|context| {
+                context
+                    .eval::<String, _>("typeof globalThis.behavior")
+                    .catch(&context)
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         if behavior_type != "object" {
             return Err(JavaScriptRuntimeError::Runtime(format!(
                 "{source_name} must assign an object to globalThis.behavior"
@@ -387,19 +410,34 @@ impl JavaScriptBehavior {
             std::sync::atomic::Ordering::Relaxed,
         );
         self.context
-            .with(|context| context.eval::<(), _>(format!("__rustic_set_state({state_json})")))
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .with(|context| {
+                context
+                    .eval::<(), _>(format!("__rustic_set_state({state_json})"))
+                    .catch(&context)
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let argument = delta.map_or_else(String::new, |value| value.to_string());
         let invocation = format!(
             "if (typeof __rustic_gameplay_dispatch === 'function') __rustic_gameplay_dispatch(); if (typeof behavior.{canonical} === 'function') behavior.{canonical}({argument}); else if (typeof behavior.{legacy} === 'function') behavior.{legacy}({argument})"
         );
         self.context
-            .with(|context| context.eval::<(), _>(invocation))
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .with(|context| {
+                context
+                    .eval::<(), _>(invocation)
+                    .catch(&context)
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let commands = self
             .context
-            .with(|context| context.eval::<String, _>("JSON.stringify(__rustic_take_commands())"))
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .with(|context| {
+                context
+                    .eval::<String, _>("JSON.stringify(__rustic_take_commands())")
+                    .catch(&context)
+                    .map_err(|error| error.to_string())
+            })
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let commands: Vec<Command> = serde_json::from_str(&commands)
             .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
         let mut host = self
@@ -637,6 +675,66 @@ mod tests {
             properties: BTreeMap::from([("speed".into(), EngineValue::Number(2.0))]),
             logs: Vec::new(),
         })
+    }
+
+    #[test]
+    fn query_failures_are_catchable_with_the_engine_message() {
+        let source = br#"globalThis.behavior = { OnCreate() {
+            try { rustic.query({op: "unsupported_matrix_query"}); }
+            catch (error) {
+                if (!error.message.includes("unsupported_matrix_query")) throw error;
+                return;
+            }
+            throw new Error("expected the query to fail");
+        }};"#;
+        let mut behavior =
+            JavaScriptBehavior::load(ScriptId::new(), source, "query-error.js", host(), 100_000)
+                .unwrap();
+        behavior.on_create().unwrap();
+        assert!(behavior.enabled());
+    }
+
+    #[test]
+    fn uncaught_query_errors_retain_the_engine_message() {
+        let source = br#"globalThis.behavior = { OnCreate() {
+            rustic.set_property("missing_matrix_property", 1);
+            rustic.query({op: "unused"});
+        }};"#;
+        let mut behavior =
+            JavaScriptBehavior::load(ScriptId::new(), source, "query-error.js", host(), 100_000)
+                .unwrap();
+        let error = behavior.on_create().unwrap_err().to_string();
+        assert!(
+            error.contains("property `missing_matrix_property` is not declared"),
+            "{error}"
+        );
+        assert!(!error.contains("unknown error"), "{error}");
+        assert!(!behavior.enabled());
+    }
+
+    #[test]
+    fn source_and_callback_errors_retain_their_messages() {
+        let error = JavaScriptBehavior::load(
+            ScriptId::new(),
+            b"throw new Error('matrix load failed')",
+            "matrix.js",
+            host(),
+            100_000,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("matrix load failed"), "{error}");
+        let mut behavior = JavaScriptBehavior::load(
+            ScriptId::new(),
+            b"globalThis.behavior = { Start() { throw new Error('matrix start failed'); } };",
+            "matrix.js",
+            host(),
+            100_000,
+        )
+        .unwrap();
+        let error = behavior.on_start().unwrap_err().to_string();
+        assert!(error.contains("matrix start failed"), "{error}");
+        assert!(!behavior.enabled());
     }
 
     #[test]
