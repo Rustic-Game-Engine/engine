@@ -2,7 +2,7 @@
 
 Prerequisites: a writable project and an existing asset file. Stop Play before reorganising project files. Switch **Explorer** to browse directories; **Filter** matches names and project-relative paths.
 
-**Explorer** and **Scene Explorer** are independent dock tabs. Drag a tab header to group it elsewhere, or drop on a docking preview at a panel edge to split the view. **Properties** edits the selected object; **Terminal** displays runtime logs. Use **View → Reset dock layout** to recover the default arrangement. Dock geometry resets on project reopening.
+**Explorer** and **Scene Explorer** are independent dock tabs. Drag a tab header to group it elsewhere, or drop on a docking preview at a panel edge to split the view. **Properties** edits the selected object; **Terminal** displays runtime logs. Use the **View → Panels** checkboxes to show or hide any panel without changing its dock position. Visibility choices survive reopening the project. Use **View → Reset dock layout** to clear hidden-panel choices and recover the default arrangement. Dock geometry resets on project reopening.
 
 ## Import a model
 
