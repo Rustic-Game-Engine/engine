@@ -222,7 +222,10 @@ fn resolve_saved_scene(root: &Path, source: &str) -> Result<(SceneDocument, Path
                 let relative = path
                     .strip_prefix(root)
                     .map_err(|e| e.to_string())?
-                    .to_string_lossy();
+                    .iter()
+                    .map(|component| component.to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/");
                 if let Ok((document, relative)) = read_saved_scene(root, &relative)
                     && document.name == source
                 {

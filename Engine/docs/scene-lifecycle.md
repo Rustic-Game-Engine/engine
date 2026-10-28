@@ -177,7 +177,9 @@ selected and loaded, including when it was automatically loaded. Loading a dupli
 also raises an error. Catch expected errors with `pcall`/try/catch as appropriate.
 
 `load` takes a relative project file path. `switchTo` accepts a document name or
-a relative file path; unload/query calls take the **document name returned by load**. Paths cannot escape the Play snapshot.
+a relative file path; unload/query calls take the **document name returned by load**.
+Use forward slashes in script file paths on Windows as well. Paths cannot escape
+the Play snapshot.
 Missing files, invalid RON, invalid world data, incompatible schema versions and
 checksum mismatches raise errors without adding a loaded scene. The loader does
 not silently use a backup. Open and save externally edited scene files in the
