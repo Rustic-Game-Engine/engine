@@ -26,4 +26,12 @@ interface RusticGlobalApi extends RusticApi {
   setEnvironment(settings: Partial<RusticSceneEnvironment>): RusticSceneEnvironment;
   setCurrentCamera(object: string | RusticSceneObject): void;
 }
-declare const game: Readonly<{ scene: RusticSceneObject; rustic: RusticGlobalApi }>;
+interface RusticSceneApi extends RusticSceneObject {
+  load(path: string): string;
+  unload(scene: string): void;
+  switchTo(scene: string): void;
+  isLoaded(scene: string): boolean;
+  getLoaded(): string[];
+  getActive(): string | null;
+}
+declare const game: Readonly<{ scene: RusticSceneApi; rustic: RusticGlobalApi }>;

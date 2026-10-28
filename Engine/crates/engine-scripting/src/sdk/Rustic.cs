@@ -363,6 +363,12 @@ sealed class RusticApi {
 }
 
 sealed class SceneApi {
+    public string load(string scene)=>Rustic.Query(new{op="scene_load",scene}).GetString()!;
+    public void unload(string scene)=>Rustic.Query(new{op="scene_unload",scene});
+    public void switchTo(string scene)=>Rustic.Query(new{op="scene_switch",scene});
+    public bool isLoaded(string scene)=>Rustic.Query(new{op="scene_is_loaded",scene}).GetBoolean();
+    public string[] getLoaded()=>Rustic.Query(new{op="scene_loaded"}).EnumerateArray().Select(v=>v.GetString()!).ToArray();
+    public string? getActive()=>Rustic.Query(new{op="scene_active"}).GetString();
     public JsonElement getEnvironment(string field)=>Rustic.Query(new{op="scene_environment_field",field});
     public JsonElement getEnvironment() => Rustic.Query(new {op="scene_environment"});
     public JsonElement setEnvironment(object settings) => Rustic.Query(new {op="scene_environment", settings});
@@ -387,6 +393,12 @@ sealed class GameApi {
 // Canonical API paths.
 sealed class CanonicalScenePath : System.Dynamic.DynamicObject {
     private readonly string source;
+    public string load(string scene)=>Rustic.Game.scene.load(scene);
+    public void unload(string scene)=>Rustic.Game.scene.unload(scene);
+    public void switchTo(string scene)=>Rustic.Game.scene.switchTo(scene);
+    public bool isLoaded(string scene)=>Rustic.Game.scene.isLoaded(scene);
+    public string[] getLoaded()=>Rustic.Game.scene.getLoaded();
+    public string? getActive()=>Rustic.Game.scene.getActive();
     public CanonicalScenePath(string source="game.scene") { this.source=source; }
     public CanonicalScenePath this[string name] => new(source+"."+name);
     public override bool TryGetMember(System.Dynamic.GetMemberBinder binder,out object? result) { result=this[binder.Name];return true; }

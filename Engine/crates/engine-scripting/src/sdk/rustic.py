@@ -58,6 +58,12 @@ class RusticApi:
     def set_enabled(self, enabled): self.commands.append({"op":"set_enabled","enabled":bool(enabled)})
 
 class SceneApi:
+    def load(self,scene): return rustic.query({"op":"scene_load","scene":scene})
+    def unload(self,scene): return rustic.query({"op":"scene_unload","scene":scene})
+    def switchTo(self,scene): return rustic.query({"op":"scene_switch","scene":scene})
+    def isLoaded(self,scene): return rustic.query({"op":"scene_is_loaded","scene":scene})
+    def getLoaded(self): return rustic.query({"op":"scene_loaded"})
+    def getActive(self): return rustic.query({"op":"scene_active"})
     def getEnvironment(self,field=None): return rustic.query({"op":"scene_environment"} if field is None else dict(op="scene_environment_field",field=field))
     def setEnvironment(self, settings): return rustic.query({"op":"scene_environment", "settings":settings})
     def setSkyTexture(self, path): return self.setEnvironment({"sky_image":path})
@@ -617,6 +623,7 @@ class ApiPath:
             self.children[name]=ApiPath(self.source+'.'+name,self.category,(self.file_path+'/' if self.file_path else '')+name if self.category=='file' else None)
         return self.children[name]
     def __getattr__(self,name):
+        if self.source=='game.scene' and name in ('load','unload','switchTo','isLoaded','getLoaded','getActive'): return getattr(Game.scene,name)
         if name in ('EditAttribute','edit_attribute'):
             return lambda attribute,value: ObjectPath(self.source).EditAttribute(attribute,value)
         binding=_path_methods[self.category].get(name)

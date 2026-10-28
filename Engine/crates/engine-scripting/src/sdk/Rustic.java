@@ -371,6 +371,12 @@ class Rustic {
         void clone(String s){clone(s,null);}void clone(String s,String p){command("clone_instance","source",s,"parent",p);}
     }
     static class SceneApi {
+        String load(String scene){return (String)query(args("scene_load","scene",scene));}
+        void unload(String scene){query(args("scene_unload","scene",scene));}
+        void switchTo(String scene){query(args("scene_switch","scene",scene));}
+        boolean isLoaded(String scene){return Boolean.TRUE.equals(query(args("scene_is_loaded","scene",scene)));}
+        List<String> getLoaded(){return ((List<?>)query(args("scene_loaded"))).stream().map(v->(String)v).toList();}
+        String getActive(){return (String)query(args("scene_active"));}
         Object getEnvironment(String field){return query(args("scene_environment_field","field",field));}
         Object getEnvironment(){return query(args("scene_environment"));}
         Object setEnvironment(Map<String,Object> settings){return query(args("scene_environment","settings",settings));}
@@ -415,6 +421,12 @@ class Rustic {
     }
     // Canonical API paths.
     static class CanonicalScenePath {
+        String load(String scene){return Game.scene.load(scene);}
+        void unload(String scene){Game.scene.unload(scene);}
+        void switchTo(String scene){Game.scene.switchTo(scene);}
+        boolean isLoaded(String scene){return Game.scene.isLoaded(scene);}
+        List<String> getLoaded(){return Game.scene.getLoaded();}
+        String getActive(){return Game.scene.getActive();}
         final String source;
         CanonicalScenePath(String source){this.source=source;}
         CanonicalScenePath scene(String name){return new CanonicalScenePath(source+"."+name);}

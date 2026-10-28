@@ -67,6 +67,11 @@ impl EditorPlaySession {
             }
         }
         collect_snapshot_assets(document.project().root(), &mut programming)?;
+        collect_snapshot_scenes(
+            document.project().root(),
+            document.scene_path(),
+            &mut programming,
+        )?;
         collect_sky_image(document, &mut programming)?;
         let snapshot = SnapshotBuilder::new(temporary.join("play"))
             .stage(
@@ -265,6 +270,48 @@ fn collect_sky_image(
         }
         let bytes = std::fs::read(path).map_err(|e| format!("sky image: {e}"))?;
         programming.push(SnapshotInput::new(&env.sky_image, bytes));
+    }
+    Ok(())
+}
+
+fn collect_snapshot_scenes(
+    root: &Path,
+    current: &Path,
+    output: &mut Vec<SnapshotInput>,
+) -> Result<(), String> {
+    let mut pending = [root.join("scene"), root.join("scenes")]
+        .into_iter()
+        .filter(|path| {
+            path.symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        })
+        .collect::<Vec<_>>();
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file()
+                && path != current
+                && matches!(
+                    path.extension().and_then(|s| s.to_str()),
+                    Some("scene" | "rscene")
+                )
+            {
+                let relative = path.strip_prefix(root).map_err(|e| e.to_string())?;
+                if !output.iter().any(|input| input.relative_path == relative) {
+                    output.push(SnapshotInput::new(
+                        relative,
+                        std::fs::read(&path).map_err(|e| e.to_string())?,
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }

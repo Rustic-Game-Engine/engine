@@ -34,6 +34,12 @@ pub(crate) fn normalize_query(value: &mut serde_json::Value) {
 /// Engine-owned runtime surface. Implementations live in the isolated runtime process.
 #[allow(clippy::missing_errors_doc)]
 pub trait GameplayHost: Send {
+    /// Refreshes global-script bindings after a scene switch or unload.
+    fn refresh_scene_context(&mut self) {}
+    /// Whether this host belongs to a global startup script.
+    fn persists_across_scenes(&self) -> bool {
+        false
+    }
     fn gameplay_query(&mut self, query: serde_json::Value) -> Result<serde_json::Value, String> {
         let query: engine_core::gameplay::query::Query =
             serde_json::from_value(query).map_err(|e| e.to_string())?;

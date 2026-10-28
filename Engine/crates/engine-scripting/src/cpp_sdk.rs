@@ -124,6 +124,12 @@ public:
 };
 class InstanceApi {friend int rustic_run(const struct RusticBehavior&);std::vector<RusticValue>*commands=nullptr;void push(const char*op,const std::string&s,const std::optional<std::string>&p){commands->push_back(rustic_detail::object({{"op",op},{"source",s},{"parent",p?RusticValue(*p):RusticValue()}}));}public:void add(const std::string&s,std::optional<std::string>p={}){push("add_instance",s,p);}void clone(const std::string&s,std::optional<std::string>p={}){push("clone_instance",s,p);}};
 class SceneApi {public:
+    std::string load(const std::string& scene) const;
+    void unload(const std::string& scene) const;
+    void switchTo(const std::string& scene) const;
+    bool isLoaded(const std::string& scene) const;
+    RusticValue getLoaded() const;
+    RusticValue getActive() const;
     RusticValue getEnvironment(const std::string& field) const;
     RusticValue getEnvironment() const;
     RusticValue setEnvironment(RusticValue::Object settings) const;
@@ -147,6 +153,12 @@ inline RusticCaptureHandle ObjectPath::startRecording(const RusticValue& path,co
 inline void ObjectPath::stopRecording(const RusticCaptureHandle* handle) const{Game.stopRecording(handle);}
 inline RusticCaptureHandle ObjectPath::startHotMic() const{return Game.startHotMic();}
 inline void ObjectPath::stopHotMic(const RusticCaptureHandle* handle) const{Game.stopHotMic(handle);}
+inline std::string SceneApi::load(const std::string& scene) const {return rustic.query(rustic_detail::object({{"op","scene_load"},{"scene",scene}})).string();}
+inline void SceneApi::unload(const std::string& scene) const {rustic.query(rustic_detail::object({{"op","scene_unload"},{"scene",scene}}));}
+inline void SceneApi::switchTo(const std::string& scene) const {rustic.query(rustic_detail::object({{"op","scene_switch"},{"scene",scene}}));}
+inline bool SceneApi::isLoaded(const std::string& scene) const {return rustic.query(rustic_detail::object({{"op","scene_is_loaded"},{"scene",scene}})).boolean();}
+inline RusticValue SceneApi::getLoaded() const {return rustic.query(rustic_detail::object({{"op","scene_loaded"}}));}
+inline RusticValue SceneApi::getActive() const {return rustic.query(rustic_detail::object({{"op","scene_active"}}));}
 inline RusticValue SceneApi::getEnvironment(const std::string& field) const{return rustic.query(rustic_detail::object({{"op","scene_environment_field"},{"field",field}}));}
 inline RusticValue SceneApi::getEnvironment() const {return rustic.query(rustic_detail::object({{"op","scene_environment"}}));}
 inline RusticValue SceneApi::setEnvironment(RusticValue::Object settings) const {return rustic.query(rustic_detail::object({{"op","scene_environment"},{"settings",std::move(settings)}}));}
@@ -395,6 +407,13 @@ struct RusticBehavior {std::function<void()> on_create={},on_start={},on_enable=
 
 // Canonical API paths.
 struct CanonicalScenePath {
+  auto load(const std::string& scene) const {return ::Game.scene.load(scene);}
+  auto unload(const std::string& scene) const {return ::Game.scene.unload(scene);}
+  auto switchTo(const std::string& scene) const {return ::Game.scene.switchTo(scene);}
+  auto isLoaded(const std::string& scene) const {return ::Game.scene.isLoaded(scene);}
+  auto getLoaded() const {return ::Game.scene.getLoaded();}
+  auto getActive() const {return ::Game.scene.getActive();}
+
   std::string source;
   void clone(std::optional<std::string> parent={})const{::instance.clone(source,parent);}
   void add(std::optional<std::string> parent={})const{::instance.add(source,parent);}

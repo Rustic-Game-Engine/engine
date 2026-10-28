@@ -378,6 +378,7 @@ globalThis.RusticCapture={
   const path=(source,filePath=null)=>{
     const cache=Object.create(null);
     return new Proxy(cache,{get:(cache,key)=>{
+      if(source==='game.scene' && ['load','unload','switchTo','isLoaded','getLoaded','getActive'].includes(key))return (...args)=>Game.scene[key](...args);
       if(key==='__source')return source;
       if(key==='__file_path')return filePath;
       if(typeof key!=='string')return undefined;

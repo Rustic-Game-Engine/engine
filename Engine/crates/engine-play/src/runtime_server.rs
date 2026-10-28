@@ -116,6 +116,7 @@ fn run_authenticated_session(
         RuntimeScripts::load(snapshot.root(), &source_scene)
             .map_err(RuntimeServerError::Scripts)?,
     ));
+    drop(source_scene);
     if snapshot.manifest().mode != config.mode {
         return Err(RuntimeServerError::SnapshotModeMismatch {
             snapshot: snapshot.manifest().mode,
@@ -286,7 +287,7 @@ fn run_authenticated_session(
                     .map_err(|_| RuntimeServerError::SimulationPoisoned)?;
                 scripts.stop();
                 let changes = scripts
-                    .runtime_changes(snapshot.source_scene_hash(), &source_scene)
+                    .runtime_changes(snapshot.source_scene_hash(), &snapshot.scene_bytes()?)
                     .map_err(RuntimeServerError::Scripts)?;
                 connection.send(
                     received.request_id,

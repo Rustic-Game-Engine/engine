@@ -1,3 +1,5 @@
+#[path = "scene_lifecycle.rs"]
+mod scenes;
 use crate::{
     LiveEntityProperties, RuntimeChange, RuntimeChangeSet, RuntimeChangeTarget, RuntimeValue,
 };
@@ -8,6 +10,8 @@ use engine_scripting::{
     load_manifest,
 };
 use engine_world::{EntityId, Mesh, SceneWorld, WorldCommand, load_scene};
+pub(crate) use scenes::RuntimeScripts;
+use scenes::{LoadedScene, SceneIo, SceneRegistry};
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -242,7 +246,7 @@ impl Default for GameplayContext {
     }
 }
 
-pub(crate) struct RuntimeScripts {
+struct SceneRuntime {
     gameplay: Arc<Mutex<GameplayContext>>,
     behaviors: Vec<RuntimeBehavior>,
     world: Arc<Mutex<SceneWorld>>,
@@ -250,9 +254,11 @@ pub(crate) struct RuntimeScripts {
     logs: Arc<Mutex<VecDeque<(String, String)>>>,
     dropped_logs: Arc<Mutex<u64>>,
     valid_scene: bool,
+    name: String,
+    global_behaviors: Vec<RuntimeBehavior>,
 }
 
-impl RuntimeScripts {
+impl SceneRuntime {
     pub fn live_entity(&self, id: EntityId) -> Result<Option<LiveEntityProperties>, String> {
         let world = self
             .world
@@ -292,33 +298,25 @@ impl RuntimeScripts {
         }))
     }
     #[allow(clippy::too_many_lines)]
-    pub fn load(snapshot_root: &std::path::Path, scene_bytes: &[u8]) -> Result<Self, String> {
+    fn load(
+        snapshot_root: &Path,
+        loaded: &LoadedScene,
+        scenes: &Arc<Mutex<SceneRegistry>>,
+        io: &SceneIo,
+        include_globals: bool,
+    ) -> Result<Self, String> {
         let manifest_path = snapshot_root.join("config/scripts.ron");
-        let parsed_scene = load_scene(scene_bytes).ok();
-        if manifest_path.is_file() && parsed_scene.is_none() {
-            return Err("scripted snapshot contains an invalid scene".into());
-        }
-        let valid_scene = parsed_scene.is_some();
-        let scene_name = parsed_scene
-            .as_ref()
-            .map(|scene| scene.document.name.clone())
-            .unwrap_or_default();
-        let mut scene_startup_scripts = parsed_scene
-            .as_ref()
-            .map(|scene| scene.document.startup_scripts.clone())
-            .unwrap_or_default();
+        let valid_scene = loaded.valid;
+        let scene_name = loaded.name.clone();
+        let mut scene_startup_scripts = loaded.startup_scripts.clone();
         sort_script_references(&mut scene_startup_scripts);
-        let world = Arc::new(Mutex::new(match parsed_scene {
-            Some(scene) => scene
-                .document
-                .create_world()
-                .map_err(|error| error.to_string())?,
-            None => SceneWorld::new(),
-        }));
-        let logs = Arc::new(Mutex::new(VecDeque::new()));
-        let dropped_logs = Arc::new(Mutex::new(0));
-        let input_keys = Arc::new(Mutex::new(BTreeSet::new()));
-        let gameplay = Arc::new(Mutex::new(GameplayContext::default()));
+        let world = Arc::clone(&loaded.world);
+        let gameplay = Arc::clone(&loaded.gameplay);
+        let SceneIo {
+            logs,
+            dropped_logs,
+            input_keys,
+        } = io.clone();
         let model_library =
             engine_assets::load_model_library(snapshot_root).map_err(|e| e.to_string())?;
         {
@@ -363,7 +361,10 @@ impl RuntimeScripts {
         } else {
             None
         };
-        if let Some(settings) = &settings {
+        let mut global_behaviors = Vec::new();
+        if let Some(settings) = &settings
+            && include_globals
+        {
             let mut global_scripts = settings.global_scripts.clone();
             sort_script_references(&mut global_scripts);
             load_startup_references(
@@ -376,7 +377,9 @@ impl RuntimeScripts {
                 &logs,
                 &dropped_logs,
                 &gameplay,
-                &mut behaviors,
+                &mut global_behaviors,
+                scenes,
+                true,
             )?;
         }
         load_startup_references(
@@ -390,6 +393,8 @@ impl RuntimeScripts {
             &dropped_logs,
             &gameplay,
             &mut behaviors,
+            scenes,
+            false,
         )?;
         for entity in snapshots {
             for component in entity.scripts {
@@ -425,6 +430,8 @@ impl RuntimeScripts {
                     logs: Arc::clone(&logs),
                     dropped_logs: Arc::clone(&dropped_logs),
                     enabled: true,
+                    scenes: Arc::clone(scenes),
+                    global: false,
                 };
                 let mut behavior = RuntimeBehavior::load(
                     entry.language,
@@ -445,6 +452,8 @@ impl RuntimeScripts {
             logs,
             dropped_logs,
             valid_scene,
+            name: scene_name,
+            global_behaviors,
         })
     }
 
@@ -600,54 +609,6 @@ impl RuntimeScripts {
         }
         self.behaviors = active;
     }
-    pub fn reload(
-        &mut self,
-        script_id: engine_scripting::ScriptId,
-        source: &[u8],
-    ) -> Result<usize, String> {
-        let indices: Vec<_> = self
-            .behaviors
-            .iter()
-            .enumerate()
-            .filter_map(|(index, behavior)| (behavior.script_id() == script_id).then_some(index))
-            .collect();
-        if indices.is_empty() {
-            return Err(format!("script {script_id} has no running instances"));
-        }
-        let mut replacements: Vec<RuntimeBehavior> = Vec::with_capacity(indices.len());
-        for index in &indices {
-            let result = (|| {
-                let mut replacement = self.behaviors[*index].replacement(source)?;
-                if let Err(error) = replacement
-                    .on_create()
-                    .and_then(|()| replacement.on_enable())
-                    .and_then(|()| replacement.on_start())
-                {
-                    replacement.cleanup_gameplay();
-                    return Err(error);
-                }
-                Ok(replacement)
-            })();
-            match result {
-                Ok(replacement) => replacements.push(replacement),
-                Err(error) => {
-                    for staged in &mut replacements {
-                        staged.cleanup_gameplay();
-                    }
-                    return Err(error);
-                }
-            }
-        }
-        for (index, replacement) in indices.into_iter().zip(replacements) {
-            self.behaviors[index].cleanup_gameplay();
-            self.behaviors[index] = replacement;
-        }
-        Ok(self
-            .behaviors
-            .iter()
-            .filter(|behavior| behavior.script_id() == script_id)
-            .count())
-    }
     pub fn drain_logs(&self) -> Vec<(String, String)> {
         self.logs
             .lock()
@@ -718,6 +679,49 @@ impl RuntimeScripts {
     }
 }
 
+fn reload_behaviors<'a>(
+    behaviors: impl Iterator<Item = &'a mut RuntimeBehavior>,
+    script_id: ScriptId,
+    source: &[u8],
+) -> Result<usize, String> {
+    let mut instances: Vec<_> = behaviors
+        .filter(|behavior| behavior.script_id() == script_id)
+        .collect();
+    if instances.is_empty() {
+        return Err(format!("script {script_id} has no running instances"));
+    }
+    let mut replacements: Vec<RuntimeBehavior> = Vec::with_capacity(instances.len());
+    for instance in &instances {
+        let result = (|| {
+            let mut replacement = instance.replacement(source)?;
+            if let Err(error) = replacement
+                .on_create()
+                .and_then(|()| replacement.on_enable())
+                .and_then(|()| replacement.on_start())
+            {
+                replacement.cleanup_gameplay();
+                return Err(error);
+            }
+            Ok(replacement)
+        })();
+        match result {
+            Ok(replacement) => replacements.push(replacement),
+            Err(error) => {
+                for replacement in &mut replacements {
+                    replacement.cleanup_gameplay();
+                }
+                return Err(error);
+            }
+        }
+    }
+    let count = instances.len();
+    for (instance, replacement) in instances.iter_mut().zip(replacements) {
+        instance.cleanup_gameplay();
+        **instance = replacement;
+    }
+    Ok(count)
+}
+
 fn sort_script_references(references: &mut [ScriptReference]) {
     // Stable sort preserves editor list order when explicit orders are equal.
     references.sort_by_key(|reference| reference.execution_order);
@@ -738,6 +742,8 @@ fn load_startup_references(
     dropped_logs: &Arc<Mutex<u64>>,
     gameplay: &Arc<Mutex<GameplayContext>>,
     behaviors: &mut Vec<RuntimeBehavior>,
+    scenes: &Arc<Mutex<SceneRegistry>>,
+    global: bool,
 ) -> Result<(), String> {
     let entity = world
         .lock()
@@ -774,6 +780,8 @@ fn load_startup_references(
             logs: Arc::clone(logs),
             dropped_logs: Arc::clone(dropped_logs),
             enabled: true,
+            scenes: Arc::clone(scenes),
+            global,
         };
         let mut behavior = RuntimeBehavior::load(
             entry.language,
@@ -980,9 +988,38 @@ struct RuntimeHost {
     logs: Arc<Mutex<VecDeque<(String, String)>>>,
     dropped_logs: Arc<Mutex<u64>>,
     enabled: bool,
+    scenes: Arc<Mutex<SceneRegistry>>,
+    global: bool,
 }
 
 impl GameplayHost for RuntimeHost {
+    fn persists_across_scenes(&self) -> bool {
+        self.global
+    }
+    fn refresh_scene_context(&mut self) {
+        if !self.global {
+            return;
+        }
+        if let Ok(registry) = self.scenes.lock() {
+            if let Some(scene) = registry
+                .active
+                .as_ref()
+                .and_then(|name| registry.loaded.get(name))
+            {
+                self.world = Arc::clone(&scene.world);
+                self.gameplay = Arc::clone(&scene.gameplay);
+                self.scene_name.clone_from(&scene.name);
+                if let Ok(world) = self.world.lock() {
+                    self.entity = world.entity_ids().next().unwrap_or_else(EntityId::new);
+                }
+            } else {
+                self.world = Arc::clone(&registry.empty_world);
+                self.gameplay = Arc::clone(&registry.empty_gameplay);
+                self.scene_name.clear();
+            }
+        }
+    }
+
     fn fork_for_reload(&self) -> Option<Box<dyn GameplayHost>> {
         let mut host = self.clone();
         host.owner_script = ScriptId::new();
@@ -1020,6 +1057,21 @@ impl GameplayHost for RuntimeHost {
             .get("op")
             .and_then(serde_json::Value::as_str)
             .ok_or("query operation is missing")?;
+        if matches!(
+            op,
+            "scene_load"
+                | "scene_unload"
+                | "scene_switch"
+                | "scene_is_loaded"
+                | "scene_loaded"
+                | "scene_active"
+        ) {
+            return self
+                .scenes
+                .lock()
+                .map_err(|_| "scene lock poisoned")?
+                .query(&self.snapshot_root, &query);
+        }
         if op == "scene_object" {
             let source = query
                 .get("source")
@@ -2261,6 +2313,198 @@ mod tests {
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
 
     #[test]
+    fn scene_lifecycle_works_in_every_available_language() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54, "scenes.lua", br"return {Start=function()
+                local level=game.scene.load('scene/level.scene')
+                assert(level=='Level' and game.scene.isLoaded(level))
+                assert(not pcall(function() game.scene.switchTo('Missing') end))
+                game.scene.switchTo(level)
+                assert(game.scene.getActive()==level and #game.scene.getLoaded()==2)
+                game.scene.unload(level)
+                assert(not game.scene.isLoaded(level) and game.scene.getActive()==nil)
+                assert(not pcall(function() game.scene.switchTo(level) end))
+            end}"),
+            (ScriptLanguage::Luau, "scenes.luau", br"return {Start=function()
+                local level=game.scene.load('scene/level.scene');assert(game.scene.isLoaded(level))
+                game.scene.switchTo(level);assert(game.scene.getActive()==level and #game.scene.getLoaded()==2)
+                game.scene.unload(level);assert(not game.scene.isLoaded(level))
+            end}"),
+            (ScriptLanguage::JavaScript, "scenes.js", br"globalThis.behavior={Start(){
+                const level=game.scene.load('scene/level.scene');
+                if(level!=='Level'||!game.scene.isLoaded(level))throw Error('load failed');
+                game.scene.switchTo(level);
+                if(game.scene.getActive()!==level||game.scene.getLoaded().length!==2)throw Error('switch failed');
+                game.scene.unload(level);
+                if(game.scene.isLoaded(level)||game.scene.getActive()!==null)throw Error('unload failed');
+                let failed=false;try{game.scene.switchTo(level)}catch(e){failed=true}if(!failed)throw Error('unloaded switch allowed');
+            }};"),
+            (ScriptLanguage::Web, "scenes.html", br"<!doctype html><html><head><title>Scene lifecycle</title></head><body><script>globalThis.behavior={Start(){
+                const level=game.scene.load('scene/level.scene');game.scene.switchTo(level);
+                if(!game.scene.isLoaded(level)||game.scene.getActive()!==level||game.scene.getLoaded().length!==2)throw Error('load/switch failed');
+                game.scene.unload(level);if(game.scene.isLoaded(level))throw Error('unload failed');
+            }};</script></body></html>"),
+            (ScriptLanguage::Python, "scenes.py", br"from rustic import *
+def on_start():
+    level=game.scene.load('scene/level.scene')
+    assert level=='Level' and game.scene.isLoaded(level)
+    game.scene.switchTo(level)
+    assert game.scene.getActive()==level and len(game.scene.getLoaded())==2
+    game.scene.unload(level)
+    assert not game.scene.isLoaded(level) and game.scene.getActive() is None
+run(globals())"),
+            (ScriptLanguage::Cpp, "scenes.cpp", br#"#include "rustic.hpp"
+void start(){auto level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw std::runtime_error("load");game.scene.switchTo(level);if(game.scene.getActive().string()!=level||game.scene.getLoaded().array().size()!=2)throw std::runtime_error("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw std::runtime_error("unload");}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
+            (ScriptLanguage::C, "scenes.c", br#"#include "rustic.h"
+void start(void){const char *level=Game.scene.load("scene/level.scene");if(!Game.scene.isLoaded(level))r_fail("load");Game.scene.switchTo(level);if(strcmp(Game.scene.getActive(),level)||Game.scene.getLoaded().count!=2)r_fail("switch");Game.scene.unload(level);if(Game.scene.isLoaded(level)||Game.scene.getActive())r_fail("unload");}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
+            (ScriptLanguage::CSharp, "scenes.cs", br#"using static Rustic;
+Run((callback,dt)=>{if(callback=="on_start"){var level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw new System.Exception("load");game.scene.switchTo(level);if(game.scene.getActive()!=level||game.scene.getLoaded().Length!=2)throw new System.Exception("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw new System.Exception("unload");}});"#),
+            (ScriptLanguage::Java, "RusticBehavior.java", br#"class RusticBehavior extends Rustic {
+public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){String level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw new RuntimeException("load");game.scene.switchTo(level);if(!game.scene.getActive().equals(level)||game.scene.getLoaded().size()!=2)throw new RuntimeException("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw new RuntimeException("unload");}});}}"#),
+            (ScriptLanguage::Php, "scenes.php", br#"<?php
+require __DIR__."/rustic.php";
+function on_start():void{global $game;$level=$game->scene->load("scene/level.scene");if(!$game->scene->isLoaded($level))throw new Exception("load");$game->scene->switchTo($level);if($game->scene->getActive()!==$level||count($game->scene->getLoaded())!==2)throw new Exception("switch");$game->scene->unload($level);if($game->scene->isLoaded($level))throw new Exception("unload");}
+rustic_run(["on_start"=>"on_start"]);"#),
+        ];
+        for (language, name, source) in fixtures {
+            if !engine_scripting::probe_language_toolchain(*language).available {
+                eprintln!(
+                    "skipped scene lifecycle: {} (toolchain unavailable)",
+                    language.display_name()
+                );
+                continue;
+            }
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir(temp.path().join("scene")).unwrap();
+            engine_world::save_scene_atomic(
+                temp.path().join("scene/level.scene"),
+                &SceneDocument::new("Level"),
+            )
+            .unwrap();
+            let mut runtime =
+                RuntimeScripts::load(temp.path(), &SceneDocument::new("Menu").to_bytes().unwrap())
+                    .unwrap();
+            let mut host = environment_host(&runtime.active.world);
+            host.snapshot_root = temp.path().to_owned();
+            host.scenes = Arc::clone(&runtime.scenes);
+            let mut behavior =
+                RuntimeBehavior::load(*language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap();
+            behavior.on_start().unwrap();
+            assert!(
+                !runtime.scenes.lock().unwrap().loaded.contains_key("Level"),
+                "{}",
+                language.display_name()
+            );
+            drop(behavior);
+            runtime.frame_update(0.01);
+            assert!(runtime.active.name.is_empty());
+            eprintln!("validated scene lifecycle: {}", language.display_name());
+        }
+    }
+
+    #[test]
+    fn scene_unload_drops_worlds_contexts_and_behaviors_and_globals_survive() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("scene")).unwrap();
+        std::fs::create_dir(temp.path().join("scripts")).unwrap();
+        let global = ScriptId::new();
+        let local = ScriptId::new();
+        std::fs::write(
+            temp.path().join("scripts/global.lua"),
+            br"
+            local step=0
+            return {Update=function()
+                step=step+1
+                if step==1 then
+                    local next=game.scene.load('scene/level.scene')
+                    game.scene.switchTo(next)
+                    game.scene.unload('Menu')
+                elseif step==2 then
+                    assert(game.scene.getActive()=='Level')
+                    game.scene.unload('Level')
+                elseif step==3 then
+                    assert(game.scene.getActive()==nil)
+                    game.scene.switchTo(game.scene.load('scene/level.scene'))
+                end
+                rustic.log('info','global '..step)
+            end, FixedUpdate=function()
+                if step==2 then Timer.after(0,function() rustic.log('info','empty timer') end) end
+            end}
+        ",
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("scripts/local.lua"),
+            br"return {
+            Start=function() rustic.log('info','level start') end,
+            OnDestroy=function() rustic.log('info','level destroyed') end
+        }",
+        )
+        .unwrap();
+        save_manifest_atomic(
+            &temp.path().join("config/scripts.ron"),
+            &ScriptManifest {
+                format_version: 2,
+                scripts: [(global, "scripts/global.lua"), (local, "scripts/local.lua")]
+                    .into_iter()
+                    .map(|(id, path)| ScriptManifestEntry {
+                        id,
+                        language: ScriptLanguage::Lua54,
+                        relative_path: path.into(),
+                        api_version: ScriptApiVersion::CURRENT,
+                        public_properties: Vec::new(),
+                    })
+                    .collect(),
+            },
+        )
+        .unwrap();
+        GameSettings {
+            global_scripts: vec![ScriptReference::new(global)],
+            ..GameSettings::default()
+        }
+        .save(temp.path())
+        .unwrap();
+        let mut level = SceneDocument::new("Level");
+        level.startup_scripts.push(ScriptReference::new(local));
+        engine_world::save_scene_atomic(temp.path().join("scene/level.scene"), &level).unwrap();
+        let mut runtime =
+            RuntimeScripts::load(temp.path(), &SceneDocument::new("Menu").to_bytes().unwrap())
+                .unwrap();
+        let menu_world = Arc::downgrade(&runtime.active.world);
+        let menu_context = Arc::downgrade(&runtime.active.gameplay);
+        runtime.frame_update(0.01);
+        assert_eq!(runtime.active.name, "Level");
+        assert!(menu_world.upgrade().is_none());
+        assert!(menu_context.upgrade().is_none());
+        let level_world = Arc::downgrade(&runtime.active.world);
+        let level_context = Arc::downgrade(&runtime.active.gameplay);
+        runtime.frame_update(0.01);
+        assert!(runtime.scenes.lock().unwrap().loaded.is_empty());
+        assert!(runtime.inactive.is_empty());
+        assert!(level_world.upgrade().is_none());
+        assert!(level_context.upgrade().is_none());
+        assert!(runtime.active.behaviors.is_empty());
+        assert_eq!(runtime.globals.len(), 1);
+        let empty_world = Arc::clone(&runtime.active.world);
+        runtime.fixed_update(0.01);
+        assert!(Arc::ptr_eq(&empty_world, &runtime.active.world));
+        runtime.frame_update(0.01);
+        assert_eq!(runtime.active.name, "Level");
+        let logs = runtime.drain_logs();
+        assert_eq!(logs.iter().filter(|(_, m)| m == "level start").count(), 2);
+        assert_eq!(
+            logs.iter().filter(|(_, m)| m == "level destroyed").count(),
+            1
+        );
+        assert!(logs.iter().any(|(_, m)| m == "global 3"));
+        assert!(logs.iter().any(|(_, m)| m == "empty timer"));
+        assert!(!logs.iter().any(|(l, _)| l == "error"), "{logs:?}");
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "one shared fixture harness verifies all ten adapters"
@@ -2664,6 +2908,7 @@ mod tests {
         runtime.fixed_update(0.1);
         assert!(
             (runtime
+                .active
                 .world
                 .lock()
                 .unwrap()
@@ -2676,19 +2921,20 @@ mod tests {
                 < 1e-5
         );
         runtime.frame_update(1.0);
-        let world = runtime.world.lock().unwrap();
+        let world = runtime.active.world.lock().unwrap();
         let joint = world
             .entity_ids()
             .find(|id| world.snapshot(*id).unwrap().name.as_deref() == Some("node_1"))
             .unwrap();
         assert_eq!(world.local_transform(joint).unwrap().translation.x, 2.0);
         drop(world);
-        let context = runtime.gameplay.lock().unwrap();
+        let context = runtime.active.gameplay.lock().unwrap();
         assert_eq!(context.audio.voices.len(), 1);
         assert!((context.audio.voices.values().next().unwrap().volume - 0.25).abs() < 1e-9);
         drop(context);
         assert!(
             runtime
+                .active
                 .logs
                 .lock()
                 .unwrap()
@@ -2697,6 +2943,7 @@ mod tests {
         );
         assert!(
             runtime
+                .active
                 .logs
                 .lock()
                 .unwrap()
@@ -2704,9 +2951,19 @@ mod tests {
                 .any(|(_, message)| message == "imported marker")
         );
         runtime.stop();
-        assert!(runtime.gameplay.lock().unwrap().audio.voices.is_empty());
         assert!(
             runtime
+                .active
+                .gameplay
+                .lock()
+                .unwrap()
+                .audio
+                .voices
+                .is_empty()
+        );
+        assert!(
+            runtime
+                .active
                 .gameplay
                 .lock()
                 .unwrap()
@@ -2815,6 +3072,8 @@ mod tests {
             logs: Arc::new(Mutex::new(VecDeque::new())),
             dropped_logs: Arc::new(Mutex::new(0)),
             enabled: true,
+            scenes: Arc::default(),
+            global: false,
         };
         let mut lua = LuaBehavior::load(ScriptId::new(),
             b"return {Start=function() rustic.game.Demo.Room.Player:EditAttribute('Position',{1,2,3}); assert(rustic.game.Demo.Room.Player:GetAttribute('Position')[1]==1) end}",
@@ -3130,7 +3389,7 @@ rustic_run(['on_start'=>'on_start']);"#),
               OnDestroy=function() rustic.log('info','destroyed once') end}
         ", "lifetime.lua",Box::new(host)).unwrap();
         behavior.on_start().unwrap();
-        let mut scripts = RuntimeScripts {
+        let mut scripts = SceneRuntime {
             gameplay,
             behaviors: vec![behavior],
             world: Arc::clone(&world),
@@ -3138,6 +3397,8 @@ rustic_run(['on_start'=>'on_start']);"#),
             logs: Arc::clone(&logs),
             dropped_logs: Arc::new(Mutex::new(0)),
             valid_scene: true,
+            name: "Test".into(),
+            global_behaviors: Vec::new(),
         };
         world.lock().unwrap().destroy_entity(id).unwrap();
         scripts.fixed_update(0.01);
@@ -3220,6 +3481,8 @@ rustic_run(['on_start'=>'on_start']);"#),
             logs: Arc::new(Mutex::new(VecDeque::new())),
             dropped_logs: Arc::new(Mutex::new(0)),
             enabled: true,
+            scenes: Arc::default(),
+            global: false,
         }
     }
 
@@ -3445,6 +3708,8 @@ rustic_run(["on_start"=>"on_start"]);"#),
                 logs: Arc::new(Mutex::new(VecDeque::new())),
                 dropped_logs: Arc::new(Mutex::new(0)),
                 enabled: true,
+                scenes: Arc::default(),
+                global: false,
             };
             let mut behavior =
                 ExternalBehavior::load(ScriptId::new(), *language, source, name, Box::new(host))
@@ -3526,6 +3791,8 @@ rustic_run(["on_start"=>"on_start"]);"#),
             logs: Arc::new(Mutex::new(VecDeque::new())),
             dropped_logs: Arc::new(Mutex::new(0)),
             enabled: true,
+            scenes: Arc::default(),
+            global: false,
         };
         let mut lua = LuaBehavior::load(
             ScriptId::new(),
@@ -3615,11 +3882,11 @@ rustic_run(["on_start"=>"on_start"]);"#),
         scene.entities = vec![root, child, survivor];
         let scene_bytes = scene.to_bytes().unwrap();
         let mut runtime = RuntimeScripts::load(temp.path(), &scene_bytes).unwrap();
-        let mut host = environment_host(&runtime.world);
+        let mut host = environment_host(&runtime.active.world);
         host.gameplay_query(serde_json::json!({"op":"entity_destroy","entity":root_id}))
             .unwrap();
         {
-            let mut world = runtime.world.lock().unwrap();
+            let mut world = runtime.active.world.lock().unwrap();
             world
                 .apply_commands(&[WorldCommand::SetLocalTransform {
                     entity: survivor_id,
@@ -3672,7 +3939,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
         let scene_bytes = scene.to_bytes().unwrap();
         let mut runtime = RuntimeScripts::load(temp.path(), &scene_bytes).unwrap();
         for keep_world in [true, false] {
-            let mut host = environment_host(&runtime.world);
+            let mut host = environment_host(&runtime.active.world);
             host.gameplay_query(serde_json::json!({"op":"hierarchy_set_parent","entity":child_id,"parent":other_id,"keep_world":keep_world})).unwrap();
             assert!(
                 runtime
@@ -3693,7 +3960,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
             host.gameplay_query(serde_json::json!({"op":"hierarchy_set_parent","entity":child_id,"parent":parent_id,"keep_world":true})).unwrap();
         }
         {
-            let mut world = runtime.world.lock().unwrap();
+            let mut world = runtime.active.world.lock().unwrap();
             let mut value = world.local_transform(child_id).unwrap();
             value.translation = glam::Vec3::new(2., 0., 0.);
             world
@@ -4061,7 +4328,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
                 let mut runtime =
                     RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
                 assert_eq!(
-                    runtime.behaviors.len(),
+                    (runtime.active.behaviors.len() + runtime.globals.len()),
                     1,
                     "{scope}: missing entry={missing_entry}"
                 );
@@ -4082,7 +4349,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
                     logs.iter()
                         .all(|(level, message)| level == "info" && message == "still running")
                 );
-                assert_eq!(runtime.behaviors.len(), 1);
+                assert_eq!((runtime.active.behaviors.len() + runtime.globals.len()), 1);
             }
         }
     }
@@ -4449,6 +4716,8 @@ rustic_run(['on_start'=>'start']);"#),
                 logs: Arc::clone(&logs),
                 dropped_logs: Arc::new(Mutex::new(0)),
                 enabled: true,
+                scenes: Arc::default(),
+                global: false,
             };
             let mut behavior =
                 RuntimeBehavior::load(*language, ScriptId::new(), source, name, Box::new(host))
@@ -4558,6 +4827,8 @@ rustic_run(['on_start'=>'start']);"#),
             logs: Arc::clone(&logs),
             dropped_logs: Arc::new(Mutex::new(0)),
             enabled: true,
+            scenes: Arc::default(),
+            global: false,
         };
         let mut lua=RuntimeBehavior::load(ScriptLanguage::Lua54,ScriptId::new(),br"return {Start=function()
             Events.once('Hit',function(id,message) assert(id==rustic.entity_id());rustic.log('info',message) end)
@@ -4710,6 +4981,8 @@ rustic_run(["on_start"=>"on_start"]);"#),
                 logs: Arc::clone(&logs),
                 dropped_logs: Arc::new(Mutex::new(0)),
                 enabled: true,
+                scenes: Arc::default(),
+                global: false,
             };
             let mut behavior =
                 RuntimeBehavior::load(*language, ScriptId::new(), source, name, Box::new(host))
