@@ -54,6 +54,8 @@ pub struct WorkspaceWindow {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EditorWorkspace {
     pub tabs: Vec<EditorTab>,
+    #[serde(default)]
+    pub hidden_tabs: Vec<EditorTab>,
     pub windows: Vec<WorkspaceWindow>,
     pub ui_scale: f32,
 }
@@ -62,6 +64,7 @@ impl Default for EditorWorkspace {
     fn default() -> Self {
         Self {
             tabs: EditorTab::ALL.to_vec(),
+            hidden_tabs: Vec::new(),
             windows: Vec::new(),
             ui_scale: 1.0,
         }
@@ -250,6 +253,7 @@ mod tests {
         let path = temporary.path().join("workspace.ron");
         let store = ConfigStore::new(AtomicFileService::new());
         let mut workspace = EditorWorkspace::default();
+        workspace.hidden_tabs.push(EditorTab::ContentBrowser);
         workspace.windows.push(WorkspaceWindow {
             tab: EditorTab::Inspector,
             position: [9000.0, 100.0],
@@ -258,6 +262,10 @@ mod tests {
         });
         workspace.save(&store, &path).unwrap();
         let mut reopened = EditorWorkspace::load(&store, &path).unwrap();
+        assert_eq!(reopened.hidden_tabs, vec![EditorTab::ContentBrowser]);
+        let legacy: EditorWorkspace =
+            ron::from_str("(tabs:[hierarchy],windows:[],ui_scale:1.0)").unwrap();
+        assert!(legacy.hidden_tabs.is_empty());
         assert_eq!(reopened.recover_monitors(1, [1_440.0, 900.0]), 1);
         assert_eq!(reopened.windows[0].monitor, 0);
     }

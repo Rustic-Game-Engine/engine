@@ -46,7 +46,7 @@ or edit local values in Inspector.
 
 ## Scene Graph
 
-Choose **View → Open Scene Graph** to inspect the loaded hierarchy using standard
+Choose **View → Scene Graph** to inspect the loaded hierarchy using standard
 egui-snarl nodes, pins, wires, pan, and zoom. Each entity is a node; wires run from
 **Children** to **Parent**. Click a node name to select it in Inspector. Drag node
 headers to arrange the view. Node positions last while the scene remains loaded. To change parent

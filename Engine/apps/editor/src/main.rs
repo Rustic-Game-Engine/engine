@@ -203,7 +203,7 @@ impl EditorApp {
         let document =
             AuthoringDocument::open(project, read_only).map_err(|error| error.to_string())?;
         let model_assets = load_project_model_assets(document.project().root());
-        let dock = default_dock(&workspace.tabs);
+        let dock = default_dock(&workspace);
         let logger = document
             .project()
             .directory(VirtualDirectory::Logs)
@@ -1188,25 +1188,13 @@ impl EditorApp {
             });
             ui.menu_button("View", |ui| {
                 if ui.button("Reset dock layout").clicked() {
-                    self.dock = default_dock(&self.workspace.tabs);
+                    self.workspace.hidden_tabs.clear();
+                    self.dock = default_dock(&self.workspace);
                 }
                 ui.separator();
                 egui::widgets::global_theme_preference_buttons(ui);
                 ui.separator();
-                ui.label("Panels");
-                for panel in [
-                    EditorTab::Viewport3d,
-                    EditorTab::Viewport2d,
-                    EditorTab::SceneGraph,
-                ] {
-                    if !self.workspace.tabs.contains(&panel)
-                        && ui.button(format!("Open {}", panel.title())).clicked()
-                    {
-                        self.workspace.tabs.insert(0, panel);
-                        self.dock = default_dock(&self.workspace.tabs);
-                        ui.close();
-                    }
-                }
+                panel_visibility_menu(ui, &mut self.dock, &mut self.workspace);
                 ui.checkbox(&mut self.detach_inspector, "Inspector on native viewport");
             });
             ui.menu_button("Programming", |ui| {
@@ -3168,7 +3156,7 @@ fn spawn_viewport_renderer(
     (request_sender, result_receiver)
 }
 
-fn default_dock(tabs: &[EditorTab]) -> Tree<EditorTab> {
+fn default_dock(workspace: &EditorWorkspace) -> Tree<EditorTab> {
     let mut tiles = egui_tiles::Tiles::default();
     let viewport_tabs: Vec<_> = [
         EditorTab::Viewport3d,
@@ -3176,7 +3164,6 @@ fn default_dock(tabs: &[EditorTab]) -> Tree<EditorTab> {
         EditorTab::SceneGraph,
     ]
     .into_iter()
-    .filter(|tab| tabs.contains(tab))
     .map(|tab| tiles.insert_pane(tab))
     .collect();
     let viewports = tiles.insert_tab_tile(viewport_tabs);
@@ -3187,7 +3174,61 @@ fn default_dock(tabs: &[EditorTab]) -> Tree<EditorTab> {
     let explorer = tiles.insert_pane(EditorTab::ContentBrowser);
     let hierarchy = tiles.insert_tab_tile(vec![scene, explorer]);
     let root = tiles.insert_horizontal_tile(vec![left, center, hierarchy]);
-    Tree::new("rustic-editor-dock", root, tiles)
+    let mut tree = Tree::new("rustic-editor-dock", root, tiles);
+    let visibility: Vec<_> = tree
+        .tiles
+        .iter()
+        .filter_map(|(id, tile)| {
+            if let egui_tiles::Tile::Pane(panel) = tile {
+                Some((
+                    *id,
+                    workspace.tabs.contains(panel) && !workspace.hidden_tabs.contains(panel),
+                ))
+            } else {
+                None
+            }
+        })
+        .collect();
+    for (id, visible) in visibility {
+        tree.set_visible(id, visible);
+    }
+    tree
+}
+
+fn panel_visibility_menu(
+    ui: &mut egui::Ui,
+    dock: &mut Tree<EditorTab>,
+    workspace: &mut EditorWorkspace,
+) {
+    ui.label("Panels");
+    for panel in [
+        EditorTab::Viewport3d,
+        EditorTab::Viewport2d,
+        EditorTab::SceneGraph,
+        EditorTab::Hierarchy,
+        EditorTab::ContentBrowser,
+        EditorTab::Inspector,
+        EditorTab::Console,
+    ] {
+        let pane = dock.tiles.iter().find_map(|(id, tile)| {
+            matches!(tile, egui_tiles::Tile::Pane(tab) if *tab == panel).then_some(*id)
+        });
+        if let Some(id) = pane {
+            let mut visible = dock.is_visible(id);
+            if ui.checkbox(&mut visible, panel.title()).changed() {
+                dock.set_visible(id, visible);
+                workspace.hidden_tabs.retain(|tab| *tab != panel);
+                if visible {
+                    if !workspace.tabs.contains(&panel) {
+                        workspace.tabs.push(panel);
+                    }
+                    dock.make_active(|tile_id, _| tile_id == id);
+                } else {
+                    workspace.hidden_tabs.push(panel);
+                }
+            }
+        }
+    }
 }
 
 fn viewport_scene(
@@ -5492,7 +5533,7 @@ mod explorer_tests {
             } else {
                 egui::Visuals::light()
             });
-            let mut dock = default_dock(&EditorTab::ALL);
+            let mut dock = default_dock(&EditorWorkspace::default());
             let mut time = 0.0;
             let mut frame = |dock: &mut Tree<EditorTab>, events| {
                 time += 0.1;
@@ -5564,6 +5605,92 @@ mod explorer_tests {
             !viewer.document.is_modified(),
             "docking must not edit the scene"
         );
+    }
+
+    #[test]
+    fn view_menu_toggles_all_panels_without_rebuilding_the_dock() {
+        let context = egui::Context::default();
+        let mut workspace = EditorWorkspace::default();
+        let mut dock = default_dock(&workspace);
+        let original_tiles = dock.tiles.len();
+        let mut time = 0.0;
+        let mut frame = |dock: &mut Tree<EditorTab>, workspace: &mut EditorWorkspace, events| {
+            time += 0.1;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    ui.menu_button("View", |ui| panel_visibility_menu(ui, dock, workspace));
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let view = text_position(&frame(&mut dock, &mut workspace, vec![]), "View");
+        for panel in [
+            EditorTab::Viewport3d,
+            EditorTab::Viewport2d,
+            EditorTab::SceneGraph,
+            EditorTab::Hierarchy,
+            EditorTab::ContentBrowser,
+            EditorTab::Inspector,
+            EditorTab::Console,
+        ] {
+            let id = dock
+                .tiles
+                .iter()
+                .find_map(|(id, tile)| {
+                    matches!(tile, egui_tiles::Tile::Pane(tab) if *tab == panel).then_some(*id)
+                })
+                .unwrap();
+            let parent = dock.tiles.parent_of(id);
+            let initially_visible = dock.is_visible(id);
+            for expected in [!initially_visible, initially_visible] {
+                frame(
+                    &mut dock,
+                    &mut workspace,
+                    vec![
+                        egui::Event::PointerMoved(view),
+                        pointer(view, egui::PointerButton::Primary, true),
+                    ],
+                );
+                frame(
+                    &mut dock,
+                    &mut workspace,
+                    vec![pointer(view, egui::PointerButton::Primary, false)],
+                );
+                let position =
+                    text_position(&frame(&mut dock, &mut workspace, vec![]), panel.title());
+                frame(
+                    &mut dock,
+                    &mut workspace,
+                    vec![
+                        egui::Event::PointerMoved(position),
+                        pointer(position, egui::PointerButton::Primary, true),
+                    ],
+                );
+                frame(
+                    &mut dock,
+                    &mut workspace,
+                    vec![pointer(position, egui::PointerButton::Primary, false)],
+                );
+                assert_eq!(dock.is_visible(id), expected, "{panel:?}");
+                assert_eq!(dock.tiles.parent_of(id), parent);
+                let rebuilt = default_dock(&workspace);
+                let restored = rebuilt
+                    .tiles
+                    .iter()
+                    .find_map(|(id, tile)| {
+                        matches!(tile, egui_tiles::Tile::Pane(tab) if *tab == panel).then_some(*id)
+                    })
+                    .unwrap();
+                assert_eq!(rebuilt.is_visible(restored), expected);
+            }
+        }
+        assert_eq!(dock.tiles.len(), original_tiles);
     }
 
     fn scene_context_frame(
