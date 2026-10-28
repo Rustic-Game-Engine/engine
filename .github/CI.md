@@ -47,16 +47,39 @@ After the EXE upload and release publication succeed, the same job announces the
 release in Discussions → **Change Log** (category slug `change-log`). Each post
 includes direct EXE download links, a brief plain-text overview from the merged
 PR title, and changed file names with addition/deletion counts and expandable
-diff previews. File links open their full PR diffs; the post also links the full
-file list and downloadable patch. Binary files or diffs omitted by GitHub have
+diff previews. File links open a comparison of the PR's recorded base commit and
+release merge commit; the post also links the full file list and downloadable
+patch. Announcements contain no PR links. Binary files or diffs omitted by GitHub have
 links instead of previews. Large posts limit previews and direct readers to the
 complete file list to stay within GitHub's size limit. GitHub's PR-files API
 returns at most 3,000 files; the full diff and patch links remain available.
+
+To associate the correct documentation update, add a line to the engine PR
+description pointing to the affected **published page**, for example:
+
+```text
+Documentation: https://rustic-game-engine.pages.dev/docs/guides/gameplay-programming#hot-reload
+```
+
+Repeat the line for additional updated pages; duplicate URLs are removed. Use
+the canonical documentation site's `/docs/` URLs, including section anchors when
+helpful. Publish the documentation update before the release announcement. Do not
+put a documentation PR URL in this field. The announcement copies only these
+published-page URLs and never copies the PR description. For maintenance changes
+without a documentation update, explicitly use `Documentation: none`; no docs
+link is added. Missing or invalid mappings fail the announcement with instructions
+to fix the merged engine PR's description and rerun publication. The automation
+does not guess a matching update by title or choose the latest documentation PR,
+and does not verify that the declared page has deployed.
 
 The workflow token needs `discussions: write` alongside its existing permissions,
 and Discussions must contain the `change-log` category. Retrying publication
 updates the announcement identified by its hidden release-tag marker instead of
 creating a duplicate. Keep that marker when editing an announcement manually.
+The announcement copies all labels from the merged engine PR. Reruns synchronize
+the Discussion's labels to the PR's current labels, adding missing labels and
+removing labels no longer present on the PR (including manually added Discussion
+labels). Label failures fail the job and can be repaired with a rerun.
 An announcement failure fails the job but leaves the uploaded release available;
 fix category access or permissions and rerun the job to repair the announcement.
 
