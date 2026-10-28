@@ -133,7 +133,7 @@ pub fn validate_javascript(
                 .catch(&context)
                 .map_err(|error| error.to_string())
         })
-        .map_err(|error| JavaScriptRuntimeError::Validation(error.to_string()))
+        .map_err(JavaScriptRuntimeError::Validation)
 }
 
 /// A sandboxed ECMAScript behavior using only the engine-owned command bridge.
@@ -236,7 +236,7 @@ impl JavaScriptBehavior {
                     .catch(&context)
                     .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         context
             .with(|context| {
                 context
@@ -248,7 +248,7 @@ impl JavaScriptBehavior {
                     .catch(&context)
                     .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let behavior_type = context
             .with(|context| {
                 context
@@ -256,7 +256,7 @@ impl JavaScriptBehavior {
                     .catch(&context)
                     .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         if behavior_type != "object" {
             return Err(JavaScriptRuntimeError::Runtime(format!(
                 "{source_name} must assign an object to globalThis.behavior"
@@ -410,7 +410,7 @@ impl JavaScriptBehavior {
                     .catch(&context)
                     .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let argument = delta.map_or_else(String::new, |value| value.to_string());
         let invocation = format!(
             "if (typeof __rustic_gameplay_dispatch === 'function') __rustic_gameplay_dispatch(); if (typeof behavior.{canonical} === 'function') behavior.{canonical}({argument}); else if (typeof behavior.{legacy} === 'function') behavior.{legacy}({argument})"
@@ -422,7 +422,7 @@ impl JavaScriptBehavior {
                     .catch(&context)
                     .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let commands = self
             .context
             .with(|context| {
@@ -431,7 +431,7 @@ impl JavaScriptBehavior {
                     .catch(&context)
                     .map_err(|error| error.to_string())
             })
-            .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
+            .map_err(JavaScriptRuntimeError::Runtime)?;
         let commands: Vec<Command> = serde_json::from_str(&commands)
             .map_err(|error| JavaScriptRuntimeError::Runtime(error.to_string()))?;
         let mut host = self
