@@ -6,8 +6,9 @@ use engine_play::{
 use engine_project::{Project, ProjectError, VirtualDirectory};
 use engine_world::{
     EntitySnapshot, LocalTransform, PartAttributes, Primitive, RecoverySource, SceneDiagnostic,
-    SceneDocument, SceneEdit, SceneError, SceneWorld, ScriptComponent, ScriptReference, UndoStack,
-    WorldError, load_scene_recovering, load_scene_recovering_for_editing, save_scene_atomic,
+    SceneDocument, SceneEdit, SceneError, SceneLoad, SceneWorld, ScriptComponent, ScriptReference,
+    UndoStack, WorldError, load_scene_recovering, load_scene_recovering_for_editing,
+    save_scene_atomic,
 };
 use num_traits::ToPrimitive as _;
 use sha2::{Digest, Sha256};
@@ -62,6 +63,7 @@ pub struct AuthoringDocument {
     scene_diagnostics: Vec<SceneDiagnostic>,
     removed_scripts: BTreeSet<ScriptId>,
     script_links_modified: bool,
+    checksum_refresh_pending: bool,
 }
 
 impl AuthoringDocument {
@@ -75,27 +77,12 @@ impl AuthoringDocument {
             return Self::open_scene(project, relative, read_only);
         }
         let scene_path = project.start_scene_path()?;
-        let (document, recovery_read_only, recovered_from_backup, diagnostics) =
-            if scene_path.is_file() {
-                let loaded = load_scene_recovering_for_editing(&scene_path)?;
-                (
-                    loaded.document,
-                    loaded.read_only,
-                    loaded.source == RecoverySource::Backup,
-                    loaded.diagnostics,
-                )
-            } else {
-                (SceneDocument::new("Main"), false, false, Vec::new())
-            };
-        Self::from_scene(
-            project,
-            scene_path,
-            document,
-            read_only,
-            recovery_read_only,
-            recovered_from_backup,
-            diagnostics,
-        )
+        let loaded = if scene_path.is_file() {
+            Some(load_scene_recovering_for_editing(&scene_path)?)
+        } else {
+            None
+        };
+        Self::from_scene(project, scene_path, read_only, loaded)
     }
 
     /// Opens an existing `.scene` or legacy `.rscene` relative to the project's scenes folder.
@@ -138,15 +125,7 @@ impl AuthoringDocument {
             return Err(AuthoringError::UnsafeScenePath);
         }
         let loaded = load_scene_recovering_for_editing(&scene_path)?;
-        Self::from_scene(
-            project,
-            scene_path,
-            loaded.document,
-            read_only,
-            loaded.read_only,
-            loaded.source == RecoverySource::Backup,
-            loaded.diagnostics,
-        )
+        Self::from_scene(project, scene_path, read_only, Some(loaded))
     }
 
     /// Loads another scene, saving local edits before replacing the current document.
@@ -174,12 +153,27 @@ impl AuthoringDocument {
     fn from_scene(
         project: Project,
         scene_path: PathBuf,
-        document: SceneDocument,
         read_only: bool,
-        recovery_read_only: bool,
-        recovered_from_backup: bool,
-        scene_diagnostics: Vec<SceneDiagnostic>,
+        loaded: Option<SceneLoad>,
     ) -> Result<Self, AuthoringError> {
+        let (
+            document,
+            recovery_read_only,
+            recovered_from_backup,
+            scene_diagnostics,
+            checksum_refresh_pending,
+        ) = if let Some(loaded) = loaded {
+            let checksum_refresh_pending = loaded.needs_checksum_refresh();
+            (
+                loaded.document,
+                loaded.read_only,
+                loaded.source == RecoverySource::Backup,
+                loaded.diagnostics,
+                checksum_refresh_pending,
+            )
+        } else {
+            (SceneDocument::new("Main"), false, false, Vec::new(), false)
+        };
         let world = document.create_world()?;
         let mut undo = UndoStack::new();
         undo.mark_saved();
@@ -198,6 +192,7 @@ impl AuthoringDocument {
             scene_diagnostics,
             removed_scripts: BTreeSet::new(),
             script_links_modified: false,
+            checksum_refresh_pending,
         })
     }
 
@@ -280,7 +275,13 @@ impl AuthoringDocument {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.undo.is_modified() || self.script_links_modified
+        self.undo.is_modified() || self.script_links_modified || self.needs_checksum_refresh()
+    }
+
+    /// Whether saving is needed to refresh a valid externally edited scene's checksum.
+    /// Read-only projects leave the source file untouched and can still snapshot it.
+    pub const fn needs_checksum_refresh(&self) -> bool {
+        self.checksum_refresh_pending && !self.read_only
     }
 
     /// Removes links to deleted source assets, including links restored by later undo/redo.
@@ -805,7 +806,13 @@ impl AuthoringDocument {
         document
             .startup_scripts
             .clone_from(&self.scene_startup_scripts);
+        // Recompute load diagnostics for the saved representation, retaining warnings
+        // about opaque components while dropping resolved checksum/recovery warnings.
+        let diagnostics = engine_world::load_scene(&document.to_bytes()?)?.diagnostics;
         save_scene_atomic(&self.scene_path, &document)?;
+        self.scene_diagnostics = diagnostics;
+        self.checksum_refresh_pending = false;
+        self.recovered_from_backup = false;
         self.undo.mark_saved();
         self.script_links_modified = false;
         Ok(())
@@ -1055,6 +1062,73 @@ mod tests {
         document.switch_scene("main.scene").unwrap();
         assert!(!document.is_read_only());
         assert!(document.scene_diagnostics().is_empty());
+    }
+
+    #[test]
+    fn stale_checksum_is_pending_until_save_and_play_snapshot_has_fresh_integrity() {
+        let temporary = tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("playtest"),
+            "Playtest",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        document.save().unwrap();
+        let path = document.scene_path().to_path_buf();
+        let edited = std::fs::read_to_string(&path)
+            .unwrap()
+            .replace("\"Main\"", "\"Edited for playtest\"");
+        std::fs::write(&path, &edited).unwrap();
+
+        let read_only = AuthoringDocument::open(project.clone(), true).unwrap();
+        assert!(!read_only.needs_checksum_refresh());
+        assert!(!read_only.is_modified());
+        assert!(
+            !engine_world::load_scene(&read_only.snapshot_bytes().unwrap())
+                .unwrap()
+                .read_only
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        assert!(document.needs_checksum_refresh());
+        assert!(
+            document.is_modified(),
+            "autosave must see the pending repair"
+        );
+        assert!(
+            !engine_world::load_scene(&document.snapshot_bytes().unwrap())
+                .unwrap()
+                .read_only
+        );
+
+        // A failed save must retain both the diagnostic and pending repair.
+        let backup = engine_platform::AtomicFileService::backup_path(&path);
+        if backup.exists() {
+            std::fs::remove_file(&backup).unwrap();
+        }
+        std::fs::create_dir(&backup).unwrap();
+        assert!(document.save().is_err());
+        assert!(document.needs_checksum_refresh());
+        assert!(!document.scene_diagnostics().is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), edited);
+        std::fs::remove_dir(&backup).unwrap();
+
+        document.save().unwrap();
+        assert!(!document.needs_checksum_refresh());
+        assert!(!document.is_modified());
+        assert!(document.scene_diagnostics().is_empty());
+        assert_eq!(std::fs::read_to_string(&backup).unwrap(), edited);
+        let strict = engine_world::load_scene(&std::fs::read(&path).unwrap()).unwrap();
+        assert!(!strict.read_only);
+        assert_eq!(strict.document.name, "Edited for playtest");
+        assert!(strict.diagnostics.is_empty());
+        assert!(
+            !AuthoringDocument::open(project, false)
+                .unwrap()
+                .is_modified()
+        );
     }
 
     #[test]

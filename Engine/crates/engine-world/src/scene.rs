@@ -221,9 +221,16 @@ pub struct SceneLoad {
     pub diagnostics: Vec<SceneDiagnostic>,
     pub source: RecoverySource,
     corrupt: bool,
+    checksum_mismatch: bool,
 }
 
 impl SceneLoad {
+    /// Whether a valid authoring load needs saving to refresh an externally stale checksum.
+    /// Corrupt data and unsupported future formats must never be repaired this way.
+    pub const fn needs_checksum_refresh(&self) -> bool {
+        self.checksum_mismatch && !self.read_only
+    }
+
     pub fn has_errors(&self) -> bool {
         self.diagnostics
             .iter()
@@ -525,6 +532,7 @@ fn load_scene_with_policy(
     let future = probe.schema_version > CURRENT_SCENE_VERSION;
     let mut diagnostics = Vec::new();
     let mut corrupt = false;
+    let mut checksum_mismatch = false;
     if migrated {
         diagnostics.push(SceneDiagnostic {
             severity: SceneDiagnosticSeverity::Warning,
@@ -546,6 +554,7 @@ fn load_scene_with_policy(
     } else if let Some(expected) = &wire.checksum {
         let actual = checksum_wire(&wire)?;
         if *expected != actual {
+            checksum_mismatch = true;
             corrupt = !allow_stale_checksum;
             diagnostics.push(SceneDiagnostic {
                 severity: if allow_stale_checksum {
@@ -608,6 +617,7 @@ fn load_scene_with_policy(
         diagnostics,
         source: RecoverySource::Primary,
         corrupt,
+        checksum_mismatch,
     })
 }
 
@@ -1038,6 +1048,7 @@ mod tests {
         fs::write(&path, edited).unwrap();
         let editable = load_scene_recovering_for_editing(&path).unwrap();
         assert!(!editable.read_only);
+        assert!(editable.needs_checksum_refresh());
         assert_eq!(editable.source, RecoverySource::Primary);
         assert!(
             editable
@@ -1058,6 +1069,7 @@ mod tests {
         fs::write(&path, serialize_wire(&damaged).unwrap()).unwrap();
         let loaded = load_scene_recovering_for_editing(&path).unwrap();
         assert!(loaded.read_only);
+        assert!(!loaded.needs_checksum_refresh());
         assert!(loaded.has_errors());
         damaged = SceneWire::from_document(&sample_document()).unwrap();
         damaged.environment.haze_density = -1.0;
