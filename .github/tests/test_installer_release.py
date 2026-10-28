@@ -57,8 +57,12 @@ class InstallerReleaseTests(unittest.TestCase):
 
         with patch.object(release, "api_list", side_effect=[
             [self.pr] if pulls is None else pulls, list(releases)
-        ]), patch.object(release, "gh", side_effect=gh):
+        ]), patch.object(release, "gh", side_effect=gh), \
+                patch.object(release, "announce") as announce:
             release.publish(REPOSITORY, self.run, self.temp.name)
+            announce.assert_called_once_with(
+                REPOSITORY, calls[0][2], self.pr, [self.installer]
+            )
         return calls
 
     def test_new_release_uses_exact_pr_body_commit_and_installer(self):
@@ -89,11 +93,13 @@ class InstallerReleaseTests(unittest.TestCase):
 
     def test_upload_failure_leaves_draft_unpublished(self):
         with patch.object(release, "api_list", side_effect=[[self.pr], []]), \
-                patch.object(release, "gh", side_effect=["", RuntimeError("upload failed")]) as gh:
+                patch.object(release, "gh", side_effect=["", RuntimeError("upload failed")]) as gh, \
+                patch.object(release, "announce") as announce:
             with self.assertRaisesRegex(RuntimeError, "upload failed"):
                 release.publish(REPOSITORY, self.run, self.temp.name)
             self.assertEqual(gh.call_count, 2)
             self.assertIn("--draft", gh.call_args_list[0].args)
+            announce.assert_not_called()
 
     def test_untrusted_or_unsuccessful_runs_cannot_publish(self):
         changes = [
@@ -133,6 +139,96 @@ class InstallerReleaseTests(unittest.TestCase):
             self.assertEqual(release.api_list("repos/example/engine/releases"),
                              [{"tag_name": "v0.9-Pre-Alpha"}])
             gh.assert_called_once_with("api", "repos/example/engine/releases", "--paginate", "--slurp")
+
+
+class DiscussionTests(unittest.TestCase):
+    def setUp(self):
+        self.pr = {"number": 42, "title": "Fix editor startup"}
+        self.installers = [Path("RusticGameEngine-Setup-0.1.exe")]
+        self.file = {
+            "filename": "Engine/main.rs", "status": "modified",
+            "additions": 2, "deletions": 1, "patch": "@@ -1 +1 @@\n-old\n+new",
+        }
+        self.repository = {"repository": {
+            "id": "repo", "discussionCategories": {
+                "nodes": [{"id": "category", "slug": "change-log"}]
+            },
+        }}
+
+    def page(self, nodes=(), more=False, cursor=None):
+        return {"repository": {"discussions": {
+            "nodes": list(nodes), "pageInfo": {"hasNextPage": more, "endCursor": cursor}
+        }}}
+
+    def test_body_includes_download_overview_files_and_diffs(self):
+        body = release.discussion_body(REPOSITORY, "v0.2-Pre-Alpha", self.pr,
+                                       self.installers, [self.file])
+        for text in ["Fix editor startup", "/releases/download/v0.2-Pre-Alpha/",
+                     self.installers[0].name, "Engine/main.rs", "+2 / -1", "+new",
+                     "/pull/42/files#diff-", "/pull/42.patch"]:
+            self.assertIn(text, body)
+
+    def test_large_and_binary_diffs_have_full_diff_links(self):
+        files = [self.file | {"filename": f"file-{i}", "patch": "x" * 10000}
+                 for i in range(100)]
+        files.insert(0, self.file | {"filename": "image.png", "patch": None})
+        body = release.discussion_body(REPOSITORY, "tag", self.pr, self.installers, files)
+        self.assertLess(len(body.encode("utf-8")), 51000)
+        self.assertIn("binary or omitted", body)
+        self.assertIn("More files", body)
+        self.assertIn("/pull/42/files", body)
+
+    def test_source_cannot_close_preview_or_inject_html(self):
+        file = self.file | {"patch": "+</pre><script>alert(1)</script>\n+```"}
+        body = release.discussion_body(REPOSITORY, "tag", self.pr, self.installers, [file])
+        self.assertNotIn("<script>", body)
+        self.assertIn("&lt;/pre&gt;", body)
+
+    def test_create_uses_category_and_retry_updates_existing_on_later_page(self):
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                pages = [self.page()]
+                operation = "createDiscussion"
+                if existing:
+                    pages = [self.page(more=True, cursor="next"), self.page([{
+                        "id": "discussion", "body": "<!-- installer-release:tag -->\nold"
+                    }])]
+                    operation = "updateDiscussion"
+                responses = [self.repository, *pages, {operation: {"discussion": {"url": "url"}}}]
+                with patch.object(release, "graphql", side_effect=responses) as graphql, \
+                        patch.object(release, "api_list", return_value=[self.file]) as api:
+                    release.announce(REPOSITORY, "tag", self.pr, self.installers)
+                api.assert_called_once_with(f"repos/{REPOSITORY}/pulls/42/files?per_page=100")
+                mutation = graphql.call_args
+                self.assertIn(operation, mutation.args[0])
+                self.assertIn("Fix editor startup", mutation.kwargs["body"])
+                if existing:
+                    self.assertEqual(mutation.kwargs["id"], "discussion")
+                    self.assertEqual(graphql.call_args_list[2].kwargs["cursor"], "next")
+                else:
+                    self.assertEqual(mutation.kwargs["category"], "category")
+
+    def test_missing_category_fails_clearly(self):
+        self.repository["repository"]["discussionCategories"]["nodes"] = []
+        with patch.object(release, "graphql", return_value=self.repository):
+            with self.assertRaisesRegex(ValueError, "change-log"):
+                release.announce(REPOSITORY, "tag", self.pr, self.installers)
+
+    def test_graphql_reports_api_errors(self):
+        with patch.object(release, "gh", return_value='{"errors":[{"message":"denied"}]}'):
+            with self.assertRaisesRegex(RuntimeError, "denied"):
+                release.graphql("query {}")
+
+    def test_announcement_failure_keeps_release_published_for_retry(self):
+        fixture = InstallerReleaseTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        with patch.object(release, "api_list", side_effect=[[fixture.pr], []]), \
+                patch.object(release, "gh", return_value="") as gh, \
+                patch.object(release, "announce", side_effect=RuntimeError("denied")):
+            with self.assertRaisesRegex(RuntimeError, "denied"):
+                release.publish(REPOSITORY, fixture.run, fixture.temp.name)
+        self.assertEqual(gh.call_args.args[-1], "--draft=false")
 
 
 if __name__ == "__main__":

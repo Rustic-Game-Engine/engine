@@ -43,6 +43,23 @@ published as prereleases with the Windows `.exe` attached. Both build workflows
 share one publication concurrency group, and retrying a build or publication
 repairs the release for that commit rather than allocating another version.
 
+After the EXE upload and release publication succeed, the same job announces the
+release in Discussions → **Change Log** (category slug `change-log`). Each post
+includes direct EXE download links, a brief plain-text overview from the merged
+PR title, and changed file names with addition/deletion counts and expandable
+diff previews. File links open their full PR diffs; the post also links the full
+file list and downloadable patch. Binary files or diffs omitted by GitHub have
+links instead of previews. Large posts limit previews and direct readers to the
+complete file list to stay within GitHub's size limit. GitHub's PR-files API
+returns at most 3,000 files; the full diff and patch links remain available.
+
+The workflow token needs `discussions: write` alongside its existing permissions,
+and Discussions must contain the `change-log` category. Retrying publication
+updates the announcement identified by its hidden release-tag marker instead of
+creating a duplicate. Keep that marker when editing an announcement manually.
+An announcement failure fails the job but leaves the uploaded release available;
+fix category access or permissions and rerun the job to repair the announcement.
+
 The publishing workflow must be merged into the default branch before GitHub
 can trigger it. To diagnose publication, open `Publish installer release` in
 Actions. Missing/expired artifacts, missing merged-PR metadata, or insufficient

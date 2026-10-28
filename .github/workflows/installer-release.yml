@@ -9,6 +9,7 @@ permissions:
   contents: write
   actions: read
   pull-requests: read
+  discussions: write
 
 # Both build workflows share one version sequence. Never cancel an asset upload.
 concurrency:
