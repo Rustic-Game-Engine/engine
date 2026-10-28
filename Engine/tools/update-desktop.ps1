@@ -10,6 +10,7 @@ $ErrorActionPreference = 'Stop'
 # even though this worker has no visible console.
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
+$script:UpdateCheckIntervalSeconds = 120
 $script:Repository = 'Rustic-Game-Engine/engine'
 $script:Headers = @{ 'User-Agent' = 'Rustic-Desktop-Updater'; Accept = 'application/vnd.github+json' }
 
@@ -86,9 +87,10 @@ function Save-VerifiedInstaller($Asset, [string]$Directory) {
     }
 }
 
-function Test-RusticRunning([string]$Directory, [switch]$IgnoreAgentBackends) {
+function Test-RusticRunning([string]$Directory, [switch]$IgnoreAgentBackends, [switch]$IgnoreSetupHelper) {
     $names = @('rustic-project-manager', 'rustic-editor', 'rustic-runtime', 'rustic-asset-worker', 'rustic-agent-backend', 'rustic-luau-host', 'rustic-setup-helper')
     if ($IgnoreAgentBackends) { $names = @($names | Where-Object { $_ -ne 'rustic-agent-backend' }) }
+    if ($IgnoreSetupHelper) { $names = @($names | Where-Object { $_ -ne 'rustic-setup-helper' }) }
     foreach ($process in @(Get-Process -Name $names -ErrorAction SilentlyContinue)) {
         try {
             $path = $process.Path
@@ -99,10 +101,10 @@ function Test-RusticRunning([string]$Directory, [switch]$IgnoreAgentBackends) {
     return $false
 }
 
-function Stop-IdleAgentBackends([string]$Directory) {
+function Stop-IdleAgentBackends([string]$Directory, [switch]$DuringInstall) {
     # MCP clients own these processes and keep their stdin open after Rustic exits.
     # Keep them available until editors, games and other workers have all closed.
-    if (Test-RusticRunning $Directory -IgnoreAgentBackends) { return }
+    if (Test-RusticRunning $Directory -IgnoreAgentBackends -IgnoreSetupHelper:$DuringInstall) { return }
     foreach ($process in @(Get-Process -Name 'rustic-agent-backend' -ErrorAction SilentlyContinue)) {
         try {
             $path = $process.Path
@@ -130,7 +132,7 @@ function Wait-DesktopExit([string]$Directory, [string]$CacheDirectory, [string]$
         } else { '' }
         # A dismissed update must not pin the worker to that release forever.
         # Finish any graceful-close request before looking for a newer release.
-        if ($ticks -ge 3600 -and -not $request) { return $false }
+        if ($ticks -ge $script:UpdateCheckIntervalSeconds -and -not $request) { return $false }
         if ($request -cne $lastRequest) { $requestWait = 0; $lastRequest = $request }
         if ($request) {
             $requestWait++
@@ -168,8 +170,21 @@ function Install-DesktopUpdate([string]$Installer, [string]$Directory, [string]$
     $arguments = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/NOCLOSEAPPLICATIONS',
         '/NORESTARTAPPLICATIONS', "/$scope", ('/DIR="' + $Directory + '"'),
         ('/LOG="' + (Join-Path $LogDirectory 'update-setup.log') + '"'))
-    $process = Start-Process -FilePath $Installer -ArgumentList $arguments -PassThru -Wait
-    if ($process.ExitCode -ne 0) { throw "Update installer exited with code $($process.ExitCode)." }
+    # MCP clients may reconnect after Wait-DesktopExit has returned. Continue
+    # cleanup while Setup runs, including while its optional-toolchain helper runs.
+    $process = Start-Process -FilePath $Installer -ArgumentList $arguments -PassThru
+    try {
+        while (-not $process.HasExited) {
+            Stop-IdleAgentBackends $Directory -DuringInstall
+            Start-Sleep -Seconds 1
+            $process.Refresh()
+        }
+        $process.WaitForExit()
+        if ($process.ExitCode -ne 0) { throw "Update installer exited with code $($process.ExitCode)." }
+    } finally {
+        Stop-IdleAgentBackends $Directory -DuringInstall
+        $process.Dispose()
+    }
 }
 
 function Write-UpdateLog([string]$Message) {
@@ -236,6 +251,14 @@ function Invoke-DesktopUpdateCheck([string]$Directory, [string]$CacheDirectory) 
     return [pscustomobject]@{ Installed = $true; Tag = $tag }
 }
 
+function Wait-NextDesktopUpdateCheck([string]$Directory) {
+    for ($elapsed = 0; $elapsed -lt $script:UpdateCheckIntervalSeconds; $elapsed += 5) {
+        if (-not (Test-RusticRunning $Directory)) { return $false }
+        Start-Sleep -Seconds 5
+    }
+    return $true
+}
+
 function Invoke-DesktopUpdater([string]$Directory) {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { return }
     $Directory = (Resolve-Path -LiteralPath $Directory).Path.TrimEnd('\')
@@ -269,11 +292,8 @@ function Invoke-DesktopUpdater([string]$Directory) {
                     return
                 }
             } catch { Write-UpdateLog $_.Exception.Message }
-            # Check hourly while Rustic is open; a later launch retries network/Setup failures.
-            for ($tick = 0; $tick -lt 720; $tick++) {
-                if (-not (Test-RusticRunning $Directory)) { return }
-                Start-Sleep -Seconds 5
-            }
+            # Retry release checks and failures every two minutes while Rustic is open.
+            if (-not (Wait-NextDesktopUpdateCheck $Directory)) { return }
         } while ($true)
     } finally { if ($lock) { $lock.Dispose() } }
 }

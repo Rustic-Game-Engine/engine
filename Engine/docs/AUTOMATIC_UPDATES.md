@@ -5,8 +5,8 @@ when Project Manager or the editor starts. Older installations need one manual
 upgrade from [GitHub Releases](https://github.com/Rustic-Game-Engine/engine/releases)
 to receive this feature. No Rust toolchain or GitHub login is needed.
 
-The updater checks on launch and every hour while Rustic is open, including while
-a previously downloaded update is waiting for the apps to close. A newer release
+The updater checks on launch and every two minutes while Rustic is open, including
+while a previously downloaded update is waiting for the apps to close. A newer release
 replaces the waiting update after its installer has been verified. It includes the
 project's `vM.m-Pre-Alpha` releases, orders versions numerically, and also recognizes
 `vM.m.p` stable releases. GitHub's latest-release shortcut is not used because it
@@ -29,7 +29,9 @@ Canceling leaves the update available. Standalone games/workers must be closed
 separately. Once the desktop windows, games and other workers have exited, the
 updater stops every `rustic-agent-backend` from that installation, including
 backends kept alive by external MCP clients. This also applies after a normal app
-exit without clicking **Update**. Backends from other installations remain running.
+exit without clicking **Update**. While Setup runs, the updater checks once a
+second for restarted backends and stops them again, including while Setup installs
+optional language tools. Backends from other installations remain running.
 Reconnect the Rustic MCP server in your agent client after installation to use the
 new backend. Setup waits until all Rustic processes from that installation exit.
 Windows opened after an update request stay open, so you can return to work while
@@ -66,7 +68,7 @@ names and IDs once a minute. Downloads disable PowerShell's progress rendering;
 retries reuse an existing installer only after rechecking its size and SHA-256.
 A file lock prevents duplicate workers from the same
 user and installation. Network/API rate-limit and Setup failures leave the current
-application usable and retry after an hour while it remains open or on a later
+application usable and retry after two minutes while it remains open or on a later
 launch. If download completed but Setup has not started, close remaining Rustic
 windows, standalone games and workers. Agent backends are stopped automatically
 once these close; termination failures are recorded in `update.log`. If a client

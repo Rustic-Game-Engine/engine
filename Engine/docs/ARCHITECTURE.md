@@ -264,7 +264,9 @@ and different interfaces. Closing
 an editor returns naturally to the still-running launcher when it was launcher-
 started. Opening a project obtains an operating-system writer lock. A second editor
 opens read-only while the first holds the lock. Closing or crashing the editor releases
-the lock automatically; leftover PID metadata is quarantined on the next writable
+the lock automatically. Normal closure explicitly unlocks it before closing the
+file handle, so a concurrent subprocess launch cannot prolong ownership through
+a temporarily inherited handle. Leftover PID metadata is quarantined on the next writable
 open and cannot by itself make a project read-only. The persistent
 `temp/editor.writer.lock` file is a lock target, not evidence of a running editor.
 
