@@ -2323,12 +2323,14 @@ mod tests {
                 assert(game.scene.getActive()==level and #game.scene.getLoaded()==2)
                 game.scene.unload(level)
                 assert(not game.scene.isLoaded(level) and game.scene.getActive()==nil)
-                assert(not pcall(function() game.scene.switchTo(level) end))
+                game.scene.switchTo(level);assert(game.scene.isLoaded(level))
+                game.scene.switchTo('Menu');assert(not game.scene.isLoaded(level))
             end}"),
             (ScriptLanguage::Luau, "scenes.luau", br"return {Start=function()
                 local level=game.scene.load('scene/level.scene');assert(game.scene.isLoaded(level))
                 game.scene.switchTo(level);assert(game.scene.getActive()==level and #game.scene.getLoaded()==2)
                 game.scene.unload(level);assert(not game.scene.isLoaded(level))
+                game.scene.switchTo(level);assert(game.scene.isLoaded(level));game.scene.switchTo('Menu');assert(not game.scene.isLoaded(level))
             end}"),
             (ScriptLanguage::JavaScript, "scenes.js", br"globalThis.behavior={Start(){
                 const level=game.scene.load('scene/level.scene');
@@ -2337,12 +2339,14 @@ mod tests {
                 if(game.scene.getActive()!==level||game.scene.getLoaded().length!==2)throw Error('switch failed');
                 game.scene.unload(level);
                 if(game.scene.isLoaded(level)||game.scene.getActive()!==null)throw Error('unload failed');
-                let failed=false;try{game.scene.switchTo(level)}catch(e){failed=true}if(!failed)throw Error('unloaded switch allowed');
+                game.scene.switchTo(level);if(!game.scene.isLoaded(level))throw Error('autoload failed');
+                game.scene.switchTo('Menu');if(game.scene.isLoaded(level))throw Error('auto unload failed');
             }};"),
             (ScriptLanguage::Web, "scenes.html", br"<!doctype html><html><head><title>Scene lifecycle</title></head><body><script>globalThis.behavior={Start(){
                 const level=game.scene.load('scene/level.scene');game.scene.switchTo(level);
                 if(!game.scene.isLoaded(level)||game.scene.getActive()!==level||game.scene.getLoaded().length!==2)throw Error('load/switch failed');
                 game.scene.unload(level);if(game.scene.isLoaded(level))throw Error('unload failed');
+                game.scene.switchTo(level);if(!game.scene.isLoaded(level))throw Error('autoload');game.scene.switchTo('Menu');if(game.scene.isLoaded(level))throw Error('auto unload');
             }};</script></body></html>"),
             (ScriptLanguage::Python, "scenes.py", br"from rustic import *
 def on_start():
@@ -2352,20 +2356,24 @@ def on_start():
     assert game.scene.getActive()==level and len(game.scene.getLoaded())==2
     game.scene.unload(level)
     assert not game.scene.isLoaded(level) and game.scene.getActive() is None
+    game.scene.switchTo(level)
+    assert game.scene.isLoaded(level)
+    game.scene.switchTo('Menu')
+    assert not game.scene.isLoaded(level)
 run(globals())"),
             (ScriptLanguage::Cpp, "scenes.cpp", br#"#include "rustic.hpp"
-void start(){auto level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw std::runtime_error("load");game.scene.switchTo(level);if(game.scene.getActive().string()!=level||game.scene.getLoaded().array().size()!=2)throw std::runtime_error("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw std::runtime_error("unload");}
+void start(){auto level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw std::runtime_error("load");game.scene.switchTo(level);if(game.scene.getActive().string()!=level||game.scene.getLoaded().array().size()!=2)throw std::runtime_error("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw std::runtime_error("unload");game.scene.switchTo(level);if(!game.scene.isLoaded(level))throw std::runtime_error("autoload");game.scene.switchTo("Menu");if(game.scene.isLoaded(level))throw std::runtime_error("auto unload");}
 int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
             (ScriptLanguage::C, "scenes.c", br#"#include "rustic.h"
-void start(void){const char *level=Game.scene.load("scene/level.scene");if(!Game.scene.isLoaded(level))r_fail("load");Game.scene.switchTo(level);if(strcmp(Game.scene.getActive(),level)||Game.scene.getLoaded().count!=2)r_fail("switch");Game.scene.unload(level);if(Game.scene.isLoaded(level)||Game.scene.getActive())r_fail("unload");}
+void start(void){const char *level=Game.scene.load("scene/level.scene");if(!Game.scene.isLoaded(level))r_fail("load");Game.scene.switchTo(level);if(strcmp(Game.scene.getActive(),level)||Game.scene.getLoaded().count!=2)r_fail("switch");Game.scene.unload(level);if(Game.scene.isLoaded(level)||Game.scene.getActive())r_fail("unload");Game.scene.switchTo(level);if(!Game.scene.isLoaded(level))r_fail("autoload");Game.scene.switchTo("Menu");if(Game.scene.isLoaded(level))r_fail("auto unload");}
 int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
             (ScriptLanguage::CSharp, "scenes.cs", br#"using static Rustic;
-Run((callback,dt)=>{if(callback=="on_start"){var level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw new System.Exception("load");game.scene.switchTo(level);if(game.scene.getActive()!=level||game.scene.getLoaded().Length!=2)throw new System.Exception("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw new System.Exception("unload");}});"#),
+Run((callback,dt)=>{if(callback=="on_start"){var level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw new System.Exception("load");game.scene.switchTo(level);if(game.scene.getActive()!=level||game.scene.getLoaded().Length!=2)throw new System.Exception("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw new System.Exception("unload");game.scene.switchTo(level);if(!game.scene.isLoaded(level))throw new System.Exception("autoload");game.scene.switchTo("Menu");if(game.scene.isLoaded(level))throw new System.Exception("auto unload");}});"#),
             (ScriptLanguage::Java, "RusticBehavior.java", br#"class RusticBehavior extends Rustic {
-public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){String level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw new RuntimeException("load");game.scene.switchTo(level);if(!game.scene.getActive().equals(level)||game.scene.getLoaded().size()!=2)throw new RuntimeException("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw new RuntimeException("unload");}});}}"#),
+public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){String level=game.scene.load("scene/level.scene");if(!game.scene.isLoaded(level))throw new RuntimeException("load");game.scene.switchTo(level);if(!game.scene.getActive().equals(level)||game.scene.getLoaded().size()!=2)throw new RuntimeException("switch");game.scene.unload(level);if(game.scene.isLoaded(level))throw new RuntimeException("unload");game.scene.switchTo(level);if(!game.scene.isLoaded(level))throw new RuntimeException("autoload");game.scene.switchTo("Menu");if(game.scene.isLoaded(level))throw new RuntimeException("auto unload");}});}}"#),
             (ScriptLanguage::Php, "scenes.php", br#"<?php
 require __DIR__."/rustic.php";
-function on_start():void{global $game;$level=$game->scene->load("scene/level.scene");if(!$game->scene->isLoaded($level))throw new Exception("load");$game->scene->switchTo($level);if($game->scene->getActive()!==$level||count($game->scene->getLoaded())!==2)throw new Exception("switch");$game->scene->unload($level);if($game->scene->isLoaded($level))throw new Exception("unload");}
+function on_start():void{global $game;$level=$game->scene->load("scene/level.scene");if(!$game->scene->isLoaded($level))throw new Exception("load");$game->scene->switchTo($level);if($game->scene->getActive()!==$level||count($game->scene->getLoaded())!==2)throw new Exception("switch");$game->scene->unload($level);if($game->scene->isLoaded($level))throw new Exception("unload");$game->scene->switchTo($level);if(!$game->scene->isLoaded($level))throw new Exception("autoload");$game->scene->switchTo("Menu");if($game->scene->isLoaded($level))throw new Exception("auto unload");}
 rustic_run(["on_start"=>"on_start"]);"#),
         ];
         for (language, name, source) in fixtures {
@@ -2400,7 +2408,7 @@ rustic_run(["on_start"=>"on_start"]);"#),
             );
             drop(behavior);
             runtime.frame_update(0.01);
-            assert!(runtime.active.name.is_empty());
+            assert_eq!(runtime.active.name, "Menu");
             eprintln!("validated scene lifecycle: {}", language.display_name());
         }
     }

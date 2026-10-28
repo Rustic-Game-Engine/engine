@@ -104,12 +104,35 @@ See the [language guides](/docs/guides/api-languages) for complete SDK setup.
 `Game.scene` also exposes these methods in each language. CSS alone has no
 callbacks; HTML runs the JavaScript API. PHP and HTML remain UI script types.
 
+## Automatic loading when switching
+
+`switchTo` also accepts a saved scene that is not in memory. Use its document
+name, or pass its relative file path directly:
+
+```lua
+game.scene.switchTo('Level') -- finds the saved document in scene/ or scenes/
+assert(game.scene.isLoaded('Level'))
+game.scene.switchTo('Menu') -- automatically unloads Level
+assert(not game.scene.isLoaded('Level'))
+```
+
+The same calls work with native member syntax in the other languages. C uses
+`Game.scene.switchTo("scene/level.scene")`. A document name can differ from its
+filename; name lookup searches nested scene directories on demand. If multiple
+valid saved scenes have the same document name, pass a path to choose one.
+
+A scene loaded automatically by switching is temporary: switching away unloads
+it and releases its state after the callback batch. Switching to it again reads
+the saved file and starts fresh. Switching to the same scene keeps its state.
+Scenes loaded explicitly with `load`, and the initial Play scene, stay loaded
+when you switch away. Call `unload` to release those scenes yourself.
+
 ## Calls and results
 
 | Call | Result |
 | --- | --- |
 | `game.scene.load(path)` | Read a saved relative scene file, build its world, and return its document name. Does not activate it or run its startup callbacks. |
-| `game.scene.switchTo(scene)` | Select an already loaded document name. Scene/object startup callbacks run on first activation. |
+| `game.scene.switchTo(scene)` | Select a document name or relative scene file path. If needed, load it automatically. Automatically loaded scenes unload on switching away; scene/object startup callbacks run on first activation. |
 | `game.scene.unload(scene)` | Remove that document name from the loaded set; discard its unsaved runtime state and release its world and scene-owned runtime resources. |
 | `game.scene.isLoaded(scene)` | Return whether the document name is loaded. |
 | `game.scene.getLoaded()` | Return loaded document names in deterministic name order. |
@@ -123,9 +146,9 @@ of the callback; copy strings if keeping them across callbacks.
 
 ## Lifetime and transitions
 
-Loading allocates only that scene's live world. Switching preserves other loaded
-worlds, edits and script state. Inactive loaded scenes do not tick or render;
-switching back resumes them without rerunning Start. Unloading releases a scene
+Loading allocates only that scene's live world. Switching preserves explicitly
+loaded worlds, edits and script state. Inactive explicitly loaded scenes do not
+tick or render; switching back resumes them without rerunning Start. Unloading releases a scene
 instead of caching it. Reloading reads the saved file and starts fresh.
 
 Calls update the loaded set and selected name synchronously, so loading and then
@@ -148,12 +171,13 @@ never writes to scene files.
 
 ## Errors and diagnosis
 
-Switching to an unknown or unloaded name raises a script error and preserves the
-selection. Loading a duplicate name or scene ID, or unloading an unknown name,
+Switching to an unloaded scene tries to load it first. If the destination cannot
+be found, is ambiguous, or fails file/world validation, the current scene stays
+selected and loaded, including when it was automatically loaded. Loading a duplicate name or scene ID, or unloading an unknown name,
 also raises an error. Catch expected errors with `pcall`/try/catch as appropriate.
 
-`load` takes a relative project file path, while switch/unload/query calls take
-the **document name returned by load**. Paths cannot escape the Play snapshot.
+`load` takes a relative project file path. `switchTo` accepts a document name or
+a relative file path; unload/query calls take the **document name returned by load**. Paths cannot escape the Play snapshot.
 Missing files, invalid RON, invalid world data, incompatible schema versions and
 checksum mismatches raise errors without adding a loaded scene. The loader does
 not silently use a backup. Open and save externally edited scene files in the

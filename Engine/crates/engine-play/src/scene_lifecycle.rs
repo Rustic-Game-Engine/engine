@@ -22,6 +22,8 @@ pub(super) struct LoadedScene {
     pub gameplay: Arc<Mutex<GameplayContext>>,
     pub startup_scripts: Vec<ScriptReference>,
     pub valid: bool,
+    auto_loaded: bool,
+    source_path: Option<PathBuf>,
 }
 
 impl LoadedScene {
@@ -34,6 +36,8 @@ impl LoadedScene {
             gameplay: Arc::default(),
             startup_scripts: document.startup_scripts,
             valid: true,
+            auto_loaded: false,
+            source_path: None,
         })
     }
 
@@ -45,6 +49,8 @@ impl LoadedScene {
             gameplay: Arc::default(),
             startup_scripts: Vec::new(),
             valid: false,
+            auto_loaded: false,
+            source_path: None,
         }
     }
 }
@@ -59,6 +65,25 @@ pub(super) struct SceneRegistry {
 }
 
 impl SceneRegistry {
+    fn insert_saved(
+        &mut self,
+        document: SceneDocument,
+        path: PathBuf,
+        auto_loaded: bool,
+    ) -> Result<String, String> {
+        if self.loaded.contains_key(&document.name)
+            || self.loaded.values().any(|loaded| loaded.id == document.id)
+        {
+            return Err("scene is already loaded (scene names and IDs must be unique)".into());
+        }
+        let mut loaded = LoadedScene::from_document(document)?;
+        loaded.auto_loaded = auto_loaded;
+        loaded.source_path = Some(path);
+        let name = loaded.name.clone();
+        self.loaded.insert(name.clone(), loaded);
+        Ok(name)
+    }
+
     pub fn query(
         &mut self,
         root: &Path,
@@ -80,48 +105,42 @@ impl SceneRegistry {
             .ok_or("scene must be a nonempty string")?;
         match op {
             "scene_load" => {
-                // Resolve only explicit relative project paths, never traversal or symlink escapes.
-                let path = Path::new(scene);
-                if path
-                    .components()
-                    .any(|part| !matches!(part, Component::Normal(_)))
-                    || scene.contains('\\')
-                {
-                    return Err("scene load requires a relative project path".into());
-                }
-                let root = root.canonicalize().map_err(|e| e.to_string())?;
-                let path = root.join(path).canonicalize().map_err(|e| e.to_string())?;
-                if !path.starts_with(&root) {
-                    return Err("scene path escapes the project".into());
-                }
-                let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
-                let parsed = load_scene(&bytes).map_err(|e| e.to_string())?;
-                if parsed.read_only || parsed.has_errors() {
-                    return Err("scene is damaged or incompatible".into());
-                }
-                if parsed.document.name.is_empty() {
-                    return Err("scene name must not be empty".into());
-                }
-                if self.loaded.contains_key(&parsed.document.name)
-                    || self.loaded.values().any(|s| s.id == parsed.document.id)
-                {
-                    return Err(
-                        "scene is already loaded (scene names and IDs must be unique)".into(),
-                    );
-                }
-                let loaded = LoadedScene::from_document(parsed.document)?;
-                let name = loaded.name.clone();
-                self.loaded.insert(name.clone(), loaded);
+                let (document, path) = read_saved_scene(root, scene)?;
+                let name = self.insert_saved(document, path, false)?;
                 Ok(serde_json::json!(name))
             }
             "scene_is_loaded" => Ok(serde_json::json!(self.loaded.contains_key(scene))),
             "scene_switch" => {
-                if !self.loaded.contains_key(scene) {
-                    return Err(format!(
-                        "scene `{scene}` is not loaded; call game.scene.load first"
-                    ));
+                let target = if self.loaded.contains_key(scene) {
+                    scene.to_owned()
+                } else if let Some(loaded) = self
+                    .loaded
+                    .values()
+                    .find(|loaded| loaded.source_path.as_deref() == Some(Path::new(scene)))
+                {
+                    loaded.name.clone()
+                } else {
+                    let (document, path) = resolve_saved_scene(root, scene)?;
+                    if let Some(existing) = self.loaded.get(&document.name) {
+                        if existing.id != document.id {
+                            return Err("a different scene with this name is already loaded".into());
+                        }
+                        existing.name.clone()
+                    } else {
+                        self.insert_saved(document, path, true)?
+                    }
+                };
+                // Resolve and validate the destination before releasing the current scene.
+                if self.active.as_ref() != Some(&target)
+                    && let Some(previous) = self.active.as_ref()
+                    && self
+                        .loaded
+                        .get(previous)
+                        .is_some_and(|loaded| loaded.auto_loaded)
+                {
+                    self.loaded.remove(previous);
                 }
-                self.active = Some(scene.into());
+                self.active = Some(target);
                 Ok(serde_json::Value::Null)
             }
             "scene_unload" => {
@@ -136,6 +155,90 @@ impl SceneRegistry {
             _ => Err(format!("unknown scene operation `{op}`")),
         }
     }
+}
+
+/// Reads only a relative project file; neither documents nor bytes are cached.
+fn read_saved_scene(root: &Path, source: &str) -> Result<(SceneDocument, PathBuf), String> {
+    let path = Path::new(source);
+    if path
+        .components()
+        .any(|part| !matches!(part, Component::Normal(_)))
+        || source.contains('\\')
+    {
+        return Err("scene load requires a relative project path".into());
+    }
+    let root = root.canonicalize().map_err(|e| e.to_string())?;
+    let path = root.join(path).canonicalize().map_err(|e| e.to_string())?;
+    let relative = path
+        .strip_prefix(&root)
+        .map_err(|_| "scene path escapes the project")?
+        .to_owned();
+    let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+    let parsed = load_scene(&bytes).map_err(|e| e.to_string())?;
+    if parsed.read_only || parsed.has_errors() {
+        return Err("scene is damaged or incompatible".into());
+    }
+    if parsed.document.name.is_empty() {
+        return Err("scene name must not be empty".into());
+    }
+    Ok((parsed.document, relative))
+}
+
+fn resolve_saved_scene(root: &Path, source: &str) -> Result<(SceneDocument, PathBuf), String> {
+    if source.contains('/')
+        || source.contains('\\')
+        || Path::new(source)
+            .extension()
+            .is_some_and(|ext| ext == "scene" || ext == "rscene")
+    {
+        return read_saved_scene(root, source);
+    }
+    // Discover document names on demand, including files whose names differ.
+    // Only the matching document survives the search; no unloaded-world cache is built.
+    let mut pending = [root.join("scene"), root.join("scenes")]
+        .into_iter()
+        .filter(|path| {
+            path.symlink_metadata()
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        })
+        .collect::<Vec<_>>();
+    let mut found = None;
+    while let Some(directory) = pending.pop() {
+        for entry in std::fs::read_dir(directory).map_err(|e| e.to_string())? {
+            let entry = entry.map_err(|e| e.to_string())?;
+            let kind = entry.file_type().map_err(|e| e.to_string())?;
+            if kind.is_symlink() {
+                continue;
+            }
+            let path = entry.path();
+            if kind.is_dir() {
+                pending.push(path);
+            } else if kind.is_file()
+                && matches!(
+                    path.extension().and_then(|ext| ext.to_str()),
+                    Some("scene" | "rscene")
+                )
+            {
+                let relative = path
+                    .strip_prefix(root)
+                    .map_err(|e| e.to_string())?
+                    .to_string_lossy();
+                if let Ok((document, relative)) = read_saved_scene(root, &relative)
+                    && document.name == source
+                {
+                    if found.is_some() {
+                        return Err(format!(
+                            "multiple saved scenes are named `{source}`; use a scene file path"
+                        ));
+                    }
+                    found = Some((document, relative));
+                }
+            }
+        }
+    }
+    found.ok_or_else(|| {
+        format!("no valid saved scene named `{source}` was found; pass a relative scene file path")
+    })
 }
 
 /// Keeps global scripts alive while swapping scene-owned worlds and behaviors.
@@ -368,6 +471,130 @@ impl RuntimeScripts {
 mod tests {
     use super::*;
     use engine_world::{EntitySnapshot, save_scene_atomic};
+
+    fn scene_query(
+        runtime: &RuntimeScripts,
+        root: &Path,
+        op: &str,
+        scene: &str,
+    ) -> Result<serde_json::Value, String> {
+        runtime
+            .scenes
+            .lock()
+            .unwrap()
+            .query(root, &serde_json::json!({"op":op,"scene":scene}))
+    }
+
+    #[test]
+    fn autoloaded_scenes_release_on_switch_while_explicit_scenes_stay_loaded() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("scene/nested")).unwrap();
+        let mut level = SceneDocument::new("Level");
+        let entity = EntitySnapshot::default();
+        let id = entity.id;
+        level.entities.push(entity);
+        save_scene_atomic(
+            temp.path().join("scene/nested/different-file.scene"),
+            &level,
+        )
+        .unwrap();
+        save_scene_atomic(
+            temp.path().join("scene/other.scene"),
+            &SceneDocument::new("Other"),
+        )
+        .unwrap();
+        let mut runtime =
+            RuntimeScripts::load(temp.path(), &SceneDocument::new("Menu").to_bytes().unwrap())
+                .unwrap();
+        scene_query(&runtime, temp.path(), "scene_switch", "Level").unwrap();
+        runtime.sync_scenes();
+        let old_world = Arc::downgrade(&runtime.active.world);
+        let old_context = Arc::downgrade(&runtime.active.gameplay);
+        runtime
+            .active
+            .world
+            .lock()
+            .unwrap()
+            .destroy_entity(id)
+            .unwrap();
+        scene_query(
+            &runtime,
+            temp.path(),
+            "scene_switch",
+            "scene/nested/different-file.scene",
+        )
+        .unwrap();
+        runtime.sync_scenes();
+        assert!(!runtime.active.world.lock().unwrap().contains(id));
+        assert!(scene_query(&runtime, temp.path(), "scene_switch", "Missing").is_err());
+        assert!(scene_query(&runtime, temp.path(), "scene_switch", "../outside.scene").is_err());
+        std::fs::write(temp.path().join("scene/broken.scene"), b"broken").unwrap();
+        assert!(scene_query(&runtime, temp.path(), "scene_switch", "scene/broken.scene").is_err());
+        assert_eq!(
+            runtime.scenes.lock().unwrap().active.as_deref(),
+            Some("Level")
+        );
+        scene_query(&runtime, temp.path(), "scene_switch", "scene/other.scene").unwrap();
+        runtime.sync_scenes();
+        assert!(old_world.upgrade().is_none());
+        assert!(old_context.upgrade().is_none());
+        assert!(!runtime.scenes.lock().unwrap().loaded.contains_key("Level"));
+        assert!(runtime.scenes.lock().unwrap().loaded.contains_key("Menu"));
+        scene_query(&runtime, temp.path(), "scene_switch", "Menu").unwrap();
+        runtime.sync_scenes();
+        assert!(!runtime.scenes.lock().unwrap().loaded.contains_key("Other"));
+        scene_query(&runtime, temp.path(), "scene_switch", "Level").unwrap();
+        runtime.sync_scenes();
+        assert!(runtime.active.world.lock().unwrap().contains(id));
+        scene_query(&runtime, temp.path(), "scene_switch", "Menu").unwrap();
+        runtime.sync_scenes();
+        scene_query(
+            &runtime,
+            temp.path(),
+            "scene_load",
+            "scene/nested/different-file.scene",
+        )
+        .unwrap();
+        scene_query(&runtime, temp.path(), "scene_switch", "Level").unwrap();
+        runtime.sync_scenes();
+        let explicit_world = Arc::downgrade(&runtime.active.world);
+        scene_query(&runtime, temp.path(), "scene_switch", "Menu").unwrap();
+        runtime.sync_scenes();
+        assert!(explicit_world.upgrade().is_some());
+        assert!(runtime.scenes.lock().unwrap().loaded.contains_key("Level"));
+    }
+
+    #[test]
+    fn duplicate_saved_names_require_a_path_and_fail_without_unloading_current() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("scene")).unwrap();
+        save_scene_atomic(
+            temp.path().join("scene/a.scene"),
+            &SceneDocument::new("Duplicate"),
+        )
+        .unwrap();
+        save_scene_atomic(
+            temp.path().join("scene/b.scene"),
+            &SceneDocument::new("Duplicate"),
+        )
+        .unwrap();
+        let mut runtime =
+            RuntimeScripts::load(temp.path(), &SceneDocument::new("Menu").to_bytes().unwrap())
+                .unwrap();
+        assert!(
+            scene_query(&runtime, temp.path(), "scene_switch", "Duplicate")
+                .unwrap_err()
+                .contains("multiple")
+        );
+        assert_eq!(
+            runtime.scenes.lock().unwrap().active.as_deref(),
+            Some("Menu")
+        );
+        assert_eq!(runtime.scenes.lock().unwrap().loaded.len(), 1);
+        scene_query(&runtime, temp.path(), "scene_switch", "scene/a.scene").unwrap();
+        runtime.sync_scenes();
+        assert_eq!(runtime.active.name, "Duplicate");
+    }
 
     #[test]
     fn switching_retains_loaded_state_and_reloading_releases_previous_generation() {
