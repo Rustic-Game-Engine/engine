@@ -2515,7 +2515,7 @@ Run((callback,dt)=>{if(callback=="on_start"){Input.onClick(rustic.entity_id(),a=
             (ScriptLanguage::Java,"RusticBehavior.java",br#"class RusticBehavior extends Rustic{public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){Input.onClick(rustic.entity_id(),a->rustic.log("info","clicked"));Input.onTouchStart(a->rustic.log("info","touch start"));}if(callback.equals("update")&&(((java.util.List<?>)Input.touches()).size()!=0||((java.util.List<?>)Input.touchEvents()).size()!=2||((java.util.List<?>)Input.clicks()).size()!=1))throw new RuntimeException("input snapshot");});}}"#),
             (ScriptLanguage::Php,"input.php",br"<?php
 require_once __DIR__.'/rustic.php';
-run(['on_start'=>function(){global $rustic;Input::onClick($rustic->entity_id(),fn(...$args)=>$rustic->log('info','clicked'));Input::onTouchStart(fn(...$args)=>$rustic->log('info','touch start'));},'update'=>function($dt){if(count(Input::touches())!==0||count(Input::touchEvents())!==2||count(Input::clicks())!==1)throw new Exception('input snapshot');}]);"),
+rustic_run(['on_start'=>function(){global $rustic;Input::onClick($rustic->entity_id(),fn(...$args)=>$rustic->log('info','clicked'));Input::onTouchStart(fn(...$args)=>$rustic->log('info','touch start'));},'update'=>function($dt){if(count(Input::touches())!==0||count(Input::touchEvents())!==2||count(Input::clicks())!==1)throw new Exception('input snapshot');}]);"),
         ];
         for &(language, name, source) in fixtures {
             if !matches!(
