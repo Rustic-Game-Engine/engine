@@ -60,7 +60,7 @@ impl PointerCapture {
                 output.extend(self.cancel());
                 continue;
             }
-            let Some((event, pos)) = pointer_event(event, touch, rect) else {
+            let Some((event, pos)) = pointer_event(&event, touch, rect) else {
                 continue;
             };
             let phase = event.phase;
@@ -101,7 +101,7 @@ impl PointerCapture {
 }
 
 fn pointer_event(
-    event: egui::Event,
+    event: &egui::Event,
     touch: bool,
     rect: egui::Rect,
 ) -> Option<(PointerEvent, egui::Pos2)> {
@@ -132,13 +132,13 @@ fn pointer_event(
         } if !touch => (
             "mouse".into(),
             PointerDevice::Mouse,
-            if pressed {
+            if *pressed {
                 PointerPhase::Start
             } else {
                 PointerPhase::End
             },
             pos,
-            if pressed { 1.0 } else { 0.0 },
+            if *pressed { 1.0 } else { 0.0 },
         ),
         egui::Event::PointerMoved(pos) if !touch => (
             "mouse".into(),
@@ -160,7 +160,7 @@ fn pointer_event(
         pressure: pressure.clamp(0.0, 1.0),
         aspect: rect.width() / rect.height(),
     };
-    Some((event, pos))
+    Some((event, *pos))
 }
 
 #[cfg(test)]
@@ -173,7 +173,7 @@ mod tests {
         focused: bool,
     ) -> Vec<PointerEvent> {
         let mut output = Vec::new();
-        let _ = context.run_ui(
+        let mut frame_output = context.run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -190,6 +190,7 @@ mod tests {
                 output.extend(capture.collect(ui, rect));
             },
         );
+        frame_output.textures_delta.clear();
         output
     }
     fn touch(id: u64, phase: egui::TouchPhase, pos: egui::Pos2) -> egui::Event {
