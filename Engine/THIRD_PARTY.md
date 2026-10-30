@@ -25,6 +25,7 @@ license policy on the complete transitive graph.
 | `interprocess` | Local authenticated editor/runtime IPC transport | MIT OR Apache-2.0 | Versioned framing, one-use secrets, payload limits, deadlines, and process supervision wrap it |
 | `transform-gizmo-egui` / `transform-gizmo` | Standard 3D viewport transform handles, picking, and snapping | MIT OR Apache-2.0 | Results are validated and converted from world to local transforms before authoring preview and undo |
 | `egui-snarl` | Scene hierarchy graph nodes, pins, wires, and canvas interaction | MIT OR Apache-2.0 | Graph state is a disposable view of the authoring document; wires cannot mutate parent links |
+| `kuchikiki` | HTML parsing, CSS selector matching, and serialization inside the opt-in native UI designer | MIT | Source reads are bounded to 1 MiB; scripts are never evaluated; edits remain in memory until atomic, conflict-checked save |
 | `egui_tiles` | Dockable native editor layout | MIT OR Apache-2.0 | Only editor UI state depends on it; authoring state remains in testable engine models |
 | Material Design Icons (Pictogrammers) | Embedded upstream SVG script-language icons | Apache-2.0 | Icons are compiled into the editor, so rendering never depends on network availability |
 | Lucide Icons | Embedded SVG interface, file-type, transform, playback, and window-control icons | ISC AND MIT | Icons are compiled into the desktop applications and tinted locally; no runtime network access |
