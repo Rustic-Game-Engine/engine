@@ -116,7 +116,7 @@ See [APIs in every language](/docs/guides/api-languages) for native signatures.
 | `Position` | three finite numbers | Local translation relative to parent |
 | `Size` | three finite numbers | Local transform scale |
 | `Color` | three finite numbers | RGB; preserves existing alpha |
-| `CanTouch` | boolean | Reserved touch flag; does not affect solid response |
+| `CanTouch` | boolean | Enables object clicks/taps; does not affect solid response |
 | `CanCollide` | boolean | Enables solid box collisions with other collidable primitives in Play |
 | `Anchored` | boolean | Prevents physics movement; unchecked primitives fall under gravity |
 | `Parent` | stable entity ID or null | Reparents the target; changes future path |

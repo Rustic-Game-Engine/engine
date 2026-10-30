@@ -82,6 +82,16 @@
   };
   const Events={on:(n,f)=>connect(n,f),once:(n,f)=>connect(n,f,true),connect:(o,n,f)=>connect(n,f,false,o),disconnect:c=>c.disconnect(),
     emit:(name,args=[],source=null)=>rustic.gameplay({command:'emit',signal:{name,source:source==null?null:entity(source)},arguments:args})};
+  globalThis.Input={
+    touches:()=>rustic.query({op:'input_touches'}),
+    touchEvents:()=>rustic.query({op:'input_touch_events'}),
+    clicks:object=>rustic.query({op:'input_clicks',entity:object==null?null:entity(object)}),
+    onClick:(object,fn)=>Events.connect(object,'Click',fn),
+    onTouchStart:fn=>Events.on('TouchStart',fn),
+    onTouchMove:fn=>Events.on('TouchMove',fn),
+    onTouchEnd:fn=>Events.on('TouchEnd',fn),
+    onTouchCancel:fn=>Events.on('TouchCancel',fn)
+  };
   const Physics={
     raycast:(origin,direction,distance,ignore=[])=>rustic.query({op:'physics_raycast',origin,direction,distance,ignore}),
     sphereCast:(origin,direction,distance,radius,ignore=[])=>rustic.query({op:'physics_sphere_cast',origin,direction,distance,radius,ignore}),

@@ -220,6 +220,8 @@ Find/List retain their existing snapshot semantics in external adapters. List re
 - Capture/action lifetime: handles belong to the script and clean up on disable,
   destruction, successful reload or Stop.
 
-Input remains limited to held WASD, arrows and Shift in embedded Play. Collision
-and touch callbacks are not dispatched. These are shared runtime limits across
-languages.
+Keyboard input remains limited to held WASD, arrows and Shift in embedded Play.
+[Touchscreen input and object clicks](/docs/api/touch-input) provide multi-touch
+input and CanTouch-gated click subscriptions in the embedded game view. Physics
+collision contact callbacks are not dispatched. These are shared runtime limits
+across languages.

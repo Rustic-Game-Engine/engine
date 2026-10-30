@@ -212,6 +212,20 @@ fn run_authenticated_session(
                         .set_input_keys(keys);
                     continue;
                 }
+                ProtocolMessage::PointerInput(events) => {
+                    scripts
+                        .lock()
+                        .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                        .pointer_input(events);
+                    continue;
+                }
+                ProtocolMessage::ResetPointerInput => {
+                    scripts
+                        .lock()
+                        .map_err(|_| RuntimeServerError::SimulationPoisoned)?
+                        .reset_pointer_input();
+                    continue;
+                }
                 ProtocolMessage::QueryEntity(id) => {
                     let entity = id.parse().ok();
                     let live = match entity {

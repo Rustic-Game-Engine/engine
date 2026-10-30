@@ -1,3 +1,4 @@
+use eframe::egui;
 use engine_editor::AuthoringDocument;
 use engine_play::{
     ControlAck, ControlRequest, LiveEntityProperties, PlayMode, PlaySnapshot, RuntimeChangeSet,
@@ -10,6 +11,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub struct EditorPlaySession {
+    pointers: crate::pointer_input::PointerCapture,
+    pointer_view_seen: bool,
     runtime: SupervisedRuntime,
     snapshot: Option<PlaySnapshot>,
     mode: PlayMode,
@@ -106,6 +109,8 @@ impl EditorPlaySession {
             }
         };
         Ok(Self {
+            pointers: crate::pointer_input::PointerCapture::default(),
+            pointer_view_seen: false,
             runtime,
             snapshot: Some(snapshot),
             mode,
@@ -164,6 +169,10 @@ impl EditorPlaySession {
     }
 
     pub fn control(&mut self, request: ControlRequest) -> Result<ControlAck, String> {
+        self.runtime
+            .reset_pointer_input()
+            .map_err(|e| e.to_string())?;
+        self.pointers.clear();
         let ack = self
             .runtime
             .control(request, Duration::from_secs(2))
@@ -184,11 +193,34 @@ impl EditorPlaySession {
     }
 
     pub fn set_input_keys(&mut self, keys: BTreeSet<String>) -> Result<(), String> {
+        if !self.pointer_view_seen {
+            self.runtime
+                .reset_pointer_input()
+                .map_err(|e| e.to_string())?;
+            self.pointers.clear();
+        }
+        self.pointer_view_seen = false;
         if keys != self.held_keys {
             self.runtime
                 .set_input_keys(keys.iter().cloned().collect())
                 .map_err(|error| error.to_string())?;
             self.held_keys = keys;
+        }
+        Ok(())
+    }
+
+    pub fn pointer_input(&mut self, ui: &egui::Ui, rect: egui::Rect) -> Result<(), String> {
+        self.pointer_view_seen = true;
+        if self.state != RuntimeState::Running {
+            return Ok(());
+        }
+        let events = self
+            .pointers
+            .collect(ui, crate::pointer_input::game_image_rect(rect));
+        if !events.is_empty() {
+            self.runtime
+                .send_pointer_input(events)
+                .map_err(|e| e.to_string())?;
         }
         Ok(())
     }

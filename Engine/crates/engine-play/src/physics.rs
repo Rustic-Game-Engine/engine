@@ -271,7 +271,7 @@ fn sweep(a: &Body, b: &Body) -> Option<(f32, Vec3)> {
     ((0.0..=1.0).contains(&enter) && enter <= exit).then_some((enter, normal))
 }
 
-fn bounds(primitive: &Primitive) -> (Vec3, Vec3) {
+pub(crate) fn bounds(primitive: &Primitive) -> (Vec3, Vec3) {
     let half = match primitive {
         Primitive::Cube { size } => Vec3::splat(*size * 0.5),
         Primitive::RectangularPrism { size } => Vec3::from_array(*size) * 0.5,

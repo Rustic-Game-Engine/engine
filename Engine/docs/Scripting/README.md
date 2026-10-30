@@ -124,3 +124,6 @@ See [Entity foundations](API/entity-foundations.md) for live tags, groups, hiera
 lifetime, component and world queries in the shared scripting runtime.
 
 See [APIs in every language](/docs/guides/api-languages) for the shared API families, reusable audio, capture, and live object reads.
+
+See [Touchscreen input and object clicks](/docs/api/touch-input) for multi-touch
+contacts and CanTouch-gated object click subscriptions in embedded Play.

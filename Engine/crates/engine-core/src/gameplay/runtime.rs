@@ -199,6 +199,7 @@ impl Node {
                     return Err("callback delivery limit reached".into());
                 }
                 queue.push_back(Delivery {
+                    signal: None,
                     owner,
                     token: token.clone(),
                     arguments: Vec::new(),
@@ -284,6 +285,7 @@ impl Node {
                         return Err("callback delivery limit reached".into());
                     }
                     queue.push_back(Delivery {
+                        signal: None,
                         owner,
                         token: token.clone(),
                         arguments: vec![Payload::String(marker)],
@@ -421,6 +423,7 @@ impl Node {
                     return Err("callback delivery limit reached".into());
                 }
                 queue.push_back(Delivery {
+                    signal: None,
                     owner,
                     token: token.clone(),
                     arguments: vec![from.interpolate(*to, easing.sample(fraction))?.into()],
@@ -887,6 +890,7 @@ impl GameplayRuntime {
                     && self.callbacks.len() < 4096
                 {
                     self.callbacks.push_back(Delivery {
+                        signal: None,
                         owner: key.0,
                         token: token.clone(),
                         arguments: Vec::new(),

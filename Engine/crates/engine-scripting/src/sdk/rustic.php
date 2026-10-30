@@ -210,6 +210,16 @@ final class Smooth{
     static function remap(float $v,float $a,float $b,float $c,float $d):float{global $rustic;return $rustic->query(["op"=>"remap","value"=>$v,"in_min"=>$a,"in_max"=>$b,"out_min"=>$c,"out_max"=>$d]);}
     static function smoothDamp(float $c,float $t,float $v,float $s,float $dt):array{global $rustic;return $rustic->query(["op"=>"smooth_damp","current"=>$c,"target"=>$t,"velocity"=>$v,"smooth_time"=>$s,"delta"=>$dt]);}
 }
+final class Input{
+    static function touches():array{global $rustic;return $rustic->query(["op"=>"input_touches"]);}
+    static function touchEvents():array{global $rustic;return $rustic->query(["op"=>"input_touch_events"]);}
+    static function clicks(?string $entity=null):array{global $rustic;return $rustic->query(["op"=>"input_clicks","entity"=>$entity===null?null:Gameplay::entity($entity)]);}
+    static function onClick(string $entity,callable $fn){return Events::connect($entity,"Click",$fn);}
+    static function onTouchStart(callable $fn){return Events::on("TouchStart",$fn);}
+    static function onTouchMove(callable $fn){return Events::on("TouchMove",$fn);}
+    static function onTouchEnd(callable $fn){return Events::on("TouchEnd",$fn);}
+    static function onTouchCancel(callable $fn){return Events::on("TouchCancel",$fn);}
+}
 final class Physics{
     static function raycast(array $origin,array $direction,float $distance):?array{global $rustic;return $rustic->query(["op"=>"physics_raycast","origin"=>$origin,"direction"=>$direction,"distance"=>$distance]);}
     static function sphereCast(array $origin,array $direction,float $distance,float $radius):?array{global $rustic;return $rustic->query(["op"=>"physics_sphere_cast","origin"=>$origin,"direction"=>$direction,"distance"=>$distance,"radius"=>$radius]);}

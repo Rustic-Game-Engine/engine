@@ -351,6 +351,17 @@ inline auto once(const std::string&name,std::function<void(const RusticValue::Ar
 inline void emit(const std::string&name,RusticValue::Array arguments={},const std::string&source=""){rustic.gameplay(rustic_detail::object({{"command","emit"},{"signal",rustic_detail::object({{"name",name},{"source",source.empty()?RusticValue():RusticValue(Gameplay::entity(source))}})},{"arguments",std::move(arguments)}}));}
 inline void disconnect(Connection& c){c.disconnect();}
 }
+namespace Input{
+inline RusticValue touches(){return rustic.query(rustic_detail::object({{"op","input_touches"}}));}
+inline RusticValue touchEvents(){return rustic.query(rustic_detail::object({{"op","input_touch_events"}}));}
+inline RusticValue clicks(const std::string& entity=""){return rustic.query(rustic_detail::object({{"op","input_clicks"},{"entity",entity.empty()?RusticValue():RusticValue(Gameplay::entity(entity))}}));}
+inline auto onClick(const std::string& entity,std::function<void(const RusticValue::Array&)> fn){return Events::connect(entity,"Click",std::move(fn));}
+inline auto onTouchStart(std::function<void(const RusticValue::Array&)> fn){return Events::on("TouchStart",std::move(fn));}
+inline auto onTouchMove(std::function<void(const RusticValue::Array&)> fn){return Events::on("TouchMove",std::move(fn));}
+inline auto onTouchEnd(std::function<void(const RusticValue::Array&)> fn){return Events::on("TouchEnd",std::move(fn));}
+inline auto onTouchCancel(std::function<void(const RusticValue::Array&)> fn){return Events::on("TouchCancel",std::move(fn));}
+}
+
 namespace Animation{
 struct Options{double speed=1,blendIn=0,blendOut=0,weight=1;std::string easing="Linear";std::optional<std::string> blendInEase,blendOutEase,progressionEase;bool loop=false,additive=false;std::vector<std::string> mask;};
 struct Key{double time;RusticValue value;std::string easing="Linear";};struct Track{std::string target;std::vector<Key> keys;};struct Marker{double time;std::string name;};struct Clip{std::string name;double duration;std::vector<Track> tracks;std::vector<Marker> markers;};

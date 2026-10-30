@@ -185,6 +185,38 @@ impl SupervisedRuntime {
         Ok(())
     }
 
+    /// Sends ordered game-view pointer events.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime terminated or the IPC send fails.
+    pub fn send_pointer_input(
+        &mut self,
+        events: Vec<crate::pointer_input::PointerEvent>,
+    ) -> Result<(), SupervisorError> {
+        self.send_pointer_message(&ProtocolMessage::PointerInput(events))
+    }
+
+    /// Cancels captured pointers without generating clicks.
+    ///
+    /// # Errors
+    /// Returns an error if the runtime terminated or the IPC send fails.
+    pub fn reset_pointer_input(&mut self) -> Result<(), SupervisorError> {
+        self.send_pointer_message(&ProtocolMessage::ResetPointerInput)
+    }
+
+    fn send_pointer_message(&mut self, message: &ProtocolMessage) -> Result<(), SupervisorError> {
+        if self.terminal {
+            return Err(SupervisorError::AlreadyTerminated);
+        }
+        let request_id = self.next_request_id;
+        self.next_request_id = self.next_request_id.saturating_add(1);
+        self.connection
+            .as_mut()
+            .ok_or(SupervisorError::AlreadyTerminated)?
+            .send(request_id, message)?;
+        Ok(())
+    }
+
     /// Requests a physical pixel extent for embedded game rendering.
     ///
     /// # Errors

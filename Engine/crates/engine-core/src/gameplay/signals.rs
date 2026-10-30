@@ -33,6 +33,8 @@ pub struct Signal {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Delivery {
+    #[serde(skip)]
+    pub signal: Option<String>,
     pub owner: Owner,
     pub token: String,
     pub arguments: Vec<Payload>,
@@ -95,6 +97,10 @@ impl Signals {
         self.pending
             .retain(|d| d.owner != owner || d.token != token);
     }
+    /// Discards queued deliveries while retaining subscriptions.
+    pub fn discard_pending_signal(&mut self, name: &str) {
+        self.pending.retain(|d| d.signal.as_deref() != Some(name));
+    }
     /// # Errors
     /// Rejects invalid or oversized payloads and pending-delivery capacity exhaustion.
     #[allow(
@@ -130,6 +136,7 @@ impl Signals {
         }
         for (key, s) in targets {
             self.pending.push_back(Delivery {
+                signal: Some(signal.name.clone()),
                 owner: s.owner,
                 token: s.token,
                 arguments: arguments.clone(),

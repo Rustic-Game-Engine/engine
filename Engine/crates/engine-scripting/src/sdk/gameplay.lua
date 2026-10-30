@@ -206,6 +206,16 @@ Camera.transition=function(o,position,rotation,fov,duration,e)
     return start({kind='parallel',actions={tween(o,'Position',position,duration,e),tween(o,'Rotation',rotation,duration,e),tween(o,'Fov',fov,duration,e)}})
 end
 
+Input={}
+function Input.touches() return rustic.query({op='input_touches'}) end
+function Input.touchEvents() return rustic.query({op='input_touch_events'}) end
+function Input.clicks(object) return rustic.query({op='input_clicks',entity=object and entity(object)}) end
+function Input.onClick(object,fn) return Events.connect(object,'Click',fn) end
+function Input.onTouchStart(fn) return Events.on('TouchStart',fn) end
+function Input.onTouchMove(fn) return Events.on('TouchMove',fn) end
+function Input.onTouchEnd(fn) return Events.on('TouchEnd',fn) end
+function Input.onTouchCancel(fn) return Events.on('TouchCancel',fn) end
+
 Physics={}
 function Physics.raycast(origin,direction,distance,ignore) return rustic.query({op='physics_raycast',origin=origin,direction=direction,distance=distance,ignore=ignore or {}}) end
 function Physics.sphereCast(origin,direction,distance,radius,ignore) return rustic.query({op='physics_sphere_cast',origin=origin,direction=direction,distance=distance,radius=radius,ignore=ignore or {}}) end

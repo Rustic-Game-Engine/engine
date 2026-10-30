@@ -37,7 +37,7 @@ pub struct ProtocolVersion {
 }
 
 /// Protocol understood by this engine build.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 3, minor: 0 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 3, minor: 1 };
 
 /// Current values for the selected entity while the isolated runtime is active.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -214,6 +214,8 @@ pub enum ProtocolMessage {
     },
     Control(ControlRequest),
     InputKeys(Vec<String>),
+    PointerInput(Vec<crate::pointer_input::PointerEvent>),
+    ResetPointerInput,
     ResizeViewport([u32; 2]),
     QueryEntity(String),
     LiveEntity(Option<LiveEntityProperties>),
@@ -252,6 +254,8 @@ impl ProtocolMessage {
             Self::Ready { .. } => 3,
             Self::Control(_) => 4,
             Self::InputKeys(_) => 13,
+            Self::PointerInput(_) => 17,
+            Self::ResetPointerInput => 18,
             Self::ResizeViewport(_) => 16,
             Self::QueryEntity(_) => 14,
             Self::LiveEntity(_) => 15,
@@ -552,6 +556,37 @@ fn unix_millis() -> u64 {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    #[test]
+    fn pointer_input_round_trip_preserves_touch_identity_and_cancellation() {
+        use crate::pointer_input::{PointerDevice, PointerEvent, PointerPhase};
+        let event = PointerEvent {
+            id: "device:18446744073709551615".into(),
+            device: PointerDevice::Touch,
+            phase: PointerPhase::Cancel,
+            position: [-0.1, 1.2],
+            pressure: 0.0,
+            aspect: 16.0 / 9.0,
+        };
+        let message = ProtocolMessage::PointerInput(vec![event.clone()]);
+        let bytes = encode_frame(ProcessRole::Editor, PROTOCOL_VERSION, 42, 0, &message).unwrap();
+        let decoded = decode_frame(&mut Cursor::new(bytes)).unwrap();
+        assert!(
+            matches!(decoded.message, ProtocolMessage::PointerInput(events) if events == vec![event])
+        );
+        let bytes = encode_frame(
+            ProcessRole::Editor,
+            PROTOCOL_VERSION,
+            43,
+            0,
+            &ProtocolMessage::ResetPointerInput,
+        )
+        .unwrap();
+        assert!(matches!(
+            decode_frame(&mut Cursor::new(bytes)).unwrap().message,
+            ProtocolMessage::ResetPointerInput
+        ));
+    }
 
     #[test]
     fn authentication_token_round_trips_and_debug_is_redacted() {

@@ -332,6 +332,18 @@ impl RuntimeScripts {
         if !empty_selected && (!active_kept || selected.as_deref() != Some(&self.active.name)) {
             let empty = self.empty_runtime();
             let mut previous = std::mem::replace(&mut self.active, empty);
+            if let Ok(mut context) = previous.gameplay.lock() {
+                context.pointer_input = crate::pointer_input::PointerInput::default();
+                for name in [
+                    "Click",
+                    "TouchStart",
+                    "TouchMove",
+                    "TouchEnd",
+                    "TouchCancel",
+                ] {
+                    context.runtime.signals.discard_pending_signal(name);
+                }
+            }
             if active_kept {
                 self.inactive.insert(previous.name.clone(), previous);
             } else {
@@ -429,6 +441,16 @@ impl RuntimeScripts {
     }
     pub fn set_input_keys(&mut self, keys: Vec<String>) {
         self.active.set_input_keys(keys);
+    }
+    pub fn pointer_input(&mut self, events: Vec<crate::pointer_input::PointerEvent>) {
+        if let Ok(mut context) = self.active.gameplay.lock() {
+            context.pointer_input.enqueue(events);
+        }
+    }
+    pub fn reset_pointer_input(&mut self) {
+        if let Ok(mut context) = self.active.gameplay.lock() {
+            context.pointer_input.reset();
+        }
     }
     pub fn drain_logs(&self) -> Vec<(String, String)> {
         self.active.drain_logs()
