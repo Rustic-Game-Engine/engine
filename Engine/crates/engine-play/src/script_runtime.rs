@@ -2523,6 +2523,11 @@ run(['on_start'=>function(){global $rustic;Input::onClick($rustic->entity_id(),f
                 ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
             ) && !engine_scripting::probe_language_toolchain(language).available
             {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_API_ADAPTERS").is_none(),
+                    "{} toolchain required for input conformance",
+                    language.display_name()
+                );
                 eprintln!(
                     "SKIPPED pointer input {}: missing toolchain",
                     language.display_name()

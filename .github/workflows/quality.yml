@@ -178,6 +178,8 @@ jobs:
         env:
           RUSTIC_REQUIRE_ALL_ENTITY_ADAPTERS: '1'
         run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play entity_foundations -- --nocapture
+      - name: Touchscreen input and object clicks across all adapters
+        run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play pointer_input_bindings -- --nocapture
 
   installer:
     name: Windows installer
