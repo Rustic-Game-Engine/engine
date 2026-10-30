@@ -2381,6 +2381,101 @@ mod tests {
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
 
     #[test]
+    fn queued_clicks_recheck_can_touch_and_scripts_cannot_forge_input_events() {
+        use crate::pointer_input::{PointerDevice, PointerEvent, PointerPhase};
+        let mut scene = SceneWorld::new();
+        let camera = EntitySnapshot {
+            camera: Some(engine_world::Camera::default()),
+            ..EntitySnapshot::default()
+        };
+        let mut target = EntitySnapshot {
+            primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
+            ..EntitySnapshot::default()
+        };
+        target.local_transform.translation.z = 5.0;
+        let id = target.id;
+        scene
+            .apply_commands(&[
+                WorldCommand::Spawn(Box::new(camera)),
+                WorldCommand::Spawn(Box::new(target)),
+            ])
+            .unwrap();
+        let world = Arc::new(Mutex::new(scene));
+        let mut host = environment_host(&world);
+        host.gameplay_request(Request::Connect {
+            token: "click-test".into(),
+            signal: engine_core::gameplay::Signal {
+                name: "Click".into(),
+                source: Some(id),
+            },
+            once: false,
+        })
+        .unwrap();
+        let tap = || {
+            [PointerPhase::Start, PointerPhase::End]
+                .into_iter()
+                .map(|phase| PointerEvent {
+                    id: "finger".into(),
+                    device: PointerDevice::Touch,
+                    phase,
+                    position: [0.5, 0.5],
+                    pressure: 0.5,
+                    aspect: 16.0 / 9.0,
+                })
+                .collect()
+        };
+        {
+            let mut context = host.gameplay.lock().unwrap();
+            let GameplayContext {
+                pointer_input,
+                runtime,
+                ..
+            } = &mut *context;
+            pointer_input.enqueue(tap());
+            pointer_input.begin_frame(&mut world.lock().unwrap(), &mut runtime.signals);
+        }
+        assert_eq!(
+            host.gameplay_query(serde_json::json!({"op":"input_clicks"}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        {
+            let mut world = world.lock().unwrap();
+            let mut attrs = world.part_attributes(id).unwrap();
+            attrs.can_touch = false;
+            world
+                .apply_commands(&[WorldCommand::SetPartAttributes {
+                    entity: id,
+                    value: attrs,
+                }])
+                .unwrap();
+        }
+        assert!(host.gameplay_callbacks().is_empty());
+        assert_eq!(
+            host.gameplay_query(serde_json::json!({"op":"input_clicks"}))
+                .unwrap(),
+            serde_json::json!([])
+        );
+        assert!(
+            host.gameplay_request(Request::Emit {
+                signal: engine_core::gameplay::Signal {
+                    name: "Click".into(),
+                    source: Some(id)
+                },
+                arguments: Vec::new()
+            })
+            .is_err()
+        );
+        assert!(
+            host.gameplay_query(serde_json::json!({"op":"input_clicks","entity":"malformed"}))
+                .is_err()
+        );
+    }
+
+    #[test]
     #[allow(
         clippy::too_many_lines,
         reason = "Exercise the same input contract in every language adapter"

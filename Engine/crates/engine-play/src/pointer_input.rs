@@ -67,8 +67,8 @@ impl PointerInput {
     }
 
     pub fn reset(&mut self) {
-        self.pending.clear();
-        for mut event in self.active.values().cloned() {
+        self.pending.retain(|e| e.phase == PointerPhase::Cancel);
+        for mut event in std::mem::take(&mut self.active).into_values() {
             event.phase = PointerPhase::Cancel;
             self.pending.push_back(event);
         }
@@ -109,7 +109,7 @@ impl PointerInput {
                     *active = event.clone();
                 }
                 PointerPhase::End | PointerPhase::Cancel => {
-                    if self.active.remove(&key).is_none() {
+                    if self.active.remove(&key).is_none() && event.phase != PointerPhase::Cancel {
                         continue;
                     }
                     if let Some(target) = self.pressed.remove(&key)
@@ -339,6 +339,8 @@ mod tests {
         input.enqueue(vec![event("1", PointerPhase::Start)]);
         input.begin_frame(&mut world, &mut signals);
         input.reset();
+        assert!(input.touches().is_empty());
+        input.reset(); // Repeated focus/pause resets must preserve the cancellation.
         input.begin_frame(&mut world, &mut signals);
         assert!(input.touches().is_empty());
         assert_eq!(input.events[0].phase, PointerPhase::Cancel);
