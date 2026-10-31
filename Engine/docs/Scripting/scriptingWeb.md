@@ -153,7 +153,8 @@ starts with two colors. Change each color and its percentage position, set the
 angle, and use **Add color stop** or **Remove** to adjust the gradient (2–16 stops).
 Angles follow CSS: 0° goes up, 90° right, 180° down, and 270° left.
 
-**Text → Text color** offers the same solid and gradient controls. Select a text-only
+**Text → Text color** offers the same solid and gradient controls. Containers also
+keep font size and solid text color controls; children inherit these unless overridden. Select a text-only
 element, such as Text or a Button containing plain text. If an element has other
 editable children, select its text child to change text appearance. Background and
 text gradients can coexist. Gradients preview on the canvas and save as ordinary
@@ -179,7 +180,8 @@ The canvas is a native layout preview, not a browser. It supports inline pixel
 positions and sizes, hex colors, linear gradients with hex color stops, pixel corner
 radii, and flat selector rules from inline stylesheets
 and local linked CSS files in `ui/`. Stylesheet rules are applied in document order,
-then inline styles; full CSS specificity, `!important`, inheritance, flex/grid,
+then inline styles. Text color and font size inherit from parents unless overridden;
+full CSS specificity, `!important`, other CSS inheritance, flex/grid,
 percentage sizing, media queries, image rendering, DOM events and script execution
 are not supported by the preview. Image source and alt text can still be authored.
 Use positioned containers for nested layouts. This feature does not add browser UI

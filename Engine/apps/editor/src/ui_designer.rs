@@ -685,16 +685,22 @@ impl UiDesigner {
             });
             let target = appearance::text_target(node);
             let text_editable = node.children().all(|child| child.as_text().is_some() || appearance::is_text_wrapper(&child));
-            if text_editable && node.as_element().is_some_and(|e| e.name.local.as_ref() != "img") {
+            if node.as_element().is_some_and(|e| e.name.local.as_ref() != "img") {
                 egui::CollapsingHeader::new("Text").default_open(true).show(ui, |ui| {
                     let mut text = target.text_contents();
-                    if ui.text_edit_multiline(&mut text).changed() {
+                    if text_editable && ui.text_edit_multiline(&mut text).changed() {
                         for child in target.children().collect::<Vec<_>>() { child.detach(); }
                         target.append(NodeRef::new_text(text)); changed = true;
                     }
                     changed |= number_control(ui, node, computed, "font-size", "Font size", 16.0);
                     ui.label("Text color");
-                    changed |= appearance::text_controls(ui, node, computed);
+                    if text_editable {
+                        changed |= appearance::text_controls(ui, node, computed);
+                    } else {
+                        let mut color = css_color(&style(computed, "color")).unwrap_or(ui.visuals().text_color());
+                        if ui.color_edit_button_srgba(&mut color).changed() { set_style(node, "color", &css_hex(color)); changed = true; }
+                        ui.weak("Children inherit this color and size unless overridden. Select a text child for gradients.");
+                    }
                 });
             }
             egui::CollapsingHeader::new("Appearance").default_open(true).show(ui, |ui| {
@@ -790,7 +796,7 @@ fn number_control(
 fn preview_tree(document: &Document) -> NodeRef {
     let tree = parse(&document.source);
     let nodes: Vec<_> = tree
-        .select("body *")
+        .select("body, body *")
         .into_iter()
         .flatten()
         .map(|e| e.as_node().clone())
@@ -847,6 +853,18 @@ fn preview_tree(document: &Document) -> NodeRef {
         for declaration in declarations(&source) {
             if let Some((key, value)) = declaration.split_once(':') {
                 set_style(node, key.trim(), value);
+            }
+        }
+    }
+    for node in &nodes {
+        for key in ["color", "font-size"] {
+            if matches!(style(node, key).as_str(), "" | "inherit" | "unset")
+                && let Some(value) = node
+                    .ancestors()
+                    .map(|parent| style(&parent, key))
+                    .find(|value| !value.is_empty() && value != "inherit" && value != "unset")
+            {
+                set_style(node, key, &value);
             }
         }
     }
@@ -1380,5 +1398,29 @@ mod hierarchy_interaction_tests {
         assert_eq!(document.undo.len(), 1);
         document.undo();
         assert_eq!(document.source, source);
+    }
+}
+
+#[cfg(test)]
+mod inherited_text_tests {
+    use super::*;
+    #[test]
+    fn nested_text_inherits_container_color_and_font_without_baking_source_styles() {
+        let source = "<body style='color:#123456;font-size:24px'><div><span>Inherit</span><span style='color:#ffffff;font-size:12px'>Override</span></div></body>";
+        let document = Document {
+            root: PathBuf::default(),
+            relative: PathBuf::default(),
+            saved: source.into(),
+            source: source.into(),
+            undo: vec![],
+            redo: vec![],
+        };
+        let preview = preview_tree(&document);
+        let nodes = elements(&preview);
+        assert_eq!(style(&nodes[1], "color"), "#123456");
+        assert_eq!(style(&nodes[1], "font-size"), "24px");
+        assert_eq!(style(&nodes[2], "color"), "#ffffff");
+        assert_eq!(style(&nodes[2], "font-size"), "12px");
+        assert!(style(&elements(&parse(&document.source))[1], "font-size").is_empty());
     }
 }
