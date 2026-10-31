@@ -3,6 +3,7 @@ mod play_session;
 mod scene_graph;
 mod script_links;
 mod transform_widget;
+mod ui_designer;
 mod ui_theme;
 mod viewport_keyboard;
 
@@ -157,6 +158,7 @@ struct EditorApp {
     gizmo_drag: Option<GizmoDrag>,
     gizmo_widget: transform_widget::TransformWidget,
     scene_graph: scene_graph::SceneGraph,
+    ui_designer: ui_designer::UiDesigner,
     render_world: RenderWorldBuffer,
     model_assets: BTreeMap<AssetId, ModelArtifact>,
     detach_inspector: bool,
@@ -266,6 +268,7 @@ impl EditorApp {
             gizmo_drag: None,
             gizmo_widget: transform_widget::TransformWidget::default(),
             scene_graph: scene_graph::SceneGraph::default(),
+            ui_designer: ui_designer::UiDesigner::default(),
             render_world: RenderWorldBuffer::new(),
             model_assets,
             detach_inspector: false,
@@ -695,6 +698,28 @@ impl EditorApp {
                     });
                 }
             }
+            Some(ProjectFileAction::EditUi(path)) => {
+                let result = self.ui_designer.open(self.document.project().root(), &path);
+                match result {
+                    Ok(()) => {
+                        for tab in [EditorTab::UiDesigner, EditorTab::Inspector] {
+                            let pane = self.dock.tiles.iter().find_map(|(id, tile)| {
+                                matches!(tile, egui_tiles::Tile::Pane(pane) if *pane == tab)
+                                    .then_some(*id)
+                            });
+                            if let Some(id) = pane {
+                                self.dock.set_visible(id, true);
+                                self.dock.make_active(|tile_id, _| tile_id == id);
+                            }
+                            self.workspace.hidden_tabs.retain(|pane| *pane != tab);
+                            if !self.workspace.tabs.contains(&tab) {
+                                self.workspace.tabs.push(tab);
+                            }
+                        }
+                    }
+                    Err(error) => self.log(Severity::Error, "ui.designer", error),
+                }
+            }
             Some(ProjectFileAction::Attach(path, scope)) => {
                 self.attach_project_script(&path, scope);
             }
@@ -844,7 +869,7 @@ impl EditorApp {
         if self.pending_runtime_changes.is_some() {
             return;
         }
-        let mut ready = !self.document.is_modified();
+        let mut ready = !self.document.is_modified() && !self.ui_designer.dirty();
         let mut cancel = false;
         if !ready {
             egui::Window::new("Save before updating?")
@@ -853,12 +878,12 @@ impl EditorApp {
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ui, |ui| {
                     ui.label(
-                        "This scene has unsaved changes. Save it before installing the update.",
+                        "Save the scene and any UI document (Save UI in Visual UI) before installing the update.",
                     );
                     ui.horizontal(|ui| {
                         if ui.button("Save and update").clicked() {
                             self.save();
-                            ready = !self.document.is_modified();
+                            ready = !self.document.is_modified() && !self.ui_designer.dirty();
                         }
                         if ui.button("Cancel").clicked() {
                             cancel = true;
@@ -1527,6 +1552,8 @@ fn transform_mode_button(
 
 impl eframe::App for EditorApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.ui_designer.finish_gesture(ui.ctx());
+        self.ui_designer.guard_close(ui);
         let scene_was_modified = self.document.is_modified();
         // Finish even if release happens outside the viewport or another tab is active.
         if !ui.input(|input| input.pointer.primary_down())
@@ -1588,6 +1615,7 @@ impl eframe::App for EditorApp {
             gizmo_drag: &mut self.gizmo_drag,
             gizmo_widget: &mut self.gizmo_widget,
             scene_graph: &mut self.scene_graph,
+            ui_designer: &mut self.ui_designer,
             model_assets: &mut self.model_assets,
             project_file_action: &mut project_file_action,
         };
@@ -1628,6 +1656,7 @@ struct EditorViewer<'a> {
     gizmo_drag: &'a mut Option<GizmoDrag>,
     gizmo_widget: &'a mut transform_widget::TransformWidget,
     scene_graph: &'a mut scene_graph::SceneGraph,
+    ui_designer: &'a mut ui_designer::UiDesigner,
     model_assets: &'a mut BTreeMap<AssetId, ModelArtifact>,
     project_file_action: &'a mut Option<ProjectFileAction>,
 }
@@ -1665,6 +1694,9 @@ impl Behavior<EditorTab> for EditorViewer<'_> {
         match pane {
             EditorTab::Viewport3d => self.viewport(ui, false),
             EditorTab::Viewport2d => self.viewport(ui, true),
+            EditorTab::UiDesigner => self
+                .ui_designer
+                .canvas(ui, !self.playing && !self.document.is_read_only()),
             EditorTab::Hierarchy => {
                 self.project_header(ui);
                 self.scene_tree(ui);
@@ -2482,6 +2514,9 @@ impl EditorViewer<'_> {
         let can_edit = !self.document.is_read_only() && !self.playing;
         match action {
             Some(ProjectFileAction::Open(path)) => self.open_project_script(&path),
+            Some(action @ ProjectFileAction::EditUi(_)) if can_edit => {
+                *self.project_file_action = Some(action);
+            }
             Some(action @ ProjectFileAction::Attach(_, _)) if can_edit => {
                 *self.project_file_action = Some(action);
             }
@@ -2608,6 +2643,13 @@ impl EditorViewer<'_> {
     }
 
     fn inspector(&mut self, ui: &mut egui::Ui) {
+        if self.ui_designer.properties_active {
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                self.ui_designer
+                    .properties(ui, !self.playing && !self.document.is_read_only());
+            });
+            return;
+        }
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
             .show(ui, |ui| {
@@ -3183,6 +3225,7 @@ fn default_dock(workspace: &EditorWorkspace) -> Tree<EditorTab> {
         EditorTab::Viewport3d,
         EditorTab::Viewport2d,
         EditorTab::SceneGraph,
+        EditorTab::UiDesigner,
     ]
     .into_iter()
     .map(|tab| tiles.insert_pane(tab))
@@ -3226,6 +3269,7 @@ fn panel_visibility_menu(
         EditorTab::Viewport3d,
         EditorTab::Viewport2d,
         EditorTab::SceneGraph,
+        EditorTab::UiDesigner,
         EditorTab::Hierarchy,
         EditorTab::ContentBrowser,
         EditorTab::Inspector,
@@ -4142,6 +4186,7 @@ enum ProjectFileAction {
     SetStartScene(PathBuf),
     Refresh,
     Open(PathBuf),
+    EditUi(PathBuf),
     Attach(PathBuf, ScriptScope),
     Rename(PathBuf, String),
     Copy(Vec<PathBuf>),
@@ -4712,6 +4757,15 @@ fn project_entry_menu(
         }
         if !directory && ui.button("Open").clicked() {
             action = Some(ProjectFileAction::Open(path.to_path_buf()));
+            ui.close();
+        }
+        if !directory
+            && ui_designer::supported(path)
+            && ui
+                .add_enabled(can_edit, egui::Button::new("Edit UI Visually"))
+                .clicked()
+        {
+            action = Some(ProjectFileAction::EditUi(path.to_path_buf()));
             ui.close();
         }
         if !directory && ScriptLanguage::from_path(path).is_some() {
@@ -5544,6 +5598,7 @@ mod explorer_tests {
             gizmo_drag: &mut None,
             gizmo_widget: &mut transform_widget::TransformWidget::default(),
             scene_graph: &mut scene_graph::SceneGraph::default(),
+            ui_designer: &mut ui_designer::UiDesigner::default(),
             model_assets: &mut BTreeMap::new(),
             project_file_action: &mut action,
         };
@@ -5874,6 +5929,7 @@ mod explorer_tests {
                 gizmo_drag: &mut None,
                 gizmo_widget: &mut transform_widget::TransformWidget::default(),
                 scene_graph: &mut scene_graph::SceneGraph::default(),
+                ui_designer: &mut ui_designer::UiDesigner::default(),
                 model_assets: &mut BTreeMap::new(),
                 project_file_action: &mut action,
             };
@@ -6613,6 +6669,49 @@ mod explorer_tests {
             _ => {}
         }
     }
+    #[test]
+    fn web_asset_context_menu_dispatches_visual_editor_action() {
+        for path in ["ui/hud.html", "ui/hud.css"] {
+            let context = egui::Context::default();
+            let frame = |events| {
+                let mut action = None;
+                let mut rect = egui::Rect::NOTHING;
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        let response = ui.selectable_label(false, path);
+                        rect = response.rect;
+                        action = project_entry_menu(&response, Path::new(path), false, true, false);
+                    },
+                );
+                output.textures_delta.clear();
+                (output, rect, action)
+            };
+            let (_, rect, _) = frame(vec![]);
+            let position = rect.center();
+            frame(vec![
+                egui::Event::PointerMoved(position),
+                pointer(position, egui::PointerButton::Secondary, true),
+            ]);
+            frame(vec![pointer(
+                position,
+                egui::PointerButton::Secondary,
+                false,
+            )]);
+            let (output, _, _) = frame(vec![]);
+            let target = text_position(&output, "Edit UI Visually");
+            frame(vec![egui::Event::PointerMoved(target)]);
+            frame(vec![pointer(target, egui::PointerButton::Primary, true)]);
+            let (_, _, action) = frame(vec![pointer(target, egui::PointerButton::Primary, false)]);
+            assert!(
+                matches!(action, Some(ProjectFileAction::EditUi(selected)) if selected == Path::new(path))
+            );
+        }
+    }
+
     #[test]
     fn secondary_click_opens_file_actions_and_script_scopes() {
         let context = egui::Context::default();

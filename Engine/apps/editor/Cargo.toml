@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+kuchikiki = "0.8.9-speedreader"
 egui_tiles.workspace = true
 egui-snarl.workspace = true
 transform-gizmo-egui.workspace = true
@@ -26,6 +27,9 @@ rfd.workspace = true
 image.workspace = true
 glam.workspace = true
 num-traits.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [build-dependencies]
 embed-resource = "3.0.11"
