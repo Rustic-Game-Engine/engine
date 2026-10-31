@@ -60,6 +60,16 @@ static class Rustic {
         public static double remap(double value,double a,double b,double c,double d)=>Query(new{op="remap",value,in_min=a,in_max=b,out_min=c,out_max=d}).GetDouble();
         public static (double value,double velocity) smoothDamp(double current,double target,double velocity,double smoothTime,double delta){var r=Query(new{op="smooth_damp",current,target,velocity,smooth_time=smoothTime,delta});return(r.GetProperty("value").GetDouble(),r.GetProperty("velocity").GetDouble());}
     }
+    public static class Input{
+        public static JsonElement touches()=>Query(new{op="input_touches"});
+        public static JsonElement touchEvents()=>Query(new{op="input_touch_events"});
+        public static JsonElement clicks(string? entity=null)=>Query(new{op="input_clicks",entity=entity is null?null:Gameplay.Entity(entity)});
+        public static Events.Connection onClick(string entity,Action<object[]> fn)=>Events.connect(entity,"Click",fn);
+        public static Events.Connection onTouchStart(Action<object[]> fn)=>Events.on("TouchStart",fn);
+        public static Events.Connection onTouchMove(Action<object[]> fn)=>Events.on("TouchMove",fn);
+        public static Events.Connection onTouchEnd(Action<object[]> fn)=>Events.on("TouchEnd",fn);
+        public static Events.Connection onTouchCancel(Action<object[]> fn)=>Events.on("TouchCancel",fn);
+    }
     public static class Physics{
         public sealed record Hit(string entity,double[] point,double[] normal,double distance);
         public static Hit? raycast(double[] origin,double[] direction,double distance)=>JsonSerializer.Deserialize<Hit>(Query(new{op="physics_raycast",origin,direction,distance}).GetRawText());

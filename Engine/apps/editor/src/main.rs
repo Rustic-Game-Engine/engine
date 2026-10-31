@@ -1,5 +1,6 @@
 mod explorer_selection;
 mod play_session;
+mod pointer_input;
 mod scene_graph;
 mod script_links;
 mod transform_widget;
@@ -1952,6 +1953,12 @@ impl EditorViewer<'_> {
     }
 
     fn play_viewport_input(&mut self, ui: &egui::Ui, response: &egui::Response) {
+        if let Some(play) = self.play.as_mut()
+            && let Err(error) = play.pointer_input(ui, response.rect)
+        {
+            self.console
+                .push(simple_console(Severity::Error, "runtime.input", error));
+        }
         if response.hovered() && ui.input(|input| input.pointer.any_pressed()) {
             response.request_focus();
         }

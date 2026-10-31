@@ -74,6 +74,17 @@ class Rustic {
         static double[] smoothDamp(double c,double t,double v,double s,double dt){var r=(Map<?,?>)query(args("smooth_damp","current",c,"target",t,"velocity",v,"smooth_time",s,"delta",dt));return new double[]{((Number)r.get("value")).doubleValue(),((Number)r.get("velocity")).doubleValue()};}
     }
     static class Interpolation extends Smooth {}
+    static class Input{
+        static Object touches(){return query(args("input_touches"));}
+        static Object touchEvents(){return query(args("input_touch_events"));}
+        static Object clicks(){return query(args("input_clicks"));}
+        static Object clicks(String entity){return query(args("input_clicks","entity",Gameplay.entity(entity)));}
+        static Events.Connection onClick(String entity,java.util.function.Consumer<Object[]> fn){return Events.connect(entity,"Click",fn);}
+        static Events.Connection onTouchStart(java.util.function.Consumer<Object[]> fn){return Events.on("TouchStart",fn);}
+        static Events.Connection onTouchMove(java.util.function.Consumer<Object[]> fn){return Events.on("TouchMove",fn);}
+        static Events.Connection onTouchEnd(java.util.function.Consumer<Object[]> fn){return Events.on("TouchEnd",fn);}
+        static Events.Connection onTouchCancel(java.util.function.Consumer<Object[]> fn){return Events.on("TouchCancel",fn);}
+    }
     static class Physics{
         static Object raycast(double[] origin,double[] direction,double distance){return query(args("physics_raycast","origin",origin,"direction",direction,"distance",distance));}
         static Object sphereCast(double[] origin,double[] direction,double distance,double radius){return query(args("physics_sphere_cast","origin",origin,"direction",direction,"distance",distance,"radius",radius));}

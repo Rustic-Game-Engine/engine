@@ -270,6 +270,24 @@ class Smooth:
     def smoothDamp(current,target,velocity,smoothTime,delta): return rustic.query(dict(op="smooth_damp",current=current,target=target,velocity=velocity,smooth_time=smoothTime,delta=delta))
 Interpolation=Smooth
 
+class Input:
+    @staticmethod
+    def touches(): return rustic.query(dict(op="input_touches"))
+    @staticmethod
+    def touchEvents(): return rustic.query(dict(op="input_touch_events"))
+    @staticmethod
+    def clicks(obj=None): return rustic.query(dict(op="input_clicks",entity=None if obj is None else _entity(obj)))
+    @staticmethod
+    def onClick(obj,fn): return Events.connect(obj,"Click",fn)
+    @staticmethod
+    def onTouchStart(fn): return Events.on("TouchStart",fn)
+    @staticmethod
+    def onTouchMove(fn): return Events.on("TouchMove",fn)
+    @staticmethod
+    def onTouchEnd(fn): return Events.on("TouchEnd",fn)
+    @staticmethod
+    def onTouchCancel(fn): return Events.on("TouchCancel",fn)
+
 class Physics:
     @staticmethod
     def raycast(origin,direction,distance,ignore=None): return rustic.query(dict(op="physics_raycast",origin=origin,direction=direction,distance=distance,ignore=ignore or []))

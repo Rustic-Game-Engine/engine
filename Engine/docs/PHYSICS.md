@@ -29,7 +29,7 @@ Rectangle2D or Circle2D above it. Gravity still acts along world Y.
 | `Anchored = false` | The primitive falls, including when collision is disabled. Unanchoring starts with zero velocity after an anchored tick. |
 | `CanCollide = true` | Solid response occurs only when both primitives have this flag enabled. Anchored primitives can be floors or walls. |
 | `CanCollide = false` | The object passes through other objects; it still falls if unanchored. |
-| `CanTouch` | Stored for future touch events; it does not change solid response and this simulator emits no touch or collision callbacks. |
+| `CanTouch` | Required for object clicks and touchscreen taps; it does not change solid response or enable collision callbacks. See [Touchscreen input and object clicks](/docs/api/touch-input). |
 | `Size` | Local transform scale, multiplied by primitive dimensions for collision bounds. |
 
 These flags are read every fixed tick, after all `FixedUpdate` script callbacks.

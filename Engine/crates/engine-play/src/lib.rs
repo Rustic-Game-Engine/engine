@@ -9,6 +9,7 @@ mod entity_services;
 pub mod frame_ring;
 pub mod local_ipc;
 mod physics;
+pub mod pointer_input;
 pub mod protocol;
 pub mod runtime_server;
 mod script_runtime;

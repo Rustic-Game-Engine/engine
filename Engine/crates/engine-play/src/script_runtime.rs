@@ -219,6 +219,7 @@ impl RuntimeBehavior {
 }
 
 struct GameplayContext {
+    pointer_input: crate::pointer_input::PointerInput,
     scene: engine_core::SceneId,
     runtime: GameplayRuntime,
     physics: crate::physics::PhysicsWorld,
@@ -233,6 +234,7 @@ struct GameplayContext {
 impl Default for GameplayContext {
     fn default() -> Self {
         Self {
+            pointer_input: crate::pointer_input::PointerInput::default(),
             scene: engine_core::SceneId::new(),
             runtime: GameplayRuntime::default(),
             physics: crate::physics::PhysicsWorld::default(),
@@ -523,6 +525,14 @@ impl SceneRuntime {
     pub fn frame_update(&mut self, delta: f64) {
         if let Ok(mut context) = self.gameplay.lock() {
             context.frame_delta = delta;
+        }
+        if let (Ok(mut context), Ok(mut world)) = (self.gameplay.lock(), self.world.lock()) {
+            let GameplayContext {
+                pointer_input,
+                runtime,
+                ..
+            } = &mut *context;
+            pointer_input.begin_frame(&mut world, &mut runtime.signals);
         }
         // Tick once for the scene, independent of how many behaviors are attached.
         if let (Ok(mut gameplay), Ok(mut world)) = (self.gameplay.lock(), self.world.lock()) {
@@ -1057,6 +1067,43 @@ impl GameplayHost for RuntimeHost {
             .get("op")
             .and_then(serde_json::Value::as_str)
             .ok_or("query operation is missing")?;
+        if op.starts_with("input_") {
+            let context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
+            return match op {
+                "input_touches" => serde_json::to_value(context.pointer_input.touches()),
+                "input_touch_events" => serde_json::to_value(
+                    context
+                        .pointer_input
+                        .events
+                        .iter()
+                        .filter(|e| e.device == crate::pointer_input::PointerDevice::Touch)
+                        .collect::<Vec<_>>(),
+                ),
+                "input_clicks" => {
+                    let entity = query
+                        .get("entity")
+                        .filter(|v| !v.is_null())
+                        .map(|v| serde_json::from_value::<EntityId>(v.clone()))
+                        .transpose()
+                        .map_err(|e| e.to_string())?;
+                    let world = self.world.lock().map_err(|_| "world lock poisoned")?;
+                    serde_json::to_value(
+                        context
+                            .pointer_input
+                            .clicks
+                            .iter()
+                            .filter(|c| {
+                                entity.is_none_or(|id| id == c.entity)
+                                    && world.contains(c.entity)
+                                    && world.part_attributes(c.entity).is_ok_and(|p| p.can_touch)
+                            })
+                            .collect::<Vec<_>>(),
+                    )
+                }
+                _ => return Err("unknown input query".into()),
+            }
+            .map_err(|e| e.to_string());
+        }
         if matches!(
             op,
             "scene_load"
@@ -1651,6 +1698,14 @@ impl GameplayHost for RuntimeHost {
         }
     }
     fn gameplay_request(&mut self, mut request: Request) -> Result<(), String> {
+        if let Request::Emit { signal, .. } = &request
+            && matches!(
+                signal.name.as_str(),
+                "Click" | "TouchStart" | "TouchMove" | "TouchEnd" | "TouchCancel"
+            )
+        {
+            return Err("input event names are reserved for the engine".into());
+        }
         let mut context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
         let owner = Owner {
             entity_bound: self.entity_bound,
@@ -1705,7 +1760,20 @@ impl GameplayHost for RuntimeHost {
                     entity: self.entity,
                     script: self.owner_script,
                 };
-                context.runtime.drain_callbacks(owner)
+                let deliveries = context.runtime.drain_callbacks(owner);
+                let Ok(world) = self.world.lock() else {
+                    return Vec::new();
+                };
+                deliveries
+                    .into_iter()
+                    .filter(|d| {
+                        d.signal.as_deref() != Some("Click")
+                            || d.source.is_some_and(|id| {
+                                world.contains(id)
+                                    && world.part_attributes(id).is_ok_and(|p| p.can_touch)
+                            })
+                    })
+                    .collect()
             },
         )
     }
@@ -2311,6 +2379,225 @@ mod tests {
         save_manifest_atomic,
     };
     use engine_world::{EntitySnapshot, SceneDocument, ScriptComponent};
+
+    #[test]
+    fn queued_clicks_recheck_can_touch_and_scripts_cannot_forge_input_events() {
+        use crate::pointer_input::{PointerDevice, PointerEvent, PointerPhase};
+        let mut scene = SceneWorld::new();
+        let camera = EntitySnapshot {
+            camera: Some(engine_world::Camera::default()),
+            ..EntitySnapshot::default()
+        };
+        let mut target = EntitySnapshot {
+            primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
+            ..EntitySnapshot::default()
+        };
+        target.local_transform.translation.z = 5.0;
+        let id = target.id;
+        scene
+            .apply_commands(&[
+                WorldCommand::Spawn(Box::new(camera)),
+                WorldCommand::Spawn(Box::new(target)),
+            ])
+            .unwrap();
+        let world = Arc::new(Mutex::new(scene));
+        let mut host = environment_host(&world);
+        host.gameplay_request(Request::Connect {
+            token: "click-test".into(),
+            signal: engine_core::gameplay::Signal {
+                name: "Click".into(),
+                source: Some(id),
+            },
+            once: false,
+        })
+        .unwrap();
+        let tap = || {
+            [PointerPhase::Start, PointerPhase::End]
+                .into_iter()
+                .map(|phase| PointerEvent {
+                    id: "finger".into(),
+                    device: PointerDevice::Touch,
+                    phase,
+                    position: [0.5, 0.5],
+                    pressure: 0.5,
+                    aspect: 16.0 / 9.0,
+                })
+                .collect()
+        };
+        {
+            let mut context = host.gameplay.lock().unwrap();
+            let GameplayContext {
+                pointer_input,
+                runtime,
+                ..
+            } = &mut *context;
+            pointer_input.enqueue(tap());
+            pointer_input.begin_frame(&mut world.lock().unwrap(), &mut runtime.signals);
+        }
+        assert_eq!(
+            host.gameplay_query(serde_json::json!({"op":"input_clicks"}))
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        {
+            let mut world = world.lock().unwrap();
+            let mut attrs = world.part_attributes(id).unwrap();
+            attrs.can_touch = false;
+            world
+                .apply_commands(&[WorldCommand::SetPartAttributes {
+                    entity: id,
+                    value: attrs,
+                }])
+                .unwrap();
+        }
+        assert!(host.gameplay_callbacks().is_empty());
+        assert_eq!(
+            host.gameplay_query(serde_json::json!({"op":"input_clicks"}))
+                .unwrap(),
+            serde_json::json!([])
+        );
+        assert!(
+            host.gameplay_request(Request::Emit {
+                signal: engine_core::gameplay::Signal {
+                    name: "Click".into(),
+                    source: Some(id)
+                },
+                arguments: Vec::new()
+            })
+            .is_err()
+        );
+        assert!(
+            host.gameplay_query(serde_json::json!({"op":"input_clicks","entity":"malformed"}))
+                .is_err()
+        );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "Exercise the same input contract in every language adapter"
+    )]
+    fn pointer_input_bindings_deliver_clicks_and_touch_queries_in_available_adapters() {
+        use crate::pointer_input::{PointerDevice, PointerEvent, PointerPhase};
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54,"input.lua",br"return {Start=function()
+                Input.onClick(rustic.entity_id(),function(id,pos,device,pressure) assert(id=='finger' and pos[1]==0.5 and device=='touch');rustic.log('info','clicked') end)
+                Input.onTouchStart(function() rustic.log('info','touch start') end)
+            end,Update=function() assert(#Input.touches()==0 and #Input.touchEvents()==2 and #Input.clicks(rustic.entity_id())==1) end}"),
+            (ScriptLanguage::Luau,"input.luau",br"return {Start=function()
+                Input.onClick(rustic.entity_id(),function() rustic.log('info','clicked') end)
+                Input.onTouchStart(function() rustic.log('info','touch start') end)
+            end,Update=function() assert(#Input.touches()==0 and #Input.touchEvents()==2 and #Input.clicks(rustic.entity_id())==1) end}"),
+            (ScriptLanguage::JavaScript,"input.js",br"globalThis.behavior={Start(){Input.onClick(rustic.entity_id(),(id,pos,device)=>{if(id!=='finger'||pos[0]!==0.5||device!=='touch')throw Error('payload');rustic.log('info','clicked');});Input.onTouchStart(()=>rustic.log('info','touch start'));},Update(){if(Input.touches().length!==0||Input.touchEvents().length!==2||Input.clicks(rustic.entity_id()).length!==1)throw Error('input snapshot');}};"),
+            (ScriptLanguage::Web,"input.html",br"<!doctype html><html><head><title>Input</title></head><body><script>globalThis.behavior={Start(){Input.onClick(rustic.entity_id(),()=>rustic.log('info','clicked'));Input.onTouchStart(()=>rustic.log('info','touch start'));},Update(){if(Input.touchEvents().length!==2||Input.clicks().length!==1)throw Error('input snapshot');}};</script></body></html>"),
+            (ScriptLanguage::Python,"input.py",br"from rustic import rustic,Input,run
+def on_start():
+    Input.onClick(rustic.entity_id(),lambda *args: rustic.log('info','clicked'))
+    Input.onTouchStart(lambda *args: rustic.log('info','touch start'))
+def update(dt):
+    assert len(Input.touches())==0 and len(Input.touchEvents())==2 and len(Input.clicks(rustic.entity_id()))==1
+run(globals())"),
+            (ScriptLanguage::C,"input.c",br#"#include "rustic.h"
+void clicked(const RusticValue *args,size_t n){if(n!=4||strcmp(args[0].string,"finger")||args[1].vector[0]!=0.5)r_fail("payload");rustic.log("info","clicked");}
+void touch(const RusticValue *args,size_t n){(void)args;(void)n;rustic.log("info","touch start");}
+void start(void){Input.onClick(rustic.entity_id(),clicked);Input.onTouchStart(touch);}
+void update(double dt){(void)dt;RusticPointerEvents events=Input.touchEvents();RusticObjectClicks clicks=Input.clicks(NULL);if(Input.touches().count!=0||events.count!=2||clicks.count!=1||strcmp(events.items[0].id,"finger")||strcmp(clicks.items[0].pointer.device,"touch"))r_fail("input snapshot");}
+int main(void){return rustic_run((RusticBehavior){.on_start=start,.update=update});}"#),
+            (ScriptLanguage::Cpp,"input.cpp",br#"#include "rustic.hpp"
+void start(){Input::onClick(rustic.entity_id(),[](const RusticValue::Array&){rustic.log("info","clicked");});Input::onTouchStart([](const RusticValue::Array&){rustic.log("info","touch start");});}
+void update(double){if(Input::touches().array().size()!=0||Input::touchEvents().array().size()!=2||Input::clicks().array().size()!=1)throw std::runtime_error("input snapshot");}
+int main(){return rustic_run(RusticBehavior{.on_start=start,.update=update});}"#),
+            (ScriptLanguage::CSharp,"input.cs",br#"using static Rustic;
+Run((callback,dt)=>{if(callback=="on_start"){Input.onClick(rustic.entity_id(),a=>rustic.log("info","clicked"));Input.onTouchStart(a=>rustic.log("info","touch start"));}if(callback=="update"&&(Input.touches().GetArrayLength()!=0||Input.touchEvents().GetArrayLength()!=2||Input.clicks().GetArrayLength()!=1))throw new System.Exception("input snapshot");});"#),
+            (ScriptLanguage::Java,"RusticBehavior.java",br#"class RusticBehavior extends Rustic{public static void main(String[]args)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){Input.onClick(rustic.entity_id(),a->rustic.log("info","clicked"));Input.onTouchStart(a->rustic.log("info","touch start"));}if(callback.equals("update")&&(((java.util.List<?>)Input.touches()).size()!=0||((java.util.List<?>)Input.touchEvents()).size()!=2||((java.util.List<?>)Input.clicks()).size()!=1))throw new RuntimeException("input snapshot");});}}"#),
+            (ScriptLanguage::Php,"input.php",br"<?php
+require_once __DIR__.'/rustic.php';
+rustic_run(['on_start'=>function(){global $rustic;Input::onClick($rustic->entity_id(),fn(...$args)=>$rustic->log('info','clicked'));Input::onTouchStart(fn(...$args)=>$rustic->log('info','touch start'));},'update'=>function($dt){if(count(Input::touches())!==0||count(Input::touchEvents())!==2||count(Input::clicks())!==1)throw new Exception('input snapshot');}]);"),
+        ];
+        for &(language, name, source) in fixtures {
+            if !matches!(
+                language,
+                ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
+            ) && !engine_scripting::probe_language_toolchain(language).available
+            {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_API_ADAPTERS").is_none(),
+                    "{} toolchain required for input conformance",
+                    language.display_name()
+                );
+                eprintln!(
+                    "SKIPPED pointer input {}: missing toolchain",
+                    language.display_name()
+                );
+                continue;
+            }
+            let mut scene = SceneWorld::new();
+            let camera = EntitySnapshot {
+                camera: Some(engine_world::Camera::default()),
+                ..EntitySnapshot::default()
+            };
+            let mut target = EntitySnapshot {
+                primitive: Some(engine_world::Primitive::Cube { size: 2.0 }),
+                ..EntitySnapshot::default()
+            };
+            target.local_transform.translation.z = 5.0;
+            let id = target.id;
+            scene
+                .apply_commands(&[
+                    WorldCommand::Spawn(Box::new(camera)),
+                    WorldCommand::Spawn(Box::new(target)),
+                ])
+                .unwrap();
+            let world = Arc::new(Mutex::new(scene));
+            let mut host = environment_host(&world);
+            host.entity = id;
+            host.entity_bound = true;
+            let gameplay = Arc::clone(&host.gameplay);
+            let logs = Arc::clone(&host.logs);
+            let mut behavior =
+                RuntimeBehavior::load(language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap();
+            behavior.on_start().unwrap();
+            let events = [PointerPhase::Start, PointerPhase::End]
+                .into_iter()
+                .map(|phase| PointerEvent {
+                    id: "finger".into(),
+                    device: PointerDevice::Touch,
+                    phase,
+                    position: [0.5, 0.5],
+                    pressure: 0.7,
+                    aspect: 16.0 / 9.0,
+                })
+                .collect();
+            {
+                let mut context = gameplay.lock().unwrap();
+                let GameplayContext {
+                    pointer_input,
+                    runtime,
+                    ..
+                } = &mut *context;
+                pointer_input.enqueue(events);
+                pointer_input.begin_frame(&mut world.lock().unwrap(), &mut runtime.signals);
+            }
+            behavior
+                .update(1.0 / 60.0)
+                .unwrap_or_else(|e| panic!("{}: {e}", language.display_name()));
+            let logs = logs.lock().unwrap();
+            assert!(
+                logs.iter().any(|(_, m)| m == "clicked"),
+                "{}: {logs:?}",
+                language.display_name()
+            );
+            assert!(
+                logs.iter().any(|(_, m)| m == "touch start"),
+                "{}",
+                language.display_name()
+            );
+        }
+    }
 
     #[test]
     fn scene_lifecycle_works_in_every_available_language() {
