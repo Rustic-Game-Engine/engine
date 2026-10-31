@@ -85,13 +85,15 @@ pub(super) fn reparent(
 }
 
 pub(super) fn tree(ui: &mut egui::Ui, nodes: &[NodeRef], selected: &mut Option<usize>) {
-    fn row(ui: &mut egui::Ui, nodes: &[NodeRef], index: usize, selected: &mut Option<usize>) {
-        let children: Vec<_> = super::paint_order(nodes)
-            .into_iter()
-            .filter(|i| nodes[*i].parent().as_ref() == Some(&nodes[index]))
-            .collect();
+    fn row(
+        ui: &mut egui::Ui,
+        nodes: &[NodeRef],
+        children: &[Vec<usize>],
+        index: usize,
+        selected: &mut Option<usize>,
+    ) {
         let title = name(&nodes[index]);
-        if children.is_empty() {
+        if children[index].is_empty() {
             if ui
                 .selectable_label(*selected == Some(index), title)
                 .on_hover_text(label(&nodes[index]))
@@ -114,19 +116,26 @@ pub(super) fn tree(ui: &mut egui::Ui, nodes: &[NodeRef], selected: &mut Option<u
                 }
             })
             .body(|ui| {
-                for child in children {
-                    row(ui, nodes, child, selected);
+                for &child in &children[index] {
+                    row(ui, nodes, children, child, selected);
                 }
             });
         }
     }
+    let mut children = vec![Vec::new(); nodes.len()];
+    let mut roots = Vec::new();
     for index in super::paint_order(nodes) {
-        if !nodes[index]
-            .ancestors()
-            .any(|parent| nodes.contains(&parent))
+        if let Some(parent) = nodes[index]
+            .parent()
+            .and_then(|parent| nodes.iter().position(|node| *node == parent))
         {
-            row(ui, nodes, index, selected);
+            children[parent].push(index);
+        } else {
+            roots.push(index);
         }
+    }
+    for index in roots {
+        row(ui, nodes, &children, index, selected);
     }
 }
 

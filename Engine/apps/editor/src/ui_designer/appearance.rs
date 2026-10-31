@@ -278,13 +278,18 @@ pub(super) fn paint_text(
         .or(gradient);
     if let Some(gradient) = gradient {
         let mut galley = clipped.layout_no_wrap(text, font, egui::Color32::WHITE);
+        let gradient_bounds = if text_gradient.is_some() {
+            galley.rect.translate(position.to_vec2())
+        } else {
+            bounds
+        };
         for row in &mut Arc::make_mut(&mut galley).rows {
             let offset = row.pos.to_vec2() + position.to_vec2();
             let mut mesh = row.row.visuals.mesh.clone();
             for vertex in &mut mesh.vertices {
                 vertex.pos += offset;
             }
-            let mut mesh = gradient_mesh(&mesh, &gradient, bounds);
+            let mut mesh = gradient_mesh(&mesh, &gradient, gradient_bounds);
             for vertex in &mut mesh.vertices {
                 vertex.pos -= offset;
             }
@@ -623,6 +628,16 @@ mod tests {
                 egui::epaint::Primitive::Callback(_) => false,
             }
         }));
+        assert!(
+            primitives.iter().any(|p| match &p.primitive {
+                egui::epaint::Primitive::Mesh(mesh) => mesh
+                    .vertices
+                    .iter()
+                    .any(|v| v.color.b() > 200 && v.color.r() < 120),
+                egui::epaint::Primitive::Callback(_) => false,
+            }),
+            "text gradient must reach its final color within the text bounds"
+        );
     }
     #[test]
     fn shorthand_and_separate_corner_radii_survive_serialization() {
