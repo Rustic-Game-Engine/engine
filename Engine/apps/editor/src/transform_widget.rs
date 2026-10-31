@@ -3,7 +3,7 @@ use engine_editor::{EditorCamera, GizmoOperation, GizmoSettings, GizmoSpace};
 use engine_world::{EntityId, LocalTransform};
 use glam::{Mat4, Quat, Vec3};
 use transform_gizmo_egui::{
-    Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation,
+    Gizmo, GizmoConfig, GizmoExt, GizmoMode, GizmoOrientation, GizmoResult,
     math::{DMat4, DQuat, DVec3, Transform},
 };
 
@@ -31,7 +31,7 @@ impl TransformWidget {
 
     pub fn interact(
         &mut self,
-        ui: &egui::Ui,
+        ui: &mut egui::Ui,
         rect: egui::Rect,
         camera: EditorCamera,
         target: Target,
@@ -83,7 +83,7 @@ impl TransformWidget {
             DQuat::from_array(rotation.to_array().map(f64::from)),
             DVec3::from_array(translation.to_array().map(f64::from)),
         );
-        let (_, transforms) = self.gizmo.interact(ui, &[target])?;
+        let (_, transforms) = interact_in_viewport(ui, rect, &mut self.gizmo, &[target])?;
         let after = transforms.first()?;
         let translation = Vec3::from_array(DVec3::from(after.translation).as_vec3().to_array());
         let result_world = if settings.operation == GizmoOperation::Translate {
@@ -101,6 +101,26 @@ impl TransformWidget {
         };
         local_from_world(parent, result_world)
     }
+}
+
+/// Keep the upstream cursor-sized interaction widget inside its canvas. Its
+/// default parent UI can also contain toolbars, whose hover would otherwise be
+/// stolen on later frames. Always update the gizmo so active drags can finish
+/// outside the canvas.
+pub fn interact_in_viewport(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    gizmo: &mut Gizmo,
+    targets: &[Transform],
+) -> Option<(GizmoResult, Vec<Transform>)> {
+    let clip = rect.intersect(ui.clip_rect());
+    let mut canvas = ui.new_child(
+        egui::UiBuilder::new()
+            .id(ui.id().with("transform-gizmo-canvas"))
+            .max_rect(rect),
+    );
+    canvas.set_clip_rect(clip);
+    gizmo.interact(&canvas, targets)
 }
 
 fn local_from_world(parent: Mat4, world: Mat4) -> Option<LocalTransform> {
@@ -181,8 +201,114 @@ mod tests {
         assert!(after.translation.x > 0.0);
         assert!(after.translation.y.abs() < 0.001);
         assert!(after.translation.z.abs() < 0.001);
+        let outside = egui::pos2(850.0, 300.0);
+        let beyond = frame(&mut widget, vec![egui::Event::PointerMoved(outside)])
+            .expect("active drag continues outside the canvas");
+        assert!(beyond.translation.x > after.translation.x);
+        frame(
+            &mut widget,
+            vec![egui::Event::PointerButton {
+                pos: outside,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(!widget.is_focused());
         widget.reset();
         assert!(!widget.is_focused());
+    }
+
+    #[test]
+    fn selected_gizmo_does_not_steal_toolbar_hover_between_frames() {
+        for dark in [true, false] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            let mut widget = TransformWidget::default();
+            let entity = EntityId::new();
+            let labels = [
+                "Move",
+                "Scale",
+                "Save UI",
+                "Undo UI",
+                "Redo UI",
+                "Scene properties",
+                "Discard changes",
+            ];
+            let mut frame = |events| {
+                let mut hovered = Vec::new();
+                let mut rects = Vec::new();
+                let mut clicked = Vec::new();
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(800.0, 600.0),
+                        )),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            for label in labels {
+                                let button = ui.button(label);
+                                hovered.push(button.hovered());
+                                rects.push(button.rect);
+                                clicked.push(button.clicked());
+                            }
+                        });
+                        let (canvas, _) = ui.allocate_exact_size(
+                            ui.available_size(),
+                            egui::Sense::click_and_drag(),
+                        );
+                        let _ = widget.interact(
+                            ui,
+                            canvas,
+                            EditorCamera::default(),
+                            Target {
+                                entity,
+                                world: Mat4::IDENTITY,
+                                parent: Mat4::IDENTITY,
+                            },
+                            GizmoSettings::default(),
+                        );
+                    },
+                );
+                output.textures_delta.clear();
+                (rects, hovered, clicked)
+            };
+            let (rects, _, _) = frame(vec![]);
+            for (index, rect) in rects.iter().enumerate() {
+                frame(vec![egui::Event::PointerMoved(rect.center())]);
+                frame(vec![]);
+                let hovered: Vec<_> = (0..12).map(|_| frame(vec![]).1[index]).collect();
+                assert!(
+                    hovered.iter().all(|hovered| *hovered),
+                    "{} stationary hover flickered: {hovered:?}",
+                    labels[index]
+                );
+                let click = |pressed| egui::Event::PointerButton {
+                    pos: rect.center(),
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                assert!(!frame(vec![click(true)]).2[index]);
+                for _ in 0..3 {
+                    assert!(!frame(vec![]).2[index]);
+                }
+                assert!(
+                    frame(vec![click(false)]).2[index],
+                    "{} lost its click to the gizmo",
+                    labels[index]
+                );
+                assert!(!frame(vec![]).2[index]);
+            }
+        }
     }
 
     #[test]

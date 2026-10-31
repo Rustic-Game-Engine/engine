@@ -167,6 +167,10 @@ four corners with one value. Uncheck it to edit **Top left**, **Top right**,
 the current top-left value for all four. Each radius supports 0–255 pixels and
 previews with both solid and gradient backgrounds.
 
+Move/scale handles receive pointer input inside the canvas. Toolbar buttons keep
+their normal hover and click behavior while an element is selected. A drag started
+on a handle can continue beyond the canvas and ends when you release the pointer.
+
 **Undo UI** and **Redo UI** affect the UI document independently of scene history.
 A transform drag is one undo step. **Save UI** writes the HTML, retaining the previous
 file as `.bak`; scene Save and scene autosave do not save UI changes. HTML formatting

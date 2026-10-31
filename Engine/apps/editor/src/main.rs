@@ -2105,7 +2105,7 @@ impl EditorViewer<'_> {
         self.request_preview = true;
     }
 
-    fn gizmo_overlay(&mut self, ui: &egui::Ui, rect: egui::Rect) {
+    fn gizmo_overlay(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
         if self.document.is_read_only() {
             self.gizmo_widget.reset();
             return;
