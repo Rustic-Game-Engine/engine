@@ -5,7 +5,7 @@ use kuchikiki::{NodeRef, traits::TendrilSink};
 use num_traits::ToPrimitive as _;
 use std::path::{Path, PathBuf};
 use transform_gizmo_egui::{
-    Gizmo, GizmoConfig, GizmoExt, GizmoMode,
+    Gizmo, GizmoConfig, GizmoMode,
     math::{DMat4, DQuat, DVec3, Transform},
 };
 
@@ -554,7 +554,8 @@ impl UiDesigner {
             DQuat::IDENTITY,
             DVec3::new(x + width / 2.0, -y - height / 2.0, 0.0),
         );
-        if let Some((_, transforms)) = self.gizmo.interact(ui, &[target])
+        if let Some((_, transforms)) =
+            crate::transform_widget::interact_in_viewport(ui, rect, &mut self.gizmo, &[target])
             && let Some(after) = transforms.first()
         {
             self.gesture_before
@@ -1317,6 +1318,68 @@ mod gesture_tests {
             frame(&context, &mut designer, vec![button(start, false)], false);
             assert!(!designer.dirty());
         }
+    }
+    #[test]
+    fn selected_ui_element_does_not_block_scale_or_held_save_button_clicks() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("ui")).unwrap();
+        let original = "<div>Original</div>";
+        let edited = "<div style='left:100px;top:100px;width:200px;height:100px'>Edited</div>";
+        let path = temp.path().join("ui/hud.html");
+        std::fs::write(&path, original).unwrap();
+        let mut designer = UiDesigner::default();
+        designer
+            .open(temp.path(), Path::new("ui/hud.html"))
+            .unwrap();
+        designer.document.as_mut().unwrap().change(edited.into());
+        designer.selected = Some(0);
+        let context = egui::Context::default();
+        let position = |output: egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + egui::vec2(10.0, 5.0))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("Missing toolbar control: {label}"))
+        };
+        frame(&context, &mut designer, vec![], true);
+        let scale = position(frame(&context, &mut designer, vec![], true), "Scale");
+        frame(
+            &context,
+            &mut designer,
+            vec![egui::Event::PointerMoved(scale)],
+            true,
+        );
+        for _ in 0..4 {
+            frame(&context, &mut designer, vec![], true);
+        }
+        frame(&context, &mut designer, vec![button(scale, true)], true);
+        frame(&context, &mut designer, vec![], true);
+        frame(&context, &mut designer, vec![button(scale, false)], true);
+        assert!(designer.scale_tool);
+        let save = position(frame(&context, &mut designer, vec![], true), "Save UI");
+        frame(
+            &context,
+            &mut designer,
+            vec![egui::Event::PointerMoved(save)],
+            true,
+        );
+        for _ in 0..4 {
+            frame(&context, &mut designer, vec![], true);
+        }
+        frame(&context, &mut designer, vec![button(save, true)], true);
+        for _ in 0..4 {
+            frame(&context, &mut designer, vec![], true);
+        }
+        assert!(designer.dirty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        frame(&context, &mut designer, vec![button(save, false)], true);
+        assert!(!designer.dirty());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), edited);
     }
 }
 
