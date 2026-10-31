@@ -9,6 +9,9 @@ use transform_gizmo_egui::{
     math::{DMat4, DQuat, DVec3, Transform},
 };
 
+mod appearance;
+mod hierarchy;
+
 const LIMIT: usize = 1024 * 1024;
 
 pub fn supported(path: &Path) -> bool {
@@ -56,6 +59,7 @@ fn elements(document: &NodeRef) -> Vec<NodeRef> {
         .select("body *")
         .into_iter()
         .flatten()
+        .filter(|node| !appearance::is_text_wrapper(node.as_node()))
         .filter(|node| {
             !matches!(
                 node.name.local.as_ref(),
@@ -230,6 +234,7 @@ pub struct UiDesigner {
     selected: Option<usize>,
     gizmo: Gizmo,
     scale_tool: bool,
+    separate_corners: bool,
     gesture_before: Option<String>,
     pub properties_active: bool,
     error: Option<String>,
@@ -459,12 +464,17 @@ impl UiDesigner {
                 origin + egui::vec2(pixels(x), pixels(y)) * zoom,
                 egui::vec2(pixels(width), pixels(height)) * zoom,
             );
-            let fill = css_color(&style(node, "background-color"))
-                .unwrap_or(ui.visuals().widgets.inactive.bg_fill);
-            painter.rect_filled(bounds, 0.0, fill);
+            let radius = appearance::corner_radius(node, zoom);
+            appearance::paint_background(
+                &painter,
+                bounds,
+                node,
+                radius,
+                ui.visuals().widgets.inactive.bg_fill,
+            );
             painter.rect_stroke(
                 bounds,
-                0.0,
+                radius,
                 if self.selected == Some(index) {
                     ui.visuals().selection.stroke
                 } else {
@@ -472,19 +482,27 @@ impl UiDesigner {
                 },
                 egui::StrokeKind::Inside,
             );
-            let text = if node.children().all(|child| child.as_text().is_some()) {
-                node.text_contents()
-            } else {
-                label(node)
-            };
-            painter.with_clip_rect(bounds.intersect(rect)).text(
-                bounds.left_top() + egui::vec2(4.0, 4.0),
-                egui::Align2::LEFT_TOP,
+            let text = node
+                .children()
+                .filter_map(|child| {
+                    if let Some(text) = child.as_text() {
+                        Some(text.borrow().to_string())
+                    } else if appearance::is_text_wrapper(&child) {
+                        Some(child.text_contents())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<String>();
+            appearance::paint_text(
+                &painter,
+                bounds,
+                node,
                 text,
                 egui::FontId::proportional(
                     (pixels(number(node, "font-size", 16.0)) * zoom).max(6.0),
                 ),
-                css_color(&style(node, "color")).unwrap_or(ui.visuals().text_color()),
+                ui.visuals().text_color(),
             );
             if response.clicked()
                 && !self.gizmo.is_focused()
@@ -578,7 +596,7 @@ impl UiDesigner {
 
     #[allow(
         clippy::too_many_lines,
-        reason = "property widgets and their authoring transaction share the selected HTML node"
+        reason = "selected element authoring transaction groups hierarchy and property sections"
     )]
     pub fn properties(&mut self, ui: &mut egui::Ui, editable: bool) {
         ui.heading("UI Properties");
@@ -595,88 +613,132 @@ impl UiDesigner {
         let preview_nodes = elements(&preview);
         let mut changed = false;
         ui.add_enabled_ui(editable, |ui| {
+            ui.weak("Select an element on the canvas or in the tree below.");
+            let mut add = None;
+            ui.menu_button("Add element", |ui| {
+                ui.weak("Adds inside the selection when it can contain this element.");
+                for (tag, title) in [("div", "Panel"), ("span", "Text"), ("button", "Button"), ("img", "Image")] {
+                    if ui.button(title).clicked() { add = Some((tag, false)); ui.close(); }
+                }
+                ui.menu_button("Add at page level", |ui| {
+                    for (tag, title) in [("div", "Panel"), ("span", "Text"), ("button", "Button"), ("img", "Image")] {
+                        if ui.button(title).clicked() { add = Some((tag, true)); ui.close(); }
+                    }
+                });
+            });
+            egui::CollapsingHeader::new("Elements and layers").default_open(true).show(ui, |ui| {
+                let before = self.selected;
+                hierarchy::tree(ui, &preview_nodes, &mut self.selected);
+                if self.selected != before { self.gizmo = Gizmo::default(); }
+            });
+            if let Some((tag, page)) = add {
+                let text = match tag { "span" => "Text", "button" => "Button", _ => "" };
+                let fragment = parse(&format!("<body><{tag} style=\"position:absolute;left:20px;top:20px;width:160px;height:48px\">{text}</{tag}>"));
+                if let (Ok(body), Some(node)) = (parsed.select_first("body"), elements(&fragment).first()) {
+                    let target = self.selected.filter(|i| !page && *i < nodes.len() && hierarchy::accepts(&nodes[*i], node));
+                    if let Some(index) = target {
+                        nodes[index].append(node.clone());
+                        if matches!(style(&preview_nodes[index], "position").as_str(), "" | "static") { set_style(&nodes[index], "position", "relative"); }
+                    } else { body.as_node().append(node.clone()); }
+                    self.selected = elements(&parsed).iter().position(|candidate| candidate == node);
+                    self.gizmo = Gizmo::default(); changed = true;
+                }
+                return;
+            }
+            let Some(index) = self.selected.filter(|i| *i < nodes.len()) else {
+                ui.label("Start with Add element → Panel. Add text or buttons inside it."); return;
+            };
+            let node = &nodes[index];
+            let computed = &preview_nodes[index];
+            ui.separator();
+            ui.heading(hierarchy::name(node));
             ui.horizontal(|ui| {
-                for tag in ["div", "button", "span", "img"] {
-                    if ui.button(format!("Add {tag}")).clicked() {
-                        let fragment = parse(&format!("<body><{tag} style=\"position: absolute; left: 20px; top: 20px; width: 160px; height: 48px\">{}</{tag}>", if tag == "img" { "" } else { "New element" }));
-                        if let (Ok(body), Some(node)) = (parsed.select_first("body"), elements(&fragment).first()) {
-                            body.as_node().append(node.clone());
-                            self.selected = Some(nodes.len()); changed = true;
+                ui.label("Name");
+                let element = node.as_element().expect("element selection");
+                let mut value = element.attributes.borrow().get("id").unwrap_or_default().to_owned();
+                if ui.add(egui::TextEdit::singleline(&mut value).hint_text("Optional HTML id")).changed() {
+                    element.attributes.borrow_mut().insert("id", value); changed = true;
+                }
+            });
+            let original_parent = nodes.iter().position(|candidate| node.parent().as_ref() == Some(candidate));
+            let mut parent = original_parent;
+            ui.label("Parent");
+            egui::ComboBox::from_id_salt("ui-element-parent").selected_text(parent.map_or_else(|| "Page (root)".to_owned(), |i| format!("Parent: {} ({})", hierarchy::name(&nodes[i]), i + 1))).show_ui(ui, |ui| {
+                ui.selectable_value(&mut parent, None, "Page (root)");
+                for (candidate, target) in nodes.iter().enumerate() {
+                    if hierarchy::can_reparent(node, target) { ui.selectable_value(&mut parent, Some(candidate), format!("{} ({})", hierarchy::name(target), candidate + 1)); }
+                }
+            });
+            if parent != original_parent {
+                match hierarchy::reparent(&parsed, &nodes, &preview_nodes, index, parent) {
+                    Ok(index) => { self.selected = Some(index); self.gizmo = Gizmo::default(); changed = true; }
+                    Err(error) => self.error = Some(error),
+                }
+                return;
+            }
+            egui::CollapsingHeader::new("Layout").default_open(true).show(ui, |ui| {
+                let positions = layout(&preview_nodes);
+                let offset = parent_offset(&preview_nodes, index, &positions);
+                for (key, title, default) in [("left", "X position", positions[index][0] - offset.0), ("top", "Y position", positions[index][1] - offset.1), ("width", "Width", 160.0), ("height", "Height", 48.0)] {
+                    changed |= number_control(ui, node, computed, key, title, default);
+                }
+            });
+            let target = appearance::text_target(node);
+            let text_editable = node.children().all(|child| child.as_text().is_some() || appearance::is_text_wrapper(&child));
+            if node.as_element().is_some_and(|e| e.name.local.as_ref() != "img") {
+                egui::CollapsingHeader::new("Text").default_open(true).show(ui, |ui| {
+                    let mut text = target.text_contents();
+                    if text_editable && ui.text_edit_multiline(&mut text).changed() {
+                        for child in target.children().collect::<Vec<_>>() { child.detach(); }
+                        target.append(NodeRef::new_text(text)); changed = true;
+                    }
+                    changed |= number_control(ui, node, computed, "font-size", "Font size", 16.0);
+                    ui.label("Text color");
+                    if text_editable {
+                        changed |= appearance::text_controls(ui, node, computed);
+                    } else {
+                        let mut color = css_color(&style(computed, "color")).unwrap_or(ui.visuals().text_color());
+                        if ui.color_edit_button_srgba(&mut color).changed() { set_style(node, "color", &css_hex(color)); changed = true; }
+                        ui.weak("Children inherit this color and size unless overridden. Select a text child for gradients.");
+                    }
+                });
+            }
+            egui::CollapsingHeader::new("Appearance").default_open(true).show(ui, |ui| {
+                ui.label("Background");
+                changed |= appearance::fill_controls(ui, node, computed, false);
+                ui.separator(); ui.label("Corner radius");
+                changed |= appearance::radius_controls(ui, node, computed, &mut self.separate_corners);
+                let mut hidden = style(computed, "display") == "none";
+                if ui.checkbox(&mut hidden, "Hidden").changed() { set_style(node, "display", if hidden { "none" } else { "block" }); changed = true; }
+            });
+            egui::CollapsingHeader::new("Layer order").show(ui, |ui| {
+                changed |= number_control(ui, node, computed, "z-index", "Order", 0.0);
+                ui.horizontal(|ui| {
+                    for (caption, direction) in [("Send to back", -1.0), ("Bring to front", 1.0)] {
+                        if ui.button(caption).clicked() {
+                            let edge = preview_nodes.iter().filter(|other| other.parent() == computed.parent()).map(|other| number(other, "z-index", 0.0)).fold(number(computed, "z-index", 0.0), |a,b| if direction > 0.0 { a.max(b) } else { a.min(b) });
+                            set_style(node, "position", "absolute"); set_style(node, "z-index", &format!("{:.0}", edge + direction)); changed = true;
                         }
                     }
-                }
+                });
             });
-            ui.collapsing("Layers (back to front within each parent)", |ui| {
-                for index in paint_order(&preview_nodes) {
-                    let node = &nodes[index];
-                    let depth = node.ancestors().count().saturating_sub(3);
-                    if ui.selectable_label(self.selected == Some(index), format!("{}{} · z {}", "  ".repeat(depth), label(node), style(&preview_nodes[index], "z-index"))).clicked() {
-                        self.selected = Some(index); self.gizmo = Gizmo::default();
-                    }
-                }
-            });
-            let Some(index) = self.selected.filter(|i| *i < nodes.len()) else { ui.label("Select an element on the canvas or in Layers."); return; };
-            let node = &nodes[index];
-            ui.label(label(node));
-            let element = node.as_element().expect("element list contains only elements");
-            for key in ["id", "class", "src", "alt"] {
-                if matches!(key, "src" | "alt") && element.name.local.as_ref() != "img" { continue; }
-                let mut value = element.attributes.borrow().get(key).unwrap_or_default().to_owned();
-                ui.horizontal(|ui| {
-                    ui.label(key);
-                    if ui.text_edit_singleline(&mut value).changed() { element.attributes.borrow_mut().insert(key, value); changed = true; }
-                });
-            }
-            if node.children().all(|child| child.as_text().is_some()) && element.name.local.as_ref() != "img" {
-                let mut text = node.text_contents();
-                ui.label("Text");
-                if ui.text_edit_multiline(&mut text).changed() {
-                    for child in node.children().collect::<Vec<_>>() { child.detach(); }
-                    node.append(NodeRef::new_text(text)); changed = true;
-                }
-            }
-            for key in ["left", "top", "width", "height", "z-index", "font-size"] {
-                let mut value = number(&preview_nodes[index], key, match key { "width" => 160.0, "height" => 48.0, "font-size" => 16.0, _ => 0.0 });
-                ui.horizontal(|ui| {
-                    ui.label(key);
-                    if ui.add(egui::DragValue::new(&mut value).speed(1.0).clamp_existing_to_range(false).range(if matches!(key, "width" | "height" | "font-size") { 1.0..=100_000.0 } else { -100_000.0..=100_000.0 })).changed() {
-                        set_style(node, key, &if key == "z-index" { format!("{value:.0}") } else { format!("{value}px") });
-                        if matches!(key, "left" | "top" | "z-index") { set_style(node, "position", "absolute"); }
-                        changed = true;
-                    }
-                });
-            }
-            for key in ["background-color", "color"] {
-                let mut value = css_color(&style(&preview_nodes[index], key)).unwrap_or(egui::Color32::TRANSPARENT);
-                ui.horizontal(|ui| {
-                    ui.label(key);
-                    if ui.color_edit_button_srgba(&mut value).changed() {
-                        set_style(node, key, &css_hex(value)); changed = true;
-                    }
-                });
-            }
-            let mut hidden = style(&preview_nodes[index], "display") == "none";
-            if ui.checkbox(&mut hidden, "Hidden").changed() { set_style(node, "display", if hidden { "none" } else { "block" }); changed = true; }
-            ui.horizontal(|ui| {
-                for (caption, direction) in [("Send to back", -1.0), ("Bring to front", 1.0)] {
-                    if ui.button(caption).clicked() {
-                        let siblings: Vec<_> = preview_nodes.iter().filter(|other| other.parent() == preview_nodes[index].parent()).collect();
-                        let edge = siblings.iter().map(|other| number(other, "z-index", 0.0)).fold(number(&preview_nodes[index], "z-index", 0.0), |a,b| if direction > 0.0 { a.max(b) } else { a.min(b) });
-                        set_style(node, "position", "absolute"); set_style(node, "z-index", &format!("{:.0}", edge + direction)); changed = true;
-                    }
+            egui::CollapsingHeader::new("HTML attributes").show(ui, |ui| {
+                let element = node.as_element().expect("element selection");
+                for key in ["id", "class", "src", "alt"] {
+                    if matches!(key, "src" | "alt") && element.name.local.as_ref() != "img" { continue; }
+                    let mut value = element.attributes.borrow().get(key).unwrap_or_default().to_owned();
+                    ui.horizontal(|ui| { ui.label(key); if ui.text_edit_singleline(&mut value).changed() { element.attributes.borrow_mut().insert(key, value); changed = true; } });
                 }
             });
             ui.horizontal(|ui| {
                 if ui.button("Duplicate").clicked() {
                     let fragment = parse(&format!("<body>{node}</body>"));
                     if let Some(copy) = elements(&fragment).first() {
-                        for node in copy.inclusive_descendants() {
-                            if let Some(e) = node.as_element() { e.attributes.borrow_mut().remove("id"); }
-                        }
+                        for node in copy.inclusive_descendants() { if let Some(e) = node.as_element() { e.attributes.borrow_mut().remove("id"); } }
                         node.insert_after(copy.clone()); changed = true; self.selected = None;
                     }
                 }
-                if ui.button("Delete element").clicked() { node.detach(); self.selected = None; changed = true; }
+                if ui.button("Delete").on_hover_text("Deletes this element and all its children").clicked() { node.detach(); self.selected = None; changed = true; }
             });
         });
         if changed {
@@ -685,11 +747,60 @@ impl UiDesigner {
     }
 }
 
+fn number_control(
+    ui: &mut egui::Ui,
+    node: &NodeRef,
+    preview: &NodeRef,
+    key: &str,
+    title: &str,
+    default: f64,
+) -> bool {
+    let mut value = number(preview, key, default);
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(title);
+        let min = if matches!(key, "width" | "height" | "font-size") {
+            1.0
+        } else {
+            -100_000.0
+        };
+        if ui
+            .add(
+                egui::DragValue::new(&mut value)
+                    .clamp_existing_to_range(false)
+                    .range(min..=100_000.0)
+                    .suffix(if key == "z-index" { "" } else { " px" }),
+            )
+            .changed()
+        {
+            set_style(
+                node,
+                key,
+                &if key == "z-index" {
+                    format!("{value:.0}")
+                } else {
+                    format!("{value}px")
+                },
+            );
+            if matches!(key, "left" | "top" | "z-index") {
+                set_style(node, "position", "absolute");
+            }
+            changed = true;
+        }
+    });
+    changed
+}
+
 // Supported flat stylesheet rules are a layout aid, not a browser CSS engine.
 // Inline declarations take precedence; the source tree is never modified here.
 fn preview_tree(document: &Document) -> NodeRef {
     let tree = parse(&document.source);
-    let nodes = elements(&tree);
+    let nodes: Vec<_> = tree
+        .select("body, body *")
+        .into_iter()
+        .flatten()
+        .map(|e| e.as_node().clone())
+        .collect();
     let inline: Vec<_> = nodes
         .iter()
         .map(|node| {
@@ -742,6 +853,18 @@ fn preview_tree(document: &Document) -> NodeRef {
         for declaration in declarations(&source) {
             if let Some((key, value)) = declaration.split_once(':') {
                 set_style(node, key.trim(), value);
+            }
+        }
+    }
+    for node in &nodes {
+        for key in ["color", "font-size"] {
+            if matches!(style(node, key).as_str(), "" | "inherit" | "unset")
+                && let Some(value) = node
+                    .ancestors()
+                    .map(|parent| style(&parent, key))
+                    .find(|value| !value.is_empty() && value != "inherit" && value != "unset")
+            {
+                set_style(node, key, &value);
             }
         }
     }
@@ -853,7 +976,15 @@ fn layout(nodes: &[NodeRef]) -> Vec<[f64; 4]> {
                 + number(
                     node,
                     "top",
-                    f64::from(u32::try_from(index).unwrap_or(u32::MAX)) * 36.0,
+                    f64::from(
+                        u32::try_from(
+                            nodes[..index]
+                                .iter()
+                                .filter(|other| other.parent() == node.parent())
+                                .count(),
+                        )
+                        .unwrap_or(u32::MAX),
+                    ) * 36.0,
                 ),
             number(node, "width", 160.0).max(1.0),
             number(node, "height", 48.0).max(1.0),
@@ -1057,8 +1188,10 @@ mod persistence_tests {
                     .unwrap();
                 designer.selected = Some(0);
                 let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-                    designer.canvas(ui, editable);
-                    designer.properties(ui, editable);
+                    ui.columns(2, |columns| {
+                        designer.properties(&mut columns[0], editable);
+                        designer.canvas(&mut columns[1], editable);
+                    });
                 });
                 output.textures_delta.clear();
                 assert!(!designer.dirty());
@@ -1184,5 +1317,110 @@ mod gesture_tests {
             frame(&context, &mut designer, vec![button(start, false)], false);
             assert!(!designer.dirty());
         }
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_interaction_tests {
+    use super::*;
+    #[test]
+    fn adding_panels_inside_the_selected_container_uses_the_real_menu_and_undo() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir(temp.path().join("ui")).unwrap();
+        let source = "<div id='parent' style='left:10px;top:20px'></div>";
+        std::fs::write(temp.path().join("ui/hud.html"), source).unwrap();
+        let mut designer = UiDesigner::default();
+        designer
+            .open(temp.path(), Path::new("ui/hud.html"))
+            .unwrap();
+        designer.selected = Some(0);
+        let context = egui::Context::default();
+        let mut frame = |events| {
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 1200.0),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| designer.properties(ui, true),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let position = |output: &egui::FullOutput, label: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == label => {
+                        Some(text.pos + egui::vec2(10.0, 5.0))
+                    }
+                    _ => None,
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Missing native control: {label}: {:?}",
+                        output
+                            .shapes
+                            .iter()
+                            .filter_map(|shape| match &shape.shape {
+                                egui::epaint::Shape::Text(text) =>
+                                    Some(text.galley.job.text.clone()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    )
+                })
+        };
+        let click = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(vec![]);
+        let start = position(&frame(vec![]), "Add element");
+        frame(vec![egui::Event::PointerMoved(start), click(start, true)]);
+        let output = frame(vec![click(start, false)]);
+        let output = if output.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text == "Panel")) { output } else { frame(vec![]) };
+        let target = position(&output, "Panel");
+        frame(vec![egui::Event::PointerMoved(target), click(target, true)]);
+        frame(vec![click(target, false)]);
+        let document = designer.document.as_mut().unwrap();
+        assert!(
+            parse(&document.source)
+                .select_first("#parent > div")
+                .is_ok()
+        );
+        assert_eq!(document.undo.len(), 1);
+        document.undo();
+        assert_eq!(document.source, source);
+    }
+}
+
+#[cfg(test)]
+mod inherited_text_tests {
+    use super::*;
+    #[test]
+    fn nested_text_inherits_container_color_and_font_without_baking_source_styles() {
+        let source = "<body style='color:#123456;font-size:24px'><div><span>Inherit</span><span style='color:#ffffff;font-size:12px'>Override</span></div></body>";
+        let document = Document {
+            root: PathBuf::default(),
+            relative: PathBuf::default(),
+            saved: source.into(),
+            source: source.into(),
+            undo: vec![],
+            redo: vec![],
+        };
+        let preview = preview_tree(&document);
+        let nodes = elements(&preview);
+        assert_eq!(style(&nodes[1], "color"), "#123456");
+        assert_eq!(style(&nodes[1], "font-size"), "24px");
+        assert_eq!(style(&nodes[2], "color"), "#ffffff");
+        assert_eq!(style(&nodes[2], "font-size"), "12px");
+        assert!(style(&elements(&parse(&document.source))[1], "font-size").is_empty());
     }
 }
