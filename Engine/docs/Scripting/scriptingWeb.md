@@ -124,13 +124,48 @@ Start with a file such as `ui/hud.html`:
 </body></html>
 ```
 
-Select an element on the canvas or in **Layers**. Use **Move** or **Scale** with
-the transform handles, or edit pixel position, size, font size, text, ID, class,
-image source/alt text, colors, visibility, and z-index in Properties. Layers retain
-HTML nesting; move and scale use the parent's canvas position. New elements are
-added to the body; duplicate and delete operate on the selected subtree. The layer
-buttons move the element beyond the lowest/highest sibling z-index. **Scene
-properties** returns Properties to scene editing.
+### Build and organize elements
+
+1. Choose **Add element → Panel** to create a container (`div`). Give it a **Name**
+   to find it easily; this is saved as its HTML ID.
+2. Keep the panel selected and use **Add element → Text**, **Button**, or **Image**
+   to add children inside it. Panels can contain other panels at any depth. Use
+   **Add at page level** to create an element outside the selection.
+3. Select elements in the **Elements and layers** tree. The arrow expands children;
+   clicking the name selects the element without collapsing it.
+4. Use the **Parent** menu to move the selected element and its children into
+   another container, or choose **Page (root)** to move it out. The canvas position
+   stays the same. The editor excludes the element itself, its descendants, and
+   parents that cannot legally contain it, such as images or buttons containing panels.
+
+Properties are grouped into **Layout**, **Text**, **Appearance**, **Layer order**,
+and **HTML attributes**. Layout has **X position**, **Y position**, **Width**, and
+**Height**, in pixels. The canvas **Move** and **Scale** handles still work.
+**Layer order** includes numeric order and **Send to back / Bring to front**;
+**HTML attributes** keeps ID, class, and image source/alt text available.
+**Duplicate** copies a subtree; **Delete** removes the element and its children.
+**Show scene properties** returns to scene editing.
+
+### Colors, gradients, and rounded corners
+
+In **Appearance → Background**, choose **Solid** or **Gradient**. A linear gradient
+starts with two colors. Change each color and its percentage position, set the
+angle, and use **Add color stop** or **Remove** to adjust the gradient (2–16 stops).
+Angles follow CSS: 0° goes up, 90° right, 180° down, and 270° left.
+
+**Text → Text color** offers the same solid and gradient controls. Containers also
+keep font size and solid text color controls; children inherit these unless overridden. Select a text-only
+element, such as Text or a Button containing plain text. If an element has other
+editable children, select its text child to change text appearance. Background and
+text gradients can coexist. Gradients preview on the canvas and save as ordinary
+CSS `linear-gradient(...)` styles; text fills use a nested text span so the parent
+can keep its own background.
+
+In **Appearance → Corner radius**, leave **Link all corners** checked to change all
+four corners with one value. Uncheck it to edit **Top left**, **Top right**,
+**Bottom right**, and **Bottom left** separately. Linking different corners uses
+the current top-left value for all four. Each radius supports 0–255 pixels and
+previews with both solid and gradient backgrounds.
 
 **Undo UI** and **Redo UI** affect the UI document independently of scene history.
 A transform drag is one undo step. **Save UI** writes the HTML, retaining the previous
@@ -142,9 +177,11 @@ opening another UI document. Closing the editor with unsaved UI changes offers s
 discard, and cancel. Editing is disabled during Play and in read-only projects.
 
 The canvas is a native layout preview, not a browser. It supports inline pixel
-positions and sizes, hex colors, and flat selector rules from inline stylesheets
+positions and sizes, hex colors, linear gradients with hex color stops, pixel corner
+radii, and flat selector rules from inline stylesheets
 and local linked CSS files in `ui/`. Stylesheet rules are applied in document order,
-then inline styles; full CSS specificity, `!important`, inheritance, flex/grid,
+then inline styles. Text color and font size inherit from parents unless overridden;
+full CSS specificity, `!important`, other CSS inheritance, flex/grid,
 percentage sizing, media queries, image rendering, DOM events and script execution
 are not supported by the preview. Image source and alt text can still be authored.
 Use positioned containers for nested layouts. This feature does not add browser UI
