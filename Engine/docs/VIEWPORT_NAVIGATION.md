@@ -34,6 +34,9 @@ The corresponding website guide is **Editor overview > Viewport tools**.
 The editor and Project Manager use egui's built-in widget styling and themes.
 Select dark, light, or system appearance in the editor's **View** menu. Docking
 uses egui_tiles with its standard tab and split interactions.
+The dock workspace uses the active theme's standard panel background, including
+empty panels and split gaps. In light mode, Inspector, Explorer and Console use
+light backgrounds with dark text. Rendered scene colors still follow the scene.
 
 3D transform handles use transform-gizmo-egui with its default visuals. Select an
 object, choose **Move**, **Rotate**, or **Scale**, then choose **World** or **Local**
