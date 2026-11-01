@@ -177,7 +177,7 @@ impl Default for CameraProjection {
 }
 
 /// Camera component extracted for rendering.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Camera {
     pub projection: CameraProjection,
     /// Optical magnification. Values above 1 narrow the view; values below 1 widen it.
@@ -207,7 +207,7 @@ pub enum LightKind {
 }
 
 /// Backend-independent light component.
-#[derive(Component, Clone, Copy, Debug, PartialEq)]
+#[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Light {
     pub kind: LightKind,
     pub color: Vec3,

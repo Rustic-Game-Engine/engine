@@ -1,3 +1,5 @@
+mod editor_tools;
+
 use engine_project::Project;
 use serde_json::{Value, json};
 use std::fs;
@@ -99,7 +101,7 @@ fn handle(session: &mut WorkspaceSession, request: &Value) -> Option<Value> {
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "rustic-workspace", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file before editing game content."
+            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file and read the bundled authoring_guide before editing game content. Prefer custom models and persist complete scenes before playtesting. Use editor tools for properties, scenes, script scopes, model previews and playtest input."
         }),
         "tools/list" => json!({"tools": tools()}),
         "tools/call" => {
@@ -116,7 +118,14 @@ fn handle(session: &mut WorkspaceSession, request: &Value) -> Option<Value> {
                 .project_for_tool(name, &args)
                 .and_then(|root| call_tool(root, name, &args))
             {
-                Ok(value) => json!({"content": [{"type": "text", "text": value.to_string()}]}),
+                Ok(mut value) => {
+                    let image = value.as_object_mut().and_then(|v| v.remove("image_base64"));
+                    let mut content = vec![json!({"type":"text","text":value.to_string()})];
+                    if let Some(image) = image.and_then(|v| v.as_str().map(str::to_owned)) {
+                        content.push(json!({"type":"image","mimeType":"image/png","data":image}));
+                    }
+                    json!({"content":content})
+                }
                 Err(error) => {
                     json!({"isError": true, "content": [{"type": "text", "text": error}]})
                 }
@@ -133,7 +142,7 @@ fn handle(session: &mut WorkspaceSession, request: &Value) -> Option<Value> {
 }
 
 fn tools() -> Value {
-    json!([
+    let mut tools = json!([
         {"name":"workspace_info","description":"Return the canonical Rustic project root, project metadata, and repository guidance. Supply project_root to select a game when the MCP client starts outside a project; selection persists for this connection.","inputSchema":{"type":"object","properties":{"project_root":{"type":"string","description":"Absolute game directory containing project.engine, or a directory below it."}}}},
         {"name":"list_agent_files","description":"List agent information in Rustic editor app data. Scope defaults to project; user selects shared integrations.","inputSchema":{"type":"object","properties":{"scope":{"type":"string","enum":["project","user"]}}}},
         {"name":"read_agent_file","description":"Read a UTF-8 agent file relative to the app-data agent directory (maximum 2 MiB). Scope defaults to project.","inputSchema":{"type":"object","required":["path"],"properties":{"path":{"type":"string"},"scope":{"type":"string","enum":["project","user"]}}}},
@@ -143,16 +152,26 @@ fn tools() -> Value {
         {"name":"write_file","description":"Write a UTF-8 file atomically inside the project. Parent directories are created.","inputSchema":{"type":"object","required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}},
         {"name":"scene_summary","description":"Inspect a Rustic scene as structured entities, transforms, and component kinds.","inputSchema":{"type":"object","properties":{"path":{"type":"string"}}}},
         {"name":"docs_index","description":"List relevant Markdown documentation available in this project and its engine repository.","inputSchema":{"type":"object","properties":{}}}
-    ])
+    ]);
+    tools.as_array_mut().expect("tools array").push(json!({"name":"authoring_guide","description":"Read the bundled, current Rustic game design, modeling, scene, scope and playtest guidance. Works with existing customized integrations.","inputSchema":{"type":"object","properties":{}}}));
+    tools
+        .as_array_mut()
+        .expect("tools array")
+        .extend(editor_tools::tools());
+    tools
 }
 
 fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
+    if editor_tools::contains(name) {
+        return engine_scripting::call_editor(root, name, args);
+    }
     match name {
+        "authoring_guide" => Ok(json!({"content":engine_scripting::AGENT_AUTHORING_GUIDE})),
         "workspace_info" => {
             let project = Project::open(root).map_err(|error| error.to_string())?;
             let agent_root = ensure_agent_directory(root)?;
             Ok(
-                json!({"project_root":root,"name":project.metadata().name,"project_file":root.join("project.engine"),"agent_directory":agent_root,"instructions":["Make game-content changes inside this project root.","Do not edit the engine source repository unless the user explicitly requests engine changes.","Use read_agent_file to read AGENTS.md or CLAUDE.md before editing; use list_agent_files and write_agent_file to inspect or edit agent information in editor app data."]}),
+                json!({"project_root":root,"name":project.metadata().name,"project_file":root.join("project.engine"),"agent_directory":agent_root,"scene_directory":project.directory(engine_project::VirtualDirectory::Scenes).map_err(|e| e.to_string())?,"start_scene":project.start_scene_path().map_err(|e| e.to_string())?,"authoring_guide":"Call authoring_guide before authoring; open this project in the editor for live editing tools.","instructions":["Keep final game content in this project; run Python/Blender asset generators and temporary tools outside the game directory. Import only finished assets.","Do not edit the engine source repository unless the user explicitly requests engine changes.","Use read_agent_file to read AGENTS.md or CLAUDE.md before editing; use list_agent_files and write_agent_file to inspect or edit agent information in editor app data."]}),
             )
         }
         "list_agent_files" | "read_agent_file" | "write_agent_file" => {
@@ -219,7 +238,11 @@ fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
             fs::rename(&temporary, &path).map_err(|error| error.to_string())?;
             Ok(json!({"written":relative(root,&path)}))
         }
-        "scene_summary" => scene_summary(root, arg(args, "path").unwrap_or("scenes/main.scene")),
+        "scene_summary" => {
+            let project = Project::open(root).map_err(|e| e.to_string())?;
+            let start = project.start_scene_path().map_err(|e| e.to_string())?;
+            scene_summary(root, arg(args, "path").unwrap_or(&relative(root, &start)))
+        }
         "docs_index" => {
             let mut docs = Vec::new();
             collect_markdown(root, root, &mut docs, 0)?;

@@ -7,6 +7,7 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
+base64 = "0.22.1"
 kuchikiki = "0.8.9-speedreader"
 egui_tiles.workspace = true
 egui-snarl.workspace = true

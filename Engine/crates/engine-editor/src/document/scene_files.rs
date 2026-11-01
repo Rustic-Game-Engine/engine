@@ -3,6 +3,19 @@ use engine_project::VirtualDirectory;
 use std::path::{Component, Path, PathBuf};
 
 impl AuthoringDocument {
+    /// Create a new empty persisted scene without replacing the current document.
+    /// # Errors
+    /// Rejects read-only access, unsafe paths, existing files and failed writes.
+    pub fn create_scene(&self, relative: &Path, name: &str) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let path = self.scene_file_path(relative)?;
+        if path.exists() {
+            return Err(operation_error("Scene already exists"));
+        }
+        engine_world::save_scene_atomic(&path, &engine_world::SceneDocument::new(name))?;
+        Ok(())
+    }
+
     /// Saves a scene as the project's start scene without changing the active scene.
     /// # Errors
     /// Returns an error for read-only access, invalid scene data, or failed persistence.
@@ -91,7 +104,8 @@ impl AuthoringDocument {
 
     fn scene_file_path(&self, relative: &Path) -> Result<PathBuf, AuthoringError> {
         self.project.validate()?;
-        if relative.as_os_str().is_empty()
+        if relative.to_string_lossy().contains(['\\', ':'])
+            || relative.as_os_str().is_empty()
             || relative
                 .components()
                 .any(|part| !matches!(part, Component::Normal(_)))

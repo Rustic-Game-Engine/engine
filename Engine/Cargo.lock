@@ -3913,6 +3913,7 @@ dependencies = [
 name = "rustic-editor"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "eframe",
  "egui-snarl",
  "egui_extras",

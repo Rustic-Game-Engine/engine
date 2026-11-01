@@ -2,9 +2,16 @@
 //!
 //! Source validation never executes gameplay callbacks. Execution belongs exclusively
 //! in `rustic-runtime`; editor callers use the manifest, validation, workspace, and
-//! external-editor services exposed here.
+//! external-editor services exposed here. The separate agent-only mesh recipe sandbox
+//! runs during authoring and has no gameplay API or callbacks.
 
 #![forbid(unsafe_code)]
+
+mod agent_bridge;
+mod agent_model;
+pub use agent_bridge::{AgentBridge, AgentRequest, call_editor};
+pub use agent_model::build_agent_model;
+pub const AGENT_AUTHORING_GUIDE: &str = include_str!("agent_authoring.md");
 
 mod cpp_sdk;
 mod external_editor;
