@@ -157,6 +157,7 @@ impl ProjectBuild {
                                     ui.checkbox(&mut self.settings.modern, "Modern wizard style");
                                     ui.checkbox(&mut self.settings.desktop_shortcut, "Offer desktop shortcut");
                                     field(ui, "Inno Setup compiler (ISCC.exe path)", &mut self.settings.compiler);
+                                    ui.small("Leave ISCC.exe for automatic setup. Building finds or installs Inno Setup and adds it to your user PATH. First installation requires internet access.");
                                     ui.group(|ui| {
                                         ui.strong(format!("{} Setup", self.settings.name));
                                         ui.label(&self.settings.welcome);
@@ -347,6 +348,52 @@ fn find_program(program: &str) -> Option<PathBuf> {
     })
 }
 
+fn automatic_compiler(compiler: &str) -> bool {
+    compiler.trim().is_empty() || compiler.eq_ignore_ascii_case("ISCC.exe")
+}
+
+#[cfg(windows)]
+fn ensure_installer_compiler(compiler: &str) -> Result<PathBuf, String> {
+    use std::os::windows::process::CommandExt as _;
+
+    let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let script = directory.path().join("ensure-inno-setup.ps1");
+    fs::write(&script, include_str!("project_build/ensure-inno-setup.ps1"))
+        .map_err(|e| e.to_string())?;
+    // Pass user input as data, never interpolate it into PowerShell source.
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+        ])
+        .arg(script)
+        .env("RUSTIC_INNO_COMPILER", compiler)
+        .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
+        .output()
+        .map_err(|e| format!("Could not start automatic Inno Setup configuration: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Inno Setup configuration failed: {}. Check internet access and user PATH permissions, then retry. You can also install Inno Setup 6 manually and set its full ISCC.exe path.",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let path = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+    if !path.is_absolute() || !path.is_file() {
+        return Err("Inno Setup configuration did not return an existing compiler.".into());
+    }
+    // Use the resolved absolute path immediately; the running editor retains its
+    // inherited environment even after the script updates the persistent PATH.
+    Ok(path)
+}
+
+#[cfg(not(windows))]
+fn ensure_installer_compiler(_compiler: &str) -> Result<PathBuf, String> {
+    Err("Inno Setup requires a Windows host.".into())
+}
+
 fn java_executable() -> Option<PathBuf> {
     let executable = if cfg!(windows) { "java.exe" } else { "java" };
     std::env::var_os("JAVA_HOME")
@@ -390,9 +437,11 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
             {
                 missing.push("rustic-runtime.exe beside the editor.".into());
             }
-            if settings.installer && find_program(&settings.compiler).is_none() {
-                missing
-                    .push("Inno Setup 6: enter the full ISCC.exe path in Design installer.".into());
+            if settings.installer
+                && !automatic_compiler(&settings.compiler)
+                && find_program(&settings.compiler).is_none()
+            {
+                missing.push("The custom Inno Setup compiler path does not exist. Use ISCC.exe for automatic setup.".into());
             }
         }
         Target::Website => {}
@@ -513,8 +562,9 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 }
             }
             if settings.installer {
-                if !available(&settings.compiler, "/?") {
-                    return Err("Inno Setup compiler unavailable. Install Inno Setup 6 and set the full ISCC.exe path.".into());
+                let compiler = ensure_installer_compiler(&settings.compiler)?;
+                if !available(&compiler.to_string_lossy(), "/?") {
+                    return Err("Inno Setup compiler could not run. Check the custom compiler path or repair the Inno Setup installation.".into());
                 }
                 for (source, target, extension) in [
                     (&settings.license, "license.txt", ""),
@@ -536,7 +586,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 fs::write(output.join("installer.iss"), installer_script(settings))
                     .map_err(|e| e.to_string())?;
                 run_command(
-                    Command::new(&settings.compiler)
+                    Command::new(compiler)
                         .current_dir(output)
                         .arg("installer.iss"),
                 )?;
