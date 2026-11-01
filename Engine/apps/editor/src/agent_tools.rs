@@ -120,7 +120,7 @@ impl EditorApp {
                 collect_scene_paths(&scenes, &scenes, &mut paths, 0)?;
                 paths.sort();
                 Ok(
-                    json!({"scenes":paths,"active":self.document.scene_path().strip_prefix(&scenes).ok(),"start":self.document.project().start_scene_path().ok().and_then(|p| p.strip_prefix(&scenes).ok().map(Path::to_path_buf))}),
+                    json!({"scenes":paths,"active":self.document.scene_path().strip_prefix(&scenes).ok().map(slash_path),"start":self.document.project().start_scene_path().ok().and_then(|p| p.strip_prefix(&scenes).ok().map(slash_path))}),
                 )
             }
             "scene_create" => {
@@ -620,10 +620,14 @@ fn valid_key(key: &str) -> bool {
             .strip_prefix("Digit")
             .is_some_and(|v| v.len() == 1 && v.bytes().all(|c| c.is_ascii_digit()))
 }
+fn slash_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
 fn collect_scene_paths(
     root: &Path,
     path: &Path,
-    paths: &mut Vec<PathBuf>,
+    paths: &mut Vec<String>,
     depth: usize,
 ) -> Result<(), String> {
     if depth > 16 {
@@ -642,11 +646,9 @@ fn collect_scene_paths(
             .extension()
             .is_some_and(|e| e == "scene" || e == "rscene")
         {
-            paths.push(
-                path.strip_prefix(root)
-                    .map_err(|e| e.to_string())?
-                    .to_path_buf(),
-            );
+            paths.push(slash_path(
+                path.strip_prefix(root).map_err(|e| e.to_string())?,
+            ));
         }
     }
     Ok(())
@@ -699,7 +701,10 @@ mod tests {
         }
         assert_eq!(
             agent_path(root.path(), Path::new("assets/models/new.obj"), true).unwrap(),
-            root.path().join("assets/models/new.obj")
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join("assets/models/new.obj")
         );
         assert!(agent_path(root.path(), Path::new("missing.obj"), false).is_err());
     }

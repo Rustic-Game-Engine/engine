@@ -404,8 +404,8 @@ fn find_engine_root(project: &Path) -> Option<PathBuf> {
 fn relative(root: &Path, path: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)
-        .display()
-        .to_string()
+        .to_string_lossy()
+        .replace('\\', "/")
 }
 fn arg<'a>(args: &'a Value, name: &str) -> Option<&'a str> {
     args.get(name).and_then(Value::as_str)
