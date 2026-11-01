@@ -24,6 +24,8 @@ Electron is not used. The desktop applications are native Rust executables rende
   with stable script identities, generated VS Code
   workspace/API annotations, versioned manifests/components, isolated execution,
   deterministic input actions, clickable diagnostics, and last-known-good hot reload.
+- File → Build Project packaging for Windows games and custom installers, static websites,
+  and compatible Android app templates. See [Build and distribute a project](docs/PROJECT_BUILDS.md).
 - Strict locked workspace gates, dependency/license/advisory policy, and Windows/Linux CI.
 
 The architectural baseline and staged roadmap live in

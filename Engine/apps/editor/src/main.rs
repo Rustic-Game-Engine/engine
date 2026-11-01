@@ -1,6 +1,7 @@
 mod explorer_selection;
 mod play_session;
 mod pointer_input;
+mod project_build;
 mod scene_graph;
 mod script_links;
 mod transform_widget;
@@ -128,6 +129,7 @@ fn app_icon() -> egui::IconData {
     reason = "independent editor panel and interaction flags are not mutually exclusive states"
 )]
 struct EditorApp {
+    project_build: project_build::ProjectBuild,
     updates: engine_desktop::DesktopUpdates,
     update_close_requested: bool,
     document: AuthoringDocument,
@@ -238,6 +240,7 @@ impl EditorApp {
         let missing_dependencies = missing_project_dependencies(document.project().root());
         let show_dependency_prompt = !missing_dependencies.is_empty();
         let mut app = Self {
+            project_build: project_build::ProjectBuild::default(),
             updates: engine_desktop::DesktopUpdates::default(),
             update_close_requested: false,
             document,
@@ -1194,6 +1197,11 @@ impl EditorApp {
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
+                if ui.button("Build Project…").clicked() {
+                    self.project_build.open = true;
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Game Settings…").clicked() {
                     self.show_game_settings = true;
                     ui.close();
@@ -1630,6 +1638,7 @@ impl eframe::App for EditorApp {
         }
         self.runtime_changes_dialog(ui.ctx());
         self.scene_rename_dialog(ui.ctx());
+        self.project_build.show(ui.ctx(), &self.document);
         self.game_settings_dialog(ui.ctx());
         self.dependency_prompt(ui.ctx());
         self.update_close_dialog(ui);

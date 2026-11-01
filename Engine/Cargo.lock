@@ -3768,6 +3768,8 @@ dependencies = [
  "num-traits",
  "renderer-wgpu",
  "rfd",
+ "serde",
+ "serde_json",
  "tempfile",
  "transform-gizmo-egui",
 ]

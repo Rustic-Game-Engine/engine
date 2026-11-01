@@ -23,6 +23,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::{Window, WindowId};
 
 mod game_ui;
+mod standalone;
 
 const TOKEN_ENVIRONMENT_VARIABLE: &str = "RUSTIC_RUNTIME_IPC_TOKEN";
 
@@ -72,6 +73,10 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: &[OsString]) -> Result<(), String> {
+    if arguments.is_empty() {
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        return standalone::run(&executable);
+    }
     if !arguments.iter().any(|argument| argument == "--ipc-server") {
         return Err(usage());
     }
@@ -183,7 +188,8 @@ fn run_windowed_runtime(config: RuntimeServerConfig) -> Result<(), String> {
 
 struct RuntimeWindowApp {
     finished: Arc<AtomicBool>,
-    title: &'static str,
+    title: String,
+    standalone: Option<standalone::Standalone>,
     initial_size: [f64; 2],
     window: Option<Arc<Window>>,
     renderer: Option<SurfaceRenderer>,
@@ -194,10 +200,11 @@ struct RuntimeWindowApp {
 }
 
 impl RuntimeWindowApp {
-    fn new(finished: Arc<AtomicBool>, title: &'static str, initial_size: [f64; 2]) -> Self {
+    fn new(finished: Arc<AtomicBool>, title: impl Into<String>, initial_size: [f64; 2]) -> Self {
         Self {
             finished,
-            title,
+            title: title.into(),
+            standalone: None,
             initial_size,
             window: None,
             renderer: None,
@@ -218,6 +225,12 @@ impl RuntimeWindowApp {
         reason = "screen dimensions are bounded by GPU texture limits and converted to float layout coordinates"
     )]
     fn resize_surface(&mut self, event_loop: &ActiveEventLoop, width: u32, height: u32) {
+        if let Some(game) = &mut self.standalone
+            && let Err(error) = game.resize(width, height)
+        {
+            self.fail(event_loop, error);
+            return;
+        }
         let Some(window) = &self.window else {
             return;
         };
@@ -248,7 +261,7 @@ impl ApplicationHandler for RuntimeWindowApp {
             return;
         }
         let attributes = Window::default_attributes()
-            .with_title(self.title)
+            .with_title(&self.title)
             .with_inner_size(LogicalSize::new(self.initial_size[0], self.initial_size[1]))
             .with_min_inner_size(LogicalSize::new(640.0, 360.0));
         let window = match event_loop.create_window(attributes) {
@@ -287,6 +300,9 @@ impl ApplicationHandler for RuntimeWindowApp {
         window.request_redraw();
         self.renderer = Some(renderer);
         self.window = Some(window);
+        if self.standalone.is_some() {
+            self.resize_surface(event_loop, size.width, size.height);
+        }
     }
 
     fn window_event(
@@ -301,6 +317,22 @@ impl ApplicationHandler for RuntimeWindowApp {
             .is_none_or(|window| window.id() != window_id)
         {
             return;
+        }
+        if let Some(game) = &mut self.standalone {
+            let size = self
+                .window
+                .as_ref()
+                .map(|w| w.inner_size())
+                .unwrap_or_default();
+            if let Err(error) = game.event(&event, [size.width, size.height]) {
+                self.fail(event_loop, error);
+                return;
+            }
+            if matches!(event, WindowEvent::CloseRequested) {
+                self.finished.store(true, Ordering::Release);
+                event_loop.exit();
+                return;
+            }
         }
         match event {
             WindowEvent::CloseRequested => {
@@ -357,6 +389,20 @@ impl ApplicationHandler for RuntimeWindowApp {
         if self.finished.load(Ordering::Acquire) {
             event_loop.exit();
             return;
+        }
+        if let Some(game) = &mut self.standalone {
+            match game.frame() {
+                Ok(Some(frame)) => {
+                    if let Ok(mut latest) = self.latest_frame.lock() {
+                        *latest = Some(frame);
+                    }
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    self.fail(event_loop, error);
+                    return;
+                }
+            }
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(
             std::time::Instant::now() + Duration::from_millis(16),
