@@ -91,6 +91,10 @@ try {
     & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-desktop-updates.ps1'
     if ($LASTEXITCODE -ne 0) { throw "Desktop updater tests failed with exit code $LASTEXITCODE." }
 
+    Write-Host 'Testing automatic Inno Setup configuration with Windows PowerShell...'
+    & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-inno-setup.ps1'
+    if ($LASTEXITCODE -ne 0) { throw "Inno Setup configuration tests failed with exit code $LASTEXITCODE." }
+
     # Release tags are allocated after the build; the commit identifies its release.
     $buildCommit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $buildCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not determine the build commit.' }

@@ -10,7 +10,7 @@ Build on Windows with `rustic-runtime.exe` beside the editor. Installed engine d
 
 1. Select **Windows game (.exe)** and enter the application name.
 2. Leave **Create a custom installer** enabled to build setup, or disable it for a portable game folder.
-3. For setup, install **Inno Setup 6**. Expand **Design installer** and set the full path to `ISCC.exe`, for example `C:\Program Files (x86)\Inno Setup 6\ISCC.exe`. A compiler on PATH also works.
+3. For setup, leave the **Inno Setup compiler** field as `ISCC.exe` (or blank). When you click **Build Project**, the background worker finds Inno Setup on PATH, in standard installation folders, or through its Windows uninstall registration. If missing, it downloads the signed Inno Setup 6.7.3 installer from the official GitHub release and installs it for the current user without administrator access. The compiler folder is added to your user PATH, and this build continues without restarting the editor. First installation requires internet access. To use a custom installation, expand **Design installer** and enter its existing absolute `ISCC.exe` path.
 4. Set a numeric version such as `1.0.0`, publisher and welcome message. Choose modern/classic wizard styling and whether to offer a desktop shortcut. The dialog shows a text preview.
 5. Optionally enter project-relative paths for a plain text license, `.ico` setup icon, and `.bmp` wizard image. For example, `branding/license.txt`, `branding/setup.ico`, and `branding/wizard.bmp`. Inno Setup validates image formats/dimensions; its standard large wizard image is 164 × 314 pixels. The compiled wizard displays these images; the editor preview displays text.
 6. Click **Build Project**. Distribute `setup.exe`, or distribute the complete `game/` folder containing `<Application name>.exe` and `data/`. Launch the game by opening the executable; the editor is not required.
@@ -83,8 +83,8 @@ The test exports a real scene and checks rendering, Lua/JavaScript startup, keyb
 
 ## Troubleshooting
 
-- **Build is disabled:** check the Required messages. Read-only editors cannot build; close the other writable editor and reopen the project. Windows packaging requires a Windows host and its bundled runtime. Inno Setup is required only when creating setup. Web and Android exports require the engine's compiled `browser-runtime/` resources.
-- **Installer compiler unavailable:** enter the full existing `ISCC.exe` path. Inspect the displayed compiler failure for invalid version or image resources.
+- **Build is disabled:** check the Required messages. Read-only editors cannot build; close the other writable editor and reopen the project. Windows packaging requires a Windows host and its bundled runtime. Inno Setup is configured automatically only when creating setup; a missing default compiler does not disable the build. Web and Android exports require the engine's compiled `browser-runtime/` resources.
+- **Inno Setup configuration failed:** check the displayed error, internet access to GitHub releases, and permission to install in your local Programs folder and update your user PATH, then retry **Build Project**. A failed signature check stops installation. You can also install Inno Setup 6 manually and enter its existing absolute `ISCC.exe` path. Invalid custom paths are reported in **Required**; reset the field to `ISCC.exe` for automatic setup. Inspect compiler failures for invalid version or image resources.
 - **Browser runtime missing:** install a distribution that includes `browser-runtime/` or build those engine resources from source. There is no project `web/` source folder to configure.
 - **Website fails to load:** serve the whole generated `website/` directory over HTTP/HTTPS, check browser WebGL 2/WebAssembly support, and inspect the displayed error and browser console.
 - **Unsupported script:** replace external-toolchain behaviors with supported Lua 5.4/JavaScript/HTML behaviors for direct web/Android exports.
