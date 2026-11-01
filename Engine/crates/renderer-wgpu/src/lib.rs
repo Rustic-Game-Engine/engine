@@ -205,8 +205,12 @@ async fn initialize_adapter(
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some(label),
                 required_features: wgpu::Features::empty(),
-                required_limits: wgpu::Limits::downlevel_defaults()
-                    .using_resolution(adapter.limits()),
+                required_limits: if cfg!(target_os = "emscripten") {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::downlevel_defaults()
+                }
+                .using_resolution(adapter.limits()),
                 experimental_features: wgpu::ExperimentalFeatures::disabled(),
                 memory_hints: wgpu::MemoryHints::Performance,
                 trace: wgpu::Trace::Off,
@@ -502,6 +506,7 @@ pub enum SurfaceFrameStatus {
 /// The concrete surface, adapter, device, queue, and swapchain configuration never
 /// cross this crate boundary. The owned native window keeps raw handles valid for the
 /// complete surface lifetime.
+#[cfg(not(target_os = "emscripten"))]
 pub struct SurfaceRenderer {
     window: Arc<winit::window::Window>,
     request: BackendRequest,
@@ -512,6 +517,7 @@ pub struct SurfaceRenderer {
     lifecycle: SurfaceLifecycle,
 }
 
+#[cfg(not(target_os = "emscripten"))]
 impl SurfaceRenderer {
     /// Creates a real presentation surface and selects the first compatible requested
     /// backend. A zero initial extent starts suspended and configures on the first resize.
@@ -961,6 +967,12 @@ struct ViewportTargets {
     padded_bytes_per_row: u32,
 }
 
+#[cfg(target_os = "emscripten")]
+struct PendingViewportReadback {
+    receiver: mpsc::Receiver<Result<(), String>>,
+    started: std::time::Instant,
+}
+
 /// Persistent engine-owned editor viewport renderer.
 ///
 /// Device, queue, pipelines, bind groups, mesh buffers, and size-dependent targets are retained;
@@ -978,6 +990,8 @@ pub struct SceneViewportRenderer {
     instances: HashMap<u64, CachedViewportInstance>,
     grid: Option<CachedViewportMesh>,
     targets: Option<ViewportTargets>,
+    #[cfg(target_os = "emscripten")]
+    pending_readback: Option<PendingViewportReadback>,
     stats: ViewportResourceStats,
 }
 
@@ -1026,6 +1040,8 @@ impl SceneViewportRenderer {
             instances: HashMap::new(),
             grid: None,
             targets: None,
+            #[cfg(target_os = "emscripten")]
+            pending_readback: None,
             stats: ViewportResourceStats {
                 device_generations: 1,
                 pipeline_generations: 1,
@@ -1048,6 +1064,8 @@ impl SceneViewportRenderer {
     }
 
     /// Renders the scene, returning `None` for a minimized/zero-sized viewport.
+    /// Browser readback also returns `None` until a later animation frame can
+    /// observe GPU completion; it never blocks the browser event loop.
     ///
     /// # Errors
     ///
@@ -1097,6 +1115,34 @@ impl SceneViewportRenderer {
             &self.environment_root,
             scene,
         )?;
+        #[cfg(target_os = "emscripten")]
+        if let Some(pending) = &self.pending_readback {
+            self.context
+                .device
+                .poll(wgpu::PollType::Poll)
+                .map_err(|e| RendererError::Gpu(e.to_string()))?;
+            match pending.receiver.try_recv() {
+                Ok(result) => result.map_err(RendererError::Gpu)?,
+                Err(mpsc::TryRecvError::Empty)
+                    if pending.started.elapsed() < Duration::from_secs(10) =>
+                {
+                    return Ok(None);
+                }
+                Err(error) => {
+                    return Err(RendererError::Gpu(format!(
+                        "browser GPU readback did not complete: {error}"
+                    )));
+                }
+            }
+            let targets = self
+                .targets
+                .as_ref()
+                .ok_or_else(|| RendererError::Gpu("browser render targets disappeared".into()))?;
+            let (width, height) = (targets.width, targets.height);
+            let rgba8 = mapped_viewport_pixels(targets)?;
+            self.pending_readback = None;
+            return Ok(Some(self.completed_frame(width, height, rgba8)));
+        }
         self.ensure_targets(width, height);
         self.ensure_grid(&scene.grid_vertices)?;
         for guide in &scene.guides {
@@ -1236,9 +1282,31 @@ impl SceneViewportRenderer {
             targets.color.size(),
         );
         self.context.queue.submit([encoder.finish()]);
-        let rgba8 = read_viewport_target(&self.context.device, targets)?;
+        #[cfg(target_os = "emscripten")]
+        {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            targets
+                .readback
+                .slice(..)
+                .map_async(wgpu::MapMode::Read, move |result| {
+                    let _ = sender.send(result.map_err(|error| error.to_string()));
+                });
+            self.pending_readback = Some(PendingViewportReadback {
+                receiver,
+                started: std::time::Instant::now(),
+            });
+            Ok(None)
+        }
+        #[cfg(not(target_os = "emscripten"))]
+        {
+            let rgba8 = read_viewport_target(&self.context.device, targets)?;
+            Ok(Some(self.completed_frame(width, height, rgba8)))
+        }
+    }
+
+    fn completed_frame(&mut self, width: u32, height: u32, rgba8: Vec<u8>) -> RenderedFrame {
         self.stats.frame_count = self.stats.frame_count.saturating_add(1);
-        Ok(Some(RenderedFrame {
+        RenderedFrame {
             width,
             height,
             rgba8,
@@ -1248,7 +1316,7 @@ impl SceneViewportRenderer {
                 "rustic-viewport-solid-pipeline".to_owned(),
                 "rustic-viewport-grid-pipeline".to_owned(),
             ],
-        }))
+        }
     }
 
     fn ensure_targets(&mut self, width: u32, height: u32) {
@@ -1701,6 +1769,7 @@ fn viewport_mesh_digest(vertices: &[ViewportVertex], indices: &[u32]) -> [u8; 32
     digest.finalize().into()
 }
 
+#[cfg(not(target_os = "emscripten"))]
 fn read_viewport_target(
     device: &wgpu::Device,
     targets: &ViewportTargets,
@@ -1720,6 +1789,11 @@ fn read_viewport_target(
         .recv_timeout(Duration::from_secs(10))
         .map_err(|error| RendererError::Gpu(error.to_string()))?
         .map_err(RendererError::Gpu)?;
+    mapped_viewport_pixels(targets)
+}
+
+fn mapped_viewport_pixels(targets: &ViewportTargets) -> Result<Vec<u8>, RendererError> {
+    let slice = targets.readback.slice(..);
     let mapped = slice
         .get_mapped_range()
         .map_err(|error| RendererError::Gpu(error.to_string()))?;

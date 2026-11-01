@@ -73,6 +73,10 @@ if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 Push-Location $workspaceRoot
 try {
+    Write-Host 'Testing browser build argument handling...'
+    & python -m unittest discover -s 'tools/tests' -v
+    if ($LASTEXITCODE -ne 0) { throw "Browser build argument tests failed with exit code $LASTEXITCODE." }
+
     # Compile Setup's sections and Pascal code before the expensive Cargo build.
     # /O- prevents producing a preflight installer; only unbuilt binaries are omitted.
     Write-Host 'Validating the Windows installer script...'
@@ -90,6 +94,10 @@ try {
     # Release tags are allocated after the build; the commit identifies its release.
     $buildCommit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $buildCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not determine the build commit.' }
+
+    Write-Host 'Building the shared browser and Android game runtime...'
+    & python 'tools\build-browser-runtime.py' --install-sdk
+    if ($LASTEXITCODE -ne 0) { throw "Browser runtime build failed with exit code $LASTEXITCODE. Activate Emscripten SDK and provide libclang/Python first." }
 
     Write-Host 'Building bundled Luau API host...'
     & $cargo build --locked --manifest-path 'apps/luau-host/Cargo.toml' --profile distribution --target-dir 'target'

@@ -44,7 +44,15 @@ impl GameUi {
         let svg = html_to_svg(&html, &css);
         let mut options = usvg::Options::default();
         let mut fonts = usvg::fontdb::Database::new();
+        #[cfg(not(target_os = "emscripten"))]
         fonts.load_system_fonts();
+        #[cfg(target_os = "emscripten")]
+        {
+            fonts.load_font_data(epaint_default_fonts::UBUNTU_LIGHT.to_vec());
+            fonts.set_serif_family("Ubuntu");
+            fonts.set_sans_serif_family("Ubuntu");
+            options.font_family = "Ubuntu".into();
+        }
         options.fontdb = std::sync::Arc::new(fonts);
         let tree = usvg::Tree::from_str(&svg, &options)
             .map_err(|e| format!("could not layout game UI: {e}"))?;

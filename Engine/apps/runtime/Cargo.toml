@@ -15,10 +15,10 @@ renderer-wgpu = { path = "../../crates/renderer-wgpu", version = "0.1.0" }
 glam.workspace = true
 resvg.workspace = true
 winit.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 engine-world = { path = "../../crates/engine-world", version = "0.1.0" }
-tempfile.workspace = true
 
 [lints]
 workspace = true

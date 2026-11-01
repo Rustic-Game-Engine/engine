@@ -30,8 +30,29 @@ license policy on the complete transitive graph.
 | Material Design Icons (Pictogrammers) | Embedded upstream SVG script-language icons | Apache-2.0 | Icons are compiled into the editor, so rendering never depends on network availability |
 | Lucide Icons | Embedded SVG interface, file-type, transform, playback, and window-control icons | ISC AND MIT | Icons are compiled into the desktop applications and tinted locally; no runtime network access |
 
-Development-only `tempfile` is used for isolated persistence and corruption fixtures
-and is not an engine runtime API.
+`tempfile` manages private build staging and standalone-session scratch directories,
+as well as isolated persistence and corruption fixtures. Its handles are not part of
+the public game API.
+## Direct game export tools
+
+- **Emscripten SDK 6.0.13** compiles the existing game session, Lua/QuickJS and GLES
+  renderer to WebAssembly. The installer builder can provision it into `.tools`.
+  Compiler tools are build dependencies; the generated runtime is bundled beside
+  the editor. Browser initialization/graphics/script failures stop the player and
+  display a diagnostic instead of silently substituting another runtime.
+- **bindgen / libclang** generate QuickJS bindings for the Emscripten target. They
+  do not run in exported games. Host bindings remain the upstream bundled bindings.
+- **Gradle wrapper 8.13** is embedded for generated Android builds. Its JAR and
+  distribution SHA-256 values are pinned and verified; its Apache-2.0 notice is
+  retained in `LICENSES/Gradle-Apache-2.0.txt`. Build failures are reported and
+  incomplete outputs are removed.
+- **AndroidX WebKit 1.14.0** (Apache-2.0) provides a local HTTPS asset loader in the
+  generated Android app. The app uses the compiled game assets and requires no
+  Internet permission; external resources/navigation are blocked.
+- **epaint_default_fonts** supplies the existing Ubuntu font for browser game UI
+  where native system fonts are absent. The package already appears in the native
+  UI dependency graph; its font license remains authoritative.
+
 ## Dependency maintenance exceptions
 
 `cargo deny` continues to check vulnerabilities, yanked versions, sources, and

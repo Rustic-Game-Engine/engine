@@ -19,3 +19,6 @@ temp/
 **/logs/
 **/cache/
 **/temp/
+
+# Python build-helper and regression-test bytecode.
+__pycache__/

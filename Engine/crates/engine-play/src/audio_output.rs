@@ -87,7 +87,16 @@ impl AudioOutput {
         if let Some(sender) = &self.sender {
             let _ = sender.try_send(Command::Samples(samples));
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "emscripten")]
+        BROWSER_AUDIO.with(|queue| {
+            let mut queue = queue.borrow_mut();
+            // Keep no more than half a second of interleaved stereo audio.
+            if queue.len() + samples.len() > 48_000 {
+                queue.clear();
+            }
+            queue.extend(samples.into_iter().take(48_000));
+        });
+        #[cfg(all(not(windows), not(target_os = "emscripten")))]
         drop(samples);
     }
 }
@@ -208,4 +217,12 @@ mod native {
             }
         }
     }
+}
+
+#[cfg(target_os = "emscripten")]
+thread_local! { static BROWSER_AUDIO: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) }; }
+
+#[cfg(target_os = "emscripten")]
+pub(crate) fn take_browser_audio() -> Vec<f32> {
+    BROWSER_AUDIO.with(|queue| std::mem::take(&mut *queue.borrow_mut()))
 }

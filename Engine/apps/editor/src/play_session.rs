@@ -27,69 +27,15 @@ pub struct EditorPlaySession {
 
 impl EditorPlaySession {
     pub fn start(document: &AuthoringDocument, mode: PlayMode) -> Result<Self, String> {
-        // Startup scripts may create or select the current camera. Let the live
-        // runtime choose it after those scripts run, rather than rejecting the
-        // authoring snapshot before initialization.
-        let scene = document
-            .snapshot_bytes()
-            .map_err(|error| error.to_string())?;
         let temporary = document
             .project()
             .directory(VirtualDirectory::Temp)
-            .map_err(|error| error.to_string())?;
+            .map_err(|e| e.to_string())?;
         let logs = document
             .project()
             .directory(VirtualDirectory::Logs)
-            .map_err(|error| error.to_string())?;
-        let mut programming = Vec::new();
-        GameSettings::load(document.project().root())?;
-        let settings_bytes = std::fs::read(document.project().root().join(GAME_SETTINGS_FILE))
-            .map_err(|error| error.to_string())?;
-        programming.push(SnapshotInput::new(GAME_SETTINGS_FILE, settings_bytes));
-        let manifest_path = document.project().root().join("config/scripts.ron");
-        if manifest_path.is_file() {
-            let manifest_bytes =
-                std::fs::read(&manifest_path).map_err(|error| error.to_string())?;
-            let manifest = load_manifest(&manifest_bytes).map_err(|error| error.to_string())?;
-            programming.push(SnapshotInput::new("config/scripts.ron", manifest_bytes));
-            for entry in manifest.manifest.scripts {
-                let path = document.project().root().join(&entry.relative_path);
-                let bytes = match std::fs::read(&path) {
-                    Ok(bytes) => bytes,
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
-                    Err(error) => {
-                        return Err(format!("could not read {}: {error}", path.display()));
-                    }
-                };
-                validate_script(
-                    entry.language,
-                    &bytes,
-                    &entry.relative_path.to_string_lossy(),
-                    1024 * 1024,
-                )?;
-                programming.push(SnapshotInput::new(entry.relative_path, bytes));
-            }
-        }
-        collect_snapshot_assets(document.project().root(), &mut programming)?;
-        collect_snapshot_scenes(
-            document.project().root(),
-            document.scene_path(),
-            &mut programming,
-        )?;
-        collect_sky_image(document, &mut programming)?;
-        let snapshot = SnapshotBuilder::new(temporary.join("play"))
-            .stage(
-                mode,
-                SnapshotInput::new(
-                    document
-                        .scene_path()
-                        .strip_prefix(document.project().root())
-                        .unwrap_or_else(|_| Path::new("scene/main.scene")),
-                    scene,
-                ),
-                &programming,
-            )
-            .map_err(|error| error.to_string())?;
+            .map_err(|e| e.to_string())?;
+        let snapshot = stage_snapshot(document, mode, &temporary.join("play"))?;
         let executable = runtime_executable().ok_or_else(|| {
             "rustic-runtime executable is not beside the editor; run `cargo build --workspace`"
                 .to_owned()
@@ -412,4 +358,78 @@ fn executable_name(stem: &str) -> PathBuf {
     } else {
         Path::new(stem).to_path_buf()
     }
+}
+
+/// Stage the same validated game data for play and distribution.
+pub fn stage_snapshot(
+    document: &AuthoringDocument,
+    mode: PlayMode,
+    destination: &Path,
+) -> Result<PlaySnapshot, String> {
+    // Startup scripts may create or select the current camera. Let the live
+    // runtime choose it after those scripts run, rather than rejecting the
+    // authoring snapshot before initialization.
+    let scene = document
+        .snapshot_bytes()
+        .map_err(|error| error.to_string())?;
+    let mut programming = Vec::new();
+    GameSettings::load(document.project().root())?;
+    let settings_bytes = std::fs::read(document.project().root().join(GAME_SETTINGS_FILE))
+        .map_err(|error| error.to_string())?;
+    programming.push(SnapshotInput::new(GAME_SETTINGS_FILE, settings_bytes));
+    let manifest_path = document.project().root().join("config/scripts.ron");
+    if manifest_path.is_file() {
+        let manifest_bytes = std::fs::read(&manifest_path).map_err(|error| error.to_string())?;
+        let mut manifest = load_manifest(&manifest_bytes).map_err(|error| error.to_string())?;
+        for entry in &mut manifest.manifest.scripts {
+            entry.relative_path = entry
+                .relative_path
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+                .into();
+            let path = document.project().root().join(&entry.relative_path);
+            let bytes = match std::fs::read(&path) {
+                Ok(bytes) => bytes,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(format!("could not read {}: {error}", path.display()));
+                }
+            };
+            validate_script(
+                entry.language,
+                &bytes,
+                &entry.relative_path.to_string_lossy(),
+                1024 * 1024,
+            )?;
+            programming.push(SnapshotInput::new(entry.relative_path.clone(), bytes));
+        }
+        programming.push(SnapshotInput::new(
+            "config/scripts.ron",
+            ron::ser::to_string(&manifest.manifest)
+                .map_err(|e| e.to_string())?
+                .into_bytes(),
+        ));
+    }
+    collect_snapshot_assets(document.project().root(), &mut programming)?;
+    collect_snapshot_scenes(
+        document.project().root(),
+        document.scene_path(),
+        &mut programming,
+    )?;
+    collect_sky_image(document, &mut programming)?;
+    SnapshotBuilder::new(destination)
+        .stage(
+            mode,
+            SnapshotInput::new(
+                document
+                    .scene_path()
+                    .strip_prefix(document.project().root())
+                    .unwrap_or_else(|_| Path::new("scene/main.scene")),
+                scene,
+            ),
+            &programming,
+        )
+        .map_err(|error| error.to_string())
 }

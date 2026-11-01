@@ -11,7 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use uuid::Uuid;
 
-pub const SNAPSHOT_FORMAT_VERSION: u32 = 1;
+pub const SNAPSHOT_FORMAT_VERSION: u32 = 2;
 pub const SNAPSHOT_MANIFEST_FILE: &str = "play-snapshot.ron";
 
 /// Caller-owned bytes staged into an isolated runtime mount.
@@ -77,7 +77,7 @@ impl PlaySnapshot {
             })?;
         let manifest: PlaySnapshotManifest = ron::from_str(&manifest_text)
             .map_err(|error| SnapshotError::InvalidManifest(error.to_string()))?;
-        if manifest.format_version != SNAPSHOT_FORMAT_VERSION {
+        if !matches!(manifest.format_version, 1 | SNAPSHOT_FORMAT_VERSION) {
             return Err(SnapshotError::UnsupportedVersion {
                 found: manifest.format_version,
                 supported: SNAPSHOT_FORMAT_VERSION,
@@ -131,7 +131,11 @@ impl PlaySnapshot {
                 actual: scene_entry.sha256.clone(),
             });
         }
-        let aggregate = aggregate_hash(&verified);
+        let aggregate = if manifest.format_version == 1 {
+            aggregate_hash_legacy(&verified)
+        } else {
+            aggregate_hash(&verified)
+        };
         if aggregate != manifest.snapshot_sha256 {
             return Err(SnapshotError::SnapshotHashMismatch {
                 expected: manifest.snapshot_sha256.clone(),
@@ -214,6 +218,22 @@ impl SnapshotBuilder {
             if !seen.insert(input.relative_path.clone()) {
                 return Err(SnapshotError::DuplicatePath(input.relative_path.clone()));
             }
+        }
+        // Store separators independently of the build host (Windows -> browser).
+        for input in &mut inputs {
+            input.relative_path = input
+                .relative_path
+                .components()
+                .filter_map(|part| {
+                    if let Component::Normal(value) = part {
+                        Some(value.to_string_lossy())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/")
+                .into();
         }
         let source_scene = inputs[0].relative_path.clone();
         fs::create_dir_all(&self.play_directory).map_err(|source| SnapshotError::Io {
@@ -376,6 +396,19 @@ fn aggregate_hash(entries: &[(PathBuf, String)]) -> String {
     let mut hasher = Sha256::new();
     for (path, hash) in entries {
         let path = path.to_string_lossy();
+        hasher.update(u64::try_from(path.len()).unwrap_or(u64::MAX).to_le_bytes());
+        hasher.update(path.as_bytes());
+        hasher.update(hash.as_bytes());
+    }
+    hash_bytes(&hasher.finalize())
+}
+
+// Version 1 encoded usize, so its existing hashes remain readable on the
+// originating platform. Version 2 uses fixed-width lengths across 32/64-bit hosts.
+fn aggregate_hash_legacy(entries: &[(PathBuf, String)]) -> String {
+    let mut hasher = Sha256::new();
+    for (path, hash) in entries {
+        let path = path.to_string_lossy();
         hasher.update(path.len().to_le_bytes());
         hasher.update(path.as_bytes());
         hasher.update(hash.as_bytes());
@@ -530,6 +563,14 @@ mod tests {
     }
 
     #[test]
+    fn portable_aggregate_uses_fixed_width_path_lengths() {
+        assert_eq!(
+            aggregate_hash(&[(PathBuf::from("scenes/main.scene"), "abcd".into())]),
+            "14c67d3bdba933c1c5d89f10e72bc7a3b679fdd1ea0bba20783a286d48bf1061"
+        );
+    }
+
+    #[test]
     fn future_manifest_version_is_rejected() {
         let directory = tempfile::tempdir().unwrap();
         let snapshot = stage(directory.path());
@@ -538,7 +579,11 @@ mod tests {
         let text = fs::read_to_string(&path).unwrap();
         fs::write(
             &path,
-            text.replacen("format_version: 1", "format_version: 999", 1),
+            text.replacen(
+                &format!("format_version: {SNAPSHOT_FORMAT_VERSION}"),
+                "format_version: 999",
+                1,
+            ),
         )
         .unwrap();
         assert!(matches!(

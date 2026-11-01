@@ -97,6 +97,36 @@ jobs:
             exit 1
           fi
 
+  browser-export:
+    name: Direct browser game export
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: Engine
+        shell: bash
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Browser build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes libclang-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libegl1 libgl1-mesa-dri
+      - name: Build the shared WebAssembly game runtime
+        run: |
+          python3 -m unittest discover -s tools/tests -v
+          python3 tools/build-browser-runtime.py --install-sdk --profile dev-fast
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+      - name: Install browser test tools
+        run: |
+          npm ci --prefix tools/browser-tests
+          npm exec --prefix tools/browser-tests -- playwright install --with-deps chromium
+      - name: Play an exported game without a game server
+        run: npm test --prefix tools/browser-tests
+
   rust-security:
     name: Rust dependency security and licenses
     runs-on: ubuntu-latest
@@ -232,7 +262,7 @@ jobs:
   required:
     name: Required checks
     if: ${{ always() }}
-    needs: [engine, rust-security, secrets, language-adapters, installer, workflow-syntax]
+    needs: [engine, browser-export, rust-security, secrets, language-adapters, installer, workflow-syntax]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
