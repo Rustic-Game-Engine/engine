@@ -16,19 +16,22 @@ DOCS_ROOT = "https://rustic-game-engine.pages.dev/docs/"
 
 
 def documentation_links(pr):
-    """Require an explicit mapping to published pages, never infer a docs PR."""
-    entries = re.findall(r"^Documentation:[ \t]*(.+)$", pr.get("body") or "", re.MULTILINE)
+    """Use declared published pages without blocking installer announcements."""
+    body = pr.get("body") or ""
+    entries = re.findall(r"^Documentation:[ \t]*(.*)$", body, re.MULTILINE)
     if not entries:
-        raise ValueError("Add Documentation: <published docs URL> to the merged PR description "
-                         "(or Documentation: none for changes without a documentation update).")
+        # Older PRs use ordinary Markdown links rather than release metadata.
+        entries = [body]
     if len(entries) == 1 and entries[0].strip().lower() == "none":
         return []
     urls = []
     for entry in entries:
         found = re.findall(re.escape(DOCS_ROOT) + r"[A-Za-z0-9_./%~-]+(?:#[A-Za-z0-9_.%~-]+)?", entry)
-        if not found:
-            raise ValueError("Documentation must link to a published page under " + DOCS_ROOT)
         urls.extend(found)
+    if not urls:
+        print("::warning::No published documentation page was specified; announcing the installer "
+              "without a documentation link. Add Documentation: <published docs URL> to the "
+              "merged PR description and rerun publication to update the announcement.")
     return list(dict.fromkeys(urls))
 
 

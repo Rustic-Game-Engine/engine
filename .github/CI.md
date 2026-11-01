@@ -67,10 +67,13 @@ helpful. Publish the documentation update before the release announcement. Do no
 put a documentation PR URL in this field. The announcement copies only these
 published-page URLs and never copies the PR description. For maintenance changes
 without a documentation update, explicitly use `Documentation: none`; no docs
-link is added. Missing or invalid mappings fail the announcement with instructions
-to fix the merged engine PR's description and rerun publication. The automation
-does not guess a matching update by title or choose the latest documentation PR,
-and does not verify that the declared page has deployed.
+link is added. When there is no `Documentation:` line, canonical published docs
+links elsewhere in the description are used instead. Missing or invalid mappings
+do not block the announcement: it is posted without a docs link and the Actions
+log shows a warning. Add the published page to the merged engine PR's description
+and rerun publication to update the announcement. The automation does not guess a
+matching update by title or choose the latest documentation PR, and does not
+verify that the declared page has deployed.
 
 The workflow token needs `discussions: write` alongside its existing permissions,
 and Discussions must contain the `change-log` category. Retrying publication
@@ -89,6 +92,16 @@ Actions. Missing/expired artifacts, missing merged-PR metadata, or insufficient
 token permissions fail that job. After correcting the problem, rerun its failed
 job while the artifact is still available. A standalone manual installer build
 must select `main` or `work` at a merged PR commit.
+
+If an EXE release exists but its change-log Discussion is missing, inspect the
+publication step's traceback. Older tooling failed after upload when the PR
+description lacked a `Documentation:` line. The corrected tooling warns and
+continues. Existing failed runs use the workflow/tooling revision from their
+original run: to recover one immediately, add a valid `Documentation:` line (or
+`Documentation: none` when appropriate) to its merged PR description, then rerun
+the failed publication job while its artifact is available. The existing tag is
+reused, so no extra version is allocated. Future runs use the corrected tooling
+once it is merged into the default branch.
 Linux headless rendering uses Mesa's CPU Vulkan driver. Both engine and language
 adapter jobs initialize the installed .NET SDK before launching parallel tests,
 so C# fixtures do not race its first-run NuGet migrations. Windows gameplay unit
