@@ -114,7 +114,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install --yes libclang-dev libwayland-dev libxkbcommon-dev libx11-dev libxcursor-dev libxi-dev libxrandr-dev libegl1 libgl1-mesa-dri
       - name: Build the shared WebAssembly game runtime
-        run: python3 tools/build-browser-runtime.py --install-sdk --profile dev-fast
+        run: |
+          python3 -m unittest discover -s tools/tests -v
+          python3 tools/build-browser-runtime.py --install-sdk --profile dev-fast
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'

@@ -7,15 +7,15 @@ rust-version.workspace = true
 publish = false
 
 [dependencies]
-engine-core = { path = "../../crates/engine-core" }
-engine-play = { path = "../../crates/engine-play", default-features = false }
-engine-assets = { path = "../../crates/engine-assets" }
-renderer-wgpu = { path = "../../crates/renderer-wgpu" }
+engine-core = { path = "../../crates/engine-core", version = "0.1.0" }
+engine-play = { path = "../../crates/engine-play", version = "0.1.0", default-features = false }
+engine-assets = { path = "../../crates/engine-assets", version = "0.1.0" }
+renderer-wgpu = { path = "../../crates/renderer-wgpu", version = "0.1.0" }
 serde.workspace = true
 serde_json.workspace = true
 resvg.workspace = true
 epaint_default_fonts = "0.36.1"
-engine-scripting = { path = "../../crates/engine-scripting" }
+engine-scripting = { path = "../../crates/engine-scripting", version = "0.1.0" }
 
 # Exported Emscripten entry points require no_mangle. Only those attributes are
 # allowed below; the runtime contains no unsafe operations or raw-pointer API.

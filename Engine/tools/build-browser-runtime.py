@@ -4,7 +4,14 @@ import argparse
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
+
+
+def bindgen_sysroot_arguments(sysroot):
+    # bindgen parses this variable with POSIX shell rules, including on Windows.
+    # Forward slashes preserve drive paths; quoting preserves spaces in SDK paths.
+    return shlex.join(['--sysroot=' + sysroot.as_posix()])
 
 
 def main():
@@ -54,7 +61,7 @@ def main():
     environment['CARGO_INCREMENTAL'] = '0'
     environment['CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_LINKER'] = 'em++'
     environment['CXXFLAGS_wasm32_unknown_emscripten'] = '-fwasm-exceptions'
-    environment.setdefault('BINDGEN_EXTRA_CLANG_ARGS', '--sysroot=' + str(Path(shutil.which('emcc')).parent / 'cache' / 'sysroot'))
+    environment.setdefault('BINDGEN_EXTRA_CLANG_ARGS', bindgen_sysroot_arguments(Path(shutil.which('emcc')).resolve().parent / 'cache' / 'sysroot'))
     environment[f'CARGO_PROFILE_{args.profile.upper().replace("-", "_")}_LTO'] = 'false'
     subprocess.run(cargo + ['rustc', '-p', 'rustic-browser', '--bin', 'rustic-browser', '--target', target,
                             '--profile', args.profile, '--'] + flags[2:], cwd=root, env=environment, check=True)

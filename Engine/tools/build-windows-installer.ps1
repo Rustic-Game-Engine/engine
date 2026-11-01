@@ -73,6 +73,10 @@ if (-not (Test-Path -LiteralPath $iscc -PathType Leaf)) {
 
 Push-Location $workspaceRoot
 try {
+    Write-Host 'Testing browser build argument handling...'
+    & python -m unittest discover -s 'tools/tests' -v
+    if ($LASTEXITCODE -ne 0) { throw "Browser build argument tests failed with exit code $LASTEXITCODE." }
+
     # Compile Setup's sections and Pascal code before the expensive Cargo build.
     # /O- prevents producing a preflight installer; only unbuilt binaries are omitted.
     Write-Host 'Validating the Windows installer script...'
