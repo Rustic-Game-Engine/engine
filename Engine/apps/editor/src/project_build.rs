@@ -1,4 +1,5 @@
 //! Project distribution UI and shell-free packaging jobs.
+mod portable;
 use eframe::egui;
 use engine_editor::AuthoringDocument;
 use engine_platform::AtomicFileService;
@@ -23,7 +24,7 @@ impl Target {
     fn label(self) -> &'static str {
         match self {
             Self::Windows => "Windows game (.exe)",
-            Self::Website => "Website (static files)",
+            Self::Website => "Website (playable game)",
             Self::Apk => "Android APK (debug)",
             Self::Aab => "Android App Bundle (release)",
         }
@@ -44,8 +45,8 @@ struct Settings {
     banner: String,
     desktop_shortcut: bool,
     modern: bool,
-    website: String,
-    android: String,
+    android_package: String,
+    android_version_code: u32,
     compiler: String,
 }
 impl Default for Settings {
@@ -62,8 +63,8 @@ impl Default for Settings {
             banner: String::new(),
             desktop_shortcut: true,
             modern: true,
-            website: "web".into(),
-            android: "android".into(),
+            android_package: "org.rustic.game".into(),
+            android_version_code: 1,
             compiler: "ISCC.exe".into(),
         }
     }
@@ -172,13 +173,14 @@ impl ProjectBuild {
                             }
                         }
                         Target::Website => {
-                            field(ui, "Website folder (project relative)", &mut self.settings.website);
-                            ui.label("Exports an existing static website with index.html. Prepare framework sites as static files first. Engine scenes and Rustic script APIs require a separate browser runtime.");
+                            ui.label("Turns the current game into a playable website: scenes, scripts, assets and the WebAssembly runtime are packaged automatically. Upload the generated website folder to any static host. No web source folder or game server is needed.");
                         }
                         Target::Apk | Target::Aab => {
-                            field(ui, "Android app template (project relative)", &mut self.settings.android);
-                            ui.label("Requires a compatible Gradle Android app project, Gradle wrapper, JDK and Android SDK. A snapshot is added to app/src/main/assets/rustic; the template must provide the Android runtime that consumes it.");
-                            ui.label("APK uses assembleDebug. AAB uses bundleRelease and the template's signing configuration. Configure release signing in your template; keep credentials out of game assets.");
+                            field(ui, "Android package ID", &mut self.settings.android_package);
+                            ui.horizontal(|ui| { ui.label("Version code"); ui.add(egui::DragValue::new(&mut self.settings.android_version_code).range(1..=2_100_000_000_u32)); });
+                            field(ui, "Version name", &mut self.settings.version);
+                            ui.label("Generates an Android app containing the compiled game. It runs locally through Android System WebView with touch/keyboard input, without an Android template or game server.");
+                            ui.label("Requires JDK 17+, Android SDK platform 36/build-tools 36.0.0 and the bundled browser runtime. Gradle downloads build dependencies when first used. APK is debug-signed. Release AAB signing uses RUSTIC_ANDROID_KEYSTORE, RUSTIC_ANDROID_STORE_PASSWORD, RUSTIC_ANDROID_KEY_ALIAS and RUSTIC_ANDROID_KEY_PASSWORD.");
                         }
                     }
                     ui.separator();
@@ -226,11 +228,14 @@ impl ProjectBuild {
             .project()
             .directory(VirtualDirectory::Builds)
             .map_err(|e| e.to_string())?;
+        if self.settings.target != Target::Windows {
+            portable::validate_scripts(&root)?;
+        }
         let staging = tempfile::Builder::new()
             .prefix("project-")
             .tempdir_in(builds)
             .map_err(|e| e.to_string())?;
-        if self.settings.target != Target::Website {
+        {
             let snapshot = crate::play_session::stage_snapshot(
                 document,
                 PlayMode::Standalone,
@@ -304,13 +309,27 @@ fn find_program(program: &str) -> Option<PathBuf> {
 }
 
 fn java_executable() -> Option<PathBuf> {
+    let executable = if cfg!(windows) { "java.exe" } else { "java" };
     std::env::var_os("JAVA_HOME")
-        .map(|home| {
-            PathBuf::from(home)
-                .join("bin")
-                .join(if cfg!(windows) { "java.exe" } else { "java" })
-        })
+        .map(|home| PathBuf::from(home).join("bin").join(executable))
         .filter(|path| path.is_file())
+        .or_else(|| find_program(executable))
+}
+
+fn android_sdk() -> Option<PathBuf> {
+    let mut paths: Vec<PathBuf> = ["ANDROID_HOME", "ANDROID_SDK_ROOT"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .map(PathBuf::from)
+        .collect();
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        paths.push(PathBuf::from(local).join("Android/Sdk"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        paths.push(PathBuf::from(&home).join("Android/Sdk"));
+        paths.push(PathBuf::from(home).join("Library/Android/sdk"));
+    }
+    paths.into_iter().find(|path| path.is_dir())
 }
 
 fn available(program: &str, argument: &str) -> bool {
@@ -337,39 +356,33 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
                     .push("Inno Setup 6: enter the full ISCC.exe path in Design installer.".into());
             }
         }
-        Target::Website => {
-            if !project_path(root, &settings.website).is_ok_and(|p| p.join("index.html").is_file())
-            {
-                missing.push("A website folder containing index.html.".into());
-            }
-        }
+        Target::Website => {}
         Target::Apk | Target::Aab => {
-            let wrapper = if cfg!(windows) {
-                "gradlew.bat"
-            } else {
-                "gradlew"
-            };
-            if !project_path(root, &settings.android).is_ok_and(|p| {
-                p.join(wrapper).is_file()
-                    && p.join("app").is_dir()
-                    && p.join("gradle/wrapper/gradle-wrapper.jar").is_file()
-                    && p.join("gradle/wrapper/gradle-wrapper.properties").is_file()
-            }) {
-                missing.push(
-                    "Android app template with app/, wrapper script, wrapper JAR and properties."
-                        .into(),
-                );
-            }
             if java_executable().is_none() {
                 missing.push("JAVA_HOME pointing to a JDK with bin/java.".into());
             }
-            if !["ANDROID_HOME", "ANDROID_SDK_ROOT"]
-                .iter()
-                .any(|key| std::env::var_os(key).is_some_and(|p| Path::new(&p).is_dir()))
-            {
-                missing
-                    .push("ANDROID_HOME or ANDROID_SDK_ROOT pointing to the Android SDK.".into());
+            match android_sdk() {
+                None => missing
+                    .push("Android SDK: install it or set ANDROID_HOME/ANDROID_SDK_ROOT.".into()),
+                Some(sdk) => {
+                    if !sdk.join("platforms/android-36/android.jar").is_file() {
+                        missing.push("Android SDK platform 36.".into());
+                    }
+                    if !sdk.join("build-tools/36.0.0").is_dir() {
+                        missing.push("Android SDK build-tools 36.0.0.".into());
+                    }
+                }
             }
+        }
+    }
+    if settings.target != Target::Windows {
+        if !std::env::current_exe()
+            .is_ok_and(|exe| portable::runtime_available(&portable::runtime_directory(&exe)))
+        {
+            missing.push("Compiled browser runtime: install an engine distribution with browser-runtime/ or run tools/build-browser-runtime.py from engine source.".into());
+        }
+        if let Err(error) = portable::validate_scripts(root) {
+            missing.push(error);
         }
     }
     missing
@@ -391,6 +404,15 @@ fn validate_settings(settings: &Settings) -> Result<(), String> {
                 "The {label} cannot contain control characters, quotes or braces."
             ));
         }
+    }
+    if matches!(settings.target, Target::Apk | Target::Aab)
+        && (!portable::valid_package(&settings.android_package)
+            || !(1..=2_100_000_000).contains(&settings.android_version_code))
+    {
+        return Err(
+            "Use an Android package ID such as com.studio.mygame and a positive version code."
+                .into(),
+        );
     }
     let name = settings.name.trim();
     let stem = name.split('.').next().unwrap_or(name).to_ascii_uppercase();
@@ -484,11 +506,15 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 }
             }
         }
-        Target::Website => copy_tree(
-            &project_path(root, &settings.website)?,
-            &output.join("website"),
-            &[".git", ".gradle", "node_modules"],
-        )?,
+        Target::Website => {
+            portable::export_website(
+                &output.join("data"),
+                &output.join("website"),
+                &portable::runtime_directory(runtime),
+                &settings.name,
+            )?;
+            fs::remove_dir_all(output.join("data")).map_err(|e| e.to_string())?;
+        }
         Target::Apk | Target::Aab => {
             let java = java_executable().ok_or("Set JAVA_HOME to a JDK.")?;
             if !available(&java.to_string_lossy(), "-version") {
@@ -497,36 +523,33 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 );
             }
             let template = output.join("android-project");
-            copy_tree(
-                &project_path(root, &settings.android)?,
+            portable::generate_android(
+                &output.join("data"),
                 &template,
-                &[".git", ".gradle", "build", "builds", "node_modules"],
+                &portable::runtime_directory(runtime),
+                settings,
             )?;
-            let assets = template.join("app/src/main/assets");
-            fs::create_dir_all(&assets).map_err(|e| e.to_string())?;
-            if assets.join("rustic").exists() {
-                return Err("Template already contains app/src/main/assets/rustic; reserve this folder for the build snapshot.".into());
-            }
-            fs::rename(output.join("data"), assets.join("rustic")).map_err(|e| e.to_string())?;
+            fs::remove_dir_all(output.join("data")).map_err(|e| e.to_string())?;
             let task = if settings.target == Target::Apk {
                 "assembleDebug"
             } else {
                 "bundleRelease"
             };
-            let mut command = if cfg!(windows) {
-                let mut command = Command::new("cmd.exe");
-                command.args(["/d", "/c", "gradlew.bat"]);
-                command
-            } else {
-                let mut command = Command::new("sh");
-                command.arg("gradlew");
-                command
-            };
-            run_command(command.current_dir(&template).args([
-                "--no-daemon",
-                "--console=plain",
-                task,
-            ]))?;
+            let sdk = android_sdk().ok_or("Android SDK is unavailable")?;
+            run_command(
+                Command::new(java)
+                    .current_dir(&template)
+                    .env("ANDROID_HOME", &sdk)
+                    .env("ANDROID_SDK_ROOT", &sdk)
+                    .args([
+                        "-classpath",
+                        "gradle/wrapper/gradle-wrapper.jar",
+                        "org.gradle.wrapper.GradleWrapperMain",
+                        "--no-daemon",
+                        "--console=plain",
+                        task,
+                    ]),
+            )?;
             let (directory, extension) = if settings.target == Target::Apk {
                 ("apk", "apk")
             } else {
@@ -744,31 +767,6 @@ mod tests {
         assert!(script.contains("WelcomeLabel2=Welcome"));
     }
     #[test]
-    fn website_export_copies_content_without_touching_source() {
-        let temp = tempfile::tempdir().unwrap();
-        let web = temp.path().join("web");
-        fs::create_dir_all(web.join("images")).unwrap();
-        fs::write(web.join("index.html"), "<h1>Hello</h1>").unwrap();
-        fs::write(web.join("images/logo.png"), b"image").unwrap();
-        let output = temp.path().join("out");
-        fs::create_dir(&output).unwrap();
-        build(
-            temp.path(),
-            &output,
-            &Settings {
-                target: Target::Website,
-                ..Settings::default()
-            },
-            Path::new("unused"),
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read(output.join("website/index.html")).unwrap(),
-            fs::read(web.join("index.html")).unwrap()
-        );
-        assert!(output.join("website/images/logo.png").is_file());
-    }
-    #[test]
     fn export_rejects_output_nested_in_source() {
         let temp = tempfile::tempdir().unwrap();
         assert!(copy_tree(temp.path(), &temp.path().join("output"), &[]).is_err());
@@ -814,43 +812,6 @@ mod tests {
                 .permissions()
                 .readonly()
         );
-    }
-
-    #[test]
-    fn website_build_job_persists_settings_and_publishes_verified_output() {
-        use engine_project::{Project, ProjectTemplate};
-        let temp = tempfile::tempdir().unwrap();
-        let project =
-            Project::create(temp.path().join("game"), "Test", ProjectTemplate::Empty3d).unwrap();
-        fs::create_dir_all(project.root().join("web/build")).unwrap();
-        fs::write(project.root().join("web/index.html"), "Hello").unwrap();
-        fs::write(project.root().join("web/build/script.js"), "ready()").unwrap();
-        let document = AuthoringDocument::open(project, false).unwrap();
-        let mut dialog = ProjectBuild {
-            settings: Settings {
-                target: Target::Website,
-                ..Settings::default()
-            },
-            ..ProjectBuild::default()
-        };
-        dialog.start(&document, egui::Context::default()).unwrap();
-        let output = dialog
-            .job
-            .take()
-            .unwrap()
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap()
-            .unwrap();
-        assert_eq!(
-            fs::read_to_string(output.join("website/index.html")).unwrap(),
-            "Hello"
-        );
-        assert!(output.join("website/build/script.js").is_file());
-        let saved: Settings = serde_json::from_slice(
-            &fs::read(document.project().root().join("config/build.json")).unwrap(),
-        )
-        .unwrap();
-        assert!(saved.target == Target::Website);
     }
 
     #[cfg(unix)]

@@ -1,0 +1,33 @@
+[package]
+name = "rustic-browser"
+description = "Direct browser game runtime using the shared Rustic simulation and renderer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+engine-core = { path = "../../crates/engine-core" }
+engine-play = { path = "../../crates/engine-play", default-features = false }
+engine-assets = { path = "../../crates/engine-assets" }
+renderer-wgpu = { path = "../../crates/renderer-wgpu" }
+serde.workspace = true
+serde_json.workspace = true
+resvg.workspace = true
+epaint_default_fonts = "0.36.1"
+engine-scripting = { path = "../../crates/engine-scripting" }
+
+# Exported Emscripten entry points require no_mangle. Only those attributes are
+# allowed below; the runtime contains no unsafe operations or raw-pointer API.
+[lints.rust]
+unsafe_code = "deny"
+unused_must_use = "deny"
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[target.'cfg(target_os = "emscripten")'.dependencies]
+rquickjs = { workspace = true, features = ["bindgen"] }
+
+[build-dependencies]
+cc = "1.4.4"

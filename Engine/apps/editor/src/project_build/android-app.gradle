@@ -1,0 +1,35 @@
+plugins { id 'com.android.application' version '8.13.1' }
+android {
+    namespace 'org.rustic.player'
+    compileSdk 36
+    buildToolsVersion '36.0.0'
+    defaultConfig {
+        applicationId '@APPLICATION_ID@'
+        minSdk 26
+        targetSdk 36
+        versionCode @VERSION_CODE@
+        versionName '@VERSION_NAME@'
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    def keystore = System.getenv('RUSTIC_ANDROID_KEYSTORE')
+    if (keystore) {
+        signingConfigs {
+            release {
+                storeFile file(keystore)
+                storePassword System.getenv('RUSTIC_ANDROID_STORE_PASSWORD')
+                keyAlias System.getenv('RUSTIC_ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('RUSTIC_ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (keystore) signingConfig signingConfigs.release
+        }
+    }
+}
+dependencies { implementation 'androidx.webkit:webkit:1.14.0' }

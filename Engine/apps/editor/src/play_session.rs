@@ -380,9 +380,15 @@ pub fn stage_snapshot(
     let manifest_path = document.project().root().join("config/scripts.ron");
     if manifest_path.is_file() {
         let manifest_bytes = std::fs::read(&manifest_path).map_err(|error| error.to_string())?;
-        let manifest = load_manifest(&manifest_bytes).map_err(|error| error.to_string())?;
-        programming.push(SnapshotInput::new("config/scripts.ron", manifest_bytes));
-        for entry in manifest.manifest.scripts {
+        let mut manifest = load_manifest(&manifest_bytes).map_err(|error| error.to_string())?;
+        for entry in &mut manifest.manifest.scripts {
+            entry.relative_path = entry
+                .relative_path
+                .components()
+                .map(|part| part.as_os_str().to_string_lossy())
+                .collect::<Vec<_>>()
+                .join("/")
+                .into();
             let path = document.project().root().join(&entry.relative_path);
             let bytes = match std::fs::read(&path) {
                 Ok(bytes) => bytes,
@@ -397,8 +403,14 @@ pub fn stage_snapshot(
                 &entry.relative_path.to_string_lossy(),
                 1024 * 1024,
             )?;
-            programming.push(SnapshotInput::new(entry.relative_path, bytes));
+            programming.push(SnapshotInput::new(entry.relative_path.clone(), bytes));
         }
+        programming.push(SnapshotInput::new(
+            "config/scripts.ron",
+            ron::ser::to_string(&manifest.manifest)
+                .map_err(|e| e.to_string())?
+                .into_bytes(),
+        ));
     }
     collect_snapshot_assets(document.project().root(), &mut programming)?;
     collect_snapshot_scenes(

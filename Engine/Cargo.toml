@@ -5,6 +5,7 @@ members = [
     "apps/editor",
     "apps/project-manager",
     "apps/runtime",
+    "apps/browser",
     "apps/setup-helper",
     "crates/engine-assets",
     "crates/engine-core",
@@ -65,7 +66,7 @@ toml_edit = "0.25.13"
 time = { version = "0.3.55", features = ["formatting", "local-offset", "macros"] }
 tobj = "4.0.3"
 uuid = { version = "1.26.0", features = ["serde", "v4"] }
-wgpu = { version = "30.0.1", default-features = false, features = ["dx12", "gles", "metal", "parking_lot", "std", "vulkan", "wgsl"] }
+wgpu = { version = "30.0.1", default-features = false, features = ["dx12", "gles", "metal", "parking_lot", "std", "vulkan", "wgsl", "fragile-send-sync-non-atomic-wasm"] }
 winit = { version = "0.30.13", default-features = false, features = ["rwh_06", "x11"] }
 
 [workspace.lints.rust]

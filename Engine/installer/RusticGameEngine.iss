@@ -69,6 +69,7 @@ Name: "addtopath"; Description: "Add the installation folder to PATH"; GroupDesc
 #endif
 
 [Files]
+Source: "..\LICENSES\Gradle-Apache-2.0.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\Luau-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\Symphonia-MPL-2.0.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\ogg-BSD-3-Clause.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
@@ -78,6 +79,7 @@ Source: "..\licenses\Audio-Decoders-NOTICE.md"; DestDir: "{app}\licenses"; Flags
 Source: "..\assets\icons\lucide\LICENSE"; DestDir: "{app}\licenses"; DestName: "Lucide-LICENSE.txt"; Flags: ignoreversion
 Source: "..\assets\icons\material-design\LICENSE"; DestDir: "{app}\licenses"; DestName: "Material-Design-Icons-LICENSE.txt"; Flags: ignoreversion
 #ifndef InstallerPreflight
+Source: "..\target\distribution\browser-runtime\*"; DestDir: "{app}\browser-runtime"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "..\target\distribution\rustic-luau-host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-agent-backend.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\distribution\rustic-setup-helper.exe"; DestDir: "{app}"; Flags: ignoreversion

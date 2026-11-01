@@ -104,6 +104,10 @@ try {
         --package rustic-setup-helper
     if ($LASTEXITCODE -ne 0) { throw "Cargo build failed with exit code $LASTEXITCODE." }
 
+    Write-Host 'Building the shared browser and Android game runtime...'
+    & python 'tools\build-browser-runtime.py' --install-sdk
+    if ($LASTEXITCODE -ne 0) { throw "Browser runtime build failed with exit code $LASTEXITCODE. Activate Emscripten SDK and provide libclang/Python first." }
+
     Write-Host 'Testing console-free installer launches...'
     & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-installer-launch.ps1' `
         -HelperPath 'target\distribution\rustic-setup-helper.exe' `

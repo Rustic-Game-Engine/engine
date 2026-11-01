@@ -6,6 +6,10 @@ edition.workspace = true
 rust-version.workspace = true
 publish = false
 
+[features]
+default = ["native"]
+native = ["dep:interprocess"]
+
 [dependencies]
 serde_json.workspace = true
 hound.workspace = true
@@ -14,7 +18,7 @@ engine-core = { path = "../engine-core", version = "0.1.0" }
 engine-scripting = { path = "../engine-scripting", version = "0.1.0" }
 engine-world = { path = "../engine-world", version = "0.1.0" }
 glam.workspace = true
-interprocess.workspace = true
+interprocess = { workspace = true, optional = true }
 ron.workspace = true
 serde.workspace = true
 sha2.workspace = true
