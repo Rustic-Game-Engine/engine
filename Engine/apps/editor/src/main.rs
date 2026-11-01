@@ -1597,9 +1597,13 @@ impl eframe::App for EditorApp {
                     .with_title("Rustic Inspector")
                     .with_inner_size([420.0, 640.0]),
                 move |ui, _class| {
-                    ui.heading("Inspector");
-                    ui.label(&selection);
-                    ui.label("The live editing inspector remains docked in the primary window.");
+                    ui_theme::workspace(ui, |ui| {
+                        ui.heading("Inspector");
+                        ui.label(&selection);
+                        ui.label(
+                            "The live editing inspector remains docked in the primary window.",
+                        );
+                    });
                 },
             );
         }
@@ -1628,7 +1632,7 @@ impl eframe::App for EditorApp {
             model_assets: &mut self.model_assets,
             project_file_action: &mut project_file_action,
         };
-        self.dock.ui(&mut viewer, ui);
+        ui_theme::workspace(ui, |ui| self.dock.ui(&mut viewer, ui));
         viewer.flush_play_input();
         let request_preview = viewer.request_preview;
         drop(viewer);
@@ -5639,7 +5643,9 @@ mod explorer_tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| dock.ui(&mut viewer, ui),
+                    |ui| {
+                        ui_theme::workspace(ui, |ui| dock.ui(&mut viewer, ui));
+                    },
                 );
                 output.textures_delta.clear();
                 output
