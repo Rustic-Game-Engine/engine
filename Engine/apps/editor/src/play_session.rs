@@ -20,6 +20,8 @@ pub struct EditorPlaySession {
     fixed_tick: u64,
     last_frame_request: std::time::Instant,
     held_keys: BTreeSet<String>,
+    agent_held_keys: BTreeSet<String>,
+    agent_keys_until: std::time::Instant,
     viewport_extent: Option<[u32; 2]>,
     live_entity: Option<LiveEntityProperties>,
     last_entity_request: std::time::Instant,
@@ -64,6 +66,8 @@ impl EditorPlaySession {
             fixed_tick: 0,
             last_frame_request: std::time::Instant::now(),
             held_keys: BTreeSet::new(),
+            agent_held_keys: BTreeSet::new(),
+            agent_keys_until: std::time::Instant::now(),
             viewport_extent: None,
             live_entity: None,
             last_entity_request: std::time::Instant::now()
@@ -119,6 +123,13 @@ impl EditorPlaySession {
             .reset_pointer_input()
             .map_err(|e| e.to_string())?;
         self.pointers.clear();
+        if request != ControlRequest::QueryState {
+            self.agent_held_keys.clear();
+            self.runtime
+                .set_input_keys(Vec::new())
+                .map_err(|e| e.to_string())?;
+            self.held_keys.clear();
+        }
         let ack = self
             .runtime
             .control(request, Duration::from_secs(2))
@@ -138,7 +149,19 @@ impl EditorPlaySession {
         Ok(())
     }
 
-    pub fn set_input_keys(&mut self, keys: BTreeSet<String>) -> Result<(), String> {
+    pub fn agent_keys(&mut self, keys: BTreeSet<String>, duration: Duration) -> Result<(), String> {
+        self.agent_held_keys = keys;
+        self.agent_keys_until = std::time::Instant::now() + duration;
+        self.set_input_keys(BTreeSet::new())
+    }
+
+    pub fn set_input_keys(&mut self, mut keys: BTreeSet<String>) -> Result<(), String> {
+        if std::time::Instant::now() < self.agent_keys_until {
+            keys.extend(self.agent_held_keys.iter().cloned());
+        } else {
+            self.agent_held_keys.clear();
+        }
+
         if !self.pointer_view_seen {
             self.runtime
                 .reset_pointer_input()

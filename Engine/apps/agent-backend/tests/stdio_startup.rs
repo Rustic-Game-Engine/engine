@@ -92,3 +92,46 @@ fn project_can_be_selected_after_connecting_and_file_tools_use_it() {
     assert_eq!(workspace["name"], "MCP game");
     assert!(responses[2]["result"].get("isError").is_none());
 }
+
+#[test]
+fn editor_calls_use_the_local_bridge_and_return_native_mcp_images() {
+    let temp = tempfile::tempdir().unwrap();
+    let project = Project::create(
+        temp.path().join("game"),
+        "Editor RPC",
+        ProjectTemplate::Blank,
+    )
+    .unwrap();
+    let root = project.root().canonicalize().unwrap();
+    let bridge = engine_scripting::AgentBridge::start(&root).unwrap();
+    let client = std::thread::spawn(move || {
+        exchange(
+            &root,
+            &[],
+            &[
+                json!({"id":1,"method":"tools/call","params":{"name":"viewport_capture","arguments":{}}}),
+            ],
+        )
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        if let Some(request) = bridge.try_recv() {
+            assert_eq!(request.tool, "viewport_capture");
+            request
+                .reply
+                .send(Ok(json!({"sequence":7,"image_base64":"iVBORw0KGgo="})))
+                .unwrap();
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline);
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    let response = client.join().unwrap();
+    let content = response[0]["result"]["content"].as_array().unwrap();
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mimeType"], "image/png");
+    assert_eq!(content[1]["data"], "iVBORw0KGgo=");
+    let metadata: Value = serde_json::from_str(content[0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(metadata["sequence"], 7);
+    assert!(metadata.get("image_base64").is_none());
+}

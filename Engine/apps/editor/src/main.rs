@@ -1,3 +1,4 @@
+mod agent_tools;
 mod explorer_selection;
 mod play_session;
 mod pointer_input;
@@ -129,6 +130,9 @@ fn app_icon() -> egui::IconData {
     reason = "independent editor panel and interaction flags are not mutually exclusive states"
 )]
 struct EditorApp {
+    agent_bridge: Option<engine_scripting::AgentBridge>,
+    agent_frame: Option<(u32, u32, Vec<u8>, u64)>,
+    agent_frame_sequence: u64,
     project_build: project_build::ProjectBuild,
     updates: engine_desktop::DesktopUpdates,
     update_close_requested: bool,
@@ -152,7 +156,7 @@ struct EditorApp {
     project_filter: String,
     preview: Option<egui::TextureHandle>,
     viewport_request: SyncSender<ViewportRenderRequest>,
-    preview_result: Receiver<Result<Option<RenderedFrame>, String>>,
+    preview_result: Receiver<ViewportRenderResult>,
     preview_status: String,
     preview_dirty: bool,
     camera: EditorCamera,
@@ -239,7 +243,17 @@ impl EditorApp {
         let autosave_enabled = game_settings.autosave;
         let missing_dependencies = missing_project_dependencies(document.project().root());
         let show_dependency_prompt = !missing_dependencies.is_empty();
+        let agent_bridge = if read_only {
+            None
+        } else {
+            Some(engine_scripting::AgentBridge::start(
+                document.project().root(),
+            )?)
+        };
         let mut app = Self {
+            agent_bridge,
+            agent_frame: None,
+            agent_frame_sequence: 0,
             project_build: project_build::ProjectBuild::default(),
             updates: engine_desktop::DesktopUpdates::default(),
             update_close_requested: false,
@@ -344,6 +358,7 @@ impl EditorApp {
         if self.play.is_some() {
             return;
         }
+        self.agent_frame = None;
         self.preview_dirty = true;
         let scene = viewport_scene(
             &self.document,
@@ -353,12 +368,14 @@ impl EditorApp {
             &self.model_assets,
         );
         let request = ViewportRenderRequest {
+            sequence: self.agent_frame_sequence + 1,
             width: self.viewport_extent[0],
             height: self.viewport_extent[1],
             scene,
         };
         match self.viewport_request.try_send(request) {
             Ok(()) => {
+                self.agent_frame_sequence += 1;
                 self.preview_dirty = false;
                 "Rendering active scene…".clone_into(&mut self.preview_status);
             }
@@ -393,9 +410,11 @@ impl EditorApp {
         // Completion notifications can coalesce into one UI repaint. Consume the
         // newest result so an older extent cannot hide the finished resize.
         let preview = self.preview_result.try_iter().last();
-        if let Some(result) = preview.filter(|_| self.play.is_none()) {
+        if let Some((sequence, result)) = preview.filter(|_| self.play.is_none()) {
             match result {
                 Ok(Some(frame)) => {
+                    self.agent_frame =
+                        Some((frame.width, frame.height, frame.rgba8.clone(), sequence));
                     let image = egui::ColorImage::from_rgba_unmultiplied(
                         [frame.width as usize, frame.height as usize],
                         &frame.rgba8,
@@ -425,6 +444,9 @@ impl EditorApp {
                 self.refresh_preview();
             }
         }
+        if self.preview_dirty && self.play.is_none() {
+            self.refresh_preview();
+        }
         if self.preview_status == "Rendering active scene…" {
             context.request_repaint_after(std::time::Duration::from_millis(16));
         }
@@ -435,6 +457,7 @@ impl EditorApp {
                 for pixel in rgba.as_chunks_mut::<4>().0 {
                     pixel.swap(0, 2);
                 }
+                self.agent_frame = Some((frame.width, frame.height, rgba.clone(), frame.sequence));
                 let image = egui::ColorImage::from_rgba_unmultiplied(
                     [
                         usize::try_from(frame.width).unwrap_or_default(),
@@ -1575,6 +1598,7 @@ impl eframe::App for EditorApp {
                 .push(simple_console(Severity::Error, "gizmo", error.to_string()));
         }
         self.poll_background(ui.ctx());
+        self.poll_agent_tools(ui.ctx());
         let title = format!(
             "{} — Rustic Editor",
             self.document.project().metadata().name
@@ -3194,7 +3218,10 @@ mod gizmo_drag_tests {
     }
 }
 
+type ViewportRenderResult = (u64, Result<Option<RenderedFrame>, String>);
+
 struct ViewportRenderRequest {
+    sequence: u64,
     width: u32,
     height: u32,
     scene: ViewportScene,
@@ -3205,7 +3232,7 @@ fn spawn_viewport_renderer(
     context: egui::Context,
 ) -> (
     SyncSender<ViewportRenderRequest>,
-    Receiver<Result<Option<RenderedFrame>, String>>,
+    Receiver<ViewportRenderResult>,
 ) {
     let (request_sender, request_receiver) = mpsc::sync_channel::<ViewportRenderRequest>(1);
     let (result_sender, result_receiver) = mpsc::sync_channel(2);
@@ -3215,7 +3242,7 @@ fn spawn_viewport_renderer(
             let mut renderer = match SceneViewportRenderer::new(BackendRequest::Auto) {
                 Ok(renderer) => renderer,
                 Err(error) => {
-                    let _ = result_sender.send(Err(error.to_string()));
+                    let _ = result_sender.send((0, Err(error.to_string())));
                     context.request_repaint();
                     return;
                 }
@@ -3229,7 +3256,7 @@ fn spawn_viewport_renderer(
                 let result = renderer
                     .render(request.width, request.height, &request.scene)
                     .map_err(|error| error.to_string());
-                if result_sender.send(result).is_err() {
+                if result_sender.send((request.sequence, result)).is_err() {
                     break;
                 }
                 context.request_repaint();

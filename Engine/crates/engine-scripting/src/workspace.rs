@@ -202,6 +202,13 @@ fn generate_agent_integrations(
     generate_agent_integrations_at(project_root, project_name, &storage, files)
 }
 
+fn with_authoring_guide(skill: &str) -> String {
+    format!(
+        "{skill}\nRead `authoring_guide` before building game content.\n\n{}",
+        crate::AGENT_AUTHORING_GUIDE
+    )
+}
+
 fn generate_agent_integrations_at(
     project_root: &Path,
     project_name: &str,
@@ -269,6 +276,7 @@ description: Work on the {project_name} Rustic Game Engine project; use when ask
 Use `workspace_info` to confirm the project root, then `read_agent_file` with path `AGENTS.md` or `CLAUDE.md` for repository routing. Use `list_agent_files`, `read_agent_file`, and `write_agent_file` to inspect or edit project agent information stored in Rustic editor app data. Use `scene_summary` rather than guessing the contents of a `.scene` file. Keep game code and content within this project unless the user explicitly asks to modify the engine source.
 "
     );
+    let skill = with_authoring_guide(&skill);
     let codex_skill_file = codex_skill.join("SKILL.md");
     let claude_skill_file = claude_skill.join("SKILL.md");
     write_agent_default(files, &codex_skill_file, skill.as_bytes())?;
@@ -395,6 +403,7 @@ description: Control and inspect the Rustic Game Engine project in the current w
 
 Use the `rustic-workspace` MCP tools first to identify the active project root, inspect scenes, and locate engine documentation. Read project instructions with `read_agent_file` (`AGENTS.md` or `CLAUDE.md`). Agent information lives in Rustic editor app data; inspect or edit it with `list_agent_files`, `read_agent_file`, and `write_agent_file`. Keep game content in the project reported by `workspace_info`. Only edit the engine source repository when the user explicitly requests engine changes. Use `scene_summary` before changing a scene rather than guessing its serialized structure.
 ";
+    let skill = with_authoring_guide(skill);
     let codex_skill = storage.join(".agents/skills/rustic-workspace");
     let claude_skill = storage.join(".claude/skills/rustic-workspace");
     let claude_command = storage.join(".claude/commands");
@@ -458,7 +467,7 @@ Use the `rustic-workspace` MCP tools first to identify the active project root, 
     update_codex_mcp(&home.join(".codex/config.toml"), backend, files)?;
     update_claude_mcp(&home.join(".claude.json"), backend, files)?;
     // Agent clients discover skills in their own profile; keep only a small MCP entry point there.
-    let discovery = "---\nname: rustic-workspace\ndescription: Inspect and edit Rustic game projects through the Rustic MCP server.\n---\n\n# Rustic app-data discovery entry\n\nCall `workspace_info` first. Read project instructions with `read_agent_file` and path `AGENTS.md` or `CLAUDE.md`. Read the full skill with `read_agent_file`, scope `user`, and path `.agents/skills/rustic-workspace/SKILL.md` (Codex) or `.claude/skills/rustic-workspace/SKILL.md` (Claude). Use `list_agent_files` and `write_agent_file` to inspect or edit stored agent information; scope defaults to `project`. Keep game content in the reported project root. Only change engine source when the user explicitly requests it. Use `scene_summary` before editing scenes.\n";
+    let discovery = "---\nname: rustic-workspace\ndescription: Inspect and edit Rustic game projects through the Rustic MCP server.\n---\n\n# Rustic app-data discovery entry\n\nCall `workspace_info` first. Read project instructions with `read_agent_file` and path `AGENTS.md` or `CLAUDE.md`. Read the full skill with `read_agent_file`, scope `user`, and path `.agents/skills/rustic-workspace/SKILL.md` (Codex) or `.claude/skills/rustic-workspace/SKILL.md` (Claude). Use `list_agent_files` and `write_agent_file` to inspect or edit stored agent information; scope defaults to `project`. Keep game content in the reported project root. Only change engine source when the user explicitly requests it. Use `scene_summary` before editing scenes. Call `authoring_guide` for current modeling, game design, scene, script scope and playtest guidance.\n";
     for directory in [
         home.join(".agents/skills/rustic-workspace"),
         home.join(".claude/skills/rustic-workspace"),

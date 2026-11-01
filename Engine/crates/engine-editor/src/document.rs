@@ -239,6 +239,25 @@ impl AuthoringDocument {
         &self.world
     }
 
+    /// Apply one validated undoable batch from an authoring integration.
+    /// # Errors
+    /// Rejects read-only documents or invalid world commands without partial edits.
+    pub fn edit_transaction(
+        &mut self,
+        label: &str,
+        edits: Vec<SceneEdit>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        self.undo.execute(
+            &mut self.world,
+            SceneEdit::Transaction {
+                label: label.into(),
+                edits,
+            },
+        )?;
+        Ok(())
+    }
+
     pub fn selected(&self) -> Option<EntityId> {
         self.selected
     }
@@ -254,6 +273,7 @@ impl AuthoringDocument {
         scripts: Vec<ScriptReference>,
     ) -> Result<(), AuthoringError> {
         self.ensure_writable()?;
+        self.script_links_modified |= self.scene_startup_scripts != scripts;
         self.scene_startup_scripts = scripts;
         Ok(())
     }
@@ -1667,5 +1687,107 @@ mod tests {
                 .translation,
             Vec3::ZERO
         );
+    }
+}
+
+#[cfg(test)]
+mod agent_authoring_tests {
+    use super::*;
+    use engine_project::ProjectTemplate;
+    #[test]
+    fn creates_switches_and_persists_scene_and_scoped_scripts() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temp.path().join("game"),
+            "Agent game",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document
+            .create_scene(Path::new("levels/forest.scene"), "Forest")
+            .unwrap();
+        assert!(
+            document
+                .create_scene(Path::new("levels/forest.scene"), "Overwrite")
+                .is_err()
+        );
+        assert!(
+            document
+                .create_scene(Path::new("../escape.scene"), "Escape")
+                .is_err()
+        );
+        document.switch_scene("levels/forest.scene").unwrap();
+        let object = EntitySnapshot {
+            name: Some("Tree".into()),
+            ..Default::default()
+        };
+        let id = object.id;
+        document
+            .edit_transaction("Agent model", vec![SceneEdit::Create { snapshot: object }])
+            .unwrap();
+        let before = document.world().snapshot(id).unwrap().local_transform;
+        let after = LocalTransform {
+            translation: glam::Vec3::new(2.0, 0.0, 0.0),
+            ..before
+        };
+        document
+            .edit_transaction(
+                "Agent transform",
+                vec![SceneEdit::Transform {
+                    entity: id,
+                    before,
+                    after,
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            document.world().snapshot(id).unwrap().local_transform,
+            after
+        );
+        assert!(document.undo().unwrap());
+        assert_eq!(
+            document.world().snapshot(id).unwrap().local_transform,
+            before
+        );
+        let invalid = LocalTransform {
+            scale: glam::Vec3::ZERO,
+            ..before
+        };
+        assert!(
+            document
+                .edit_transaction(
+                    "Invalid batch",
+                    vec![
+                        SceneEdit::Name {
+                            entity: id,
+                            before: Some("Tree".into()),
+                            after: Some("Lost".into())
+                        },
+                        SceneEdit::Transform {
+                            entity: id,
+                            before,
+                            after: invalid
+                        }
+                    ]
+                )
+                .is_err()
+        );
+        assert_eq!(
+            document.world().snapshot(id).unwrap().name.as_deref(),
+            Some("Tree")
+        );
+        document.save().unwrap();
+        document
+            .set_scene_startup_scripts(vec![ScriptReference::new(ScriptId::new())])
+            .unwrap();
+        assert!(document.is_modified());
+        document
+            .create_scene(Path::new("other.scene"), "Other")
+            .unwrap();
+        document.switch_scene("other.scene").unwrap();
+        document.switch_scene("levels/forest.scene").unwrap();
+        assert_eq!(document.scene_startup_scripts().len(), 1);
+        assert!(document.world().contains(id));
     }
 }
