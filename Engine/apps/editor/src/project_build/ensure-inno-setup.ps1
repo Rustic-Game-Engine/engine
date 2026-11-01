@@ -49,8 +49,8 @@ function Install-InnoCompiler {
             -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' `
             -OutFile $installer
         $signature = Get-AuthenticodeSignature -LiteralPath $installer
-        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Jordan Russell(?:,|$)') {
-            throw 'The Inno Setup download does not have a valid Jordan Russell signature.'
+        if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'CN=Pyrsys B\.V\.(?:,|$)') {
+            throw 'The Inno Setup download does not have a valid Pyrsys B.V. signature.'
         }
         $process = Start-Process -FilePath $installer -ArgumentList @(
             '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', "/DIR=`"$root`""

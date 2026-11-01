@@ -30,7 +30,7 @@ try {
     $script:Downloads = 0
     $script:Installs = 0
     $script:Signature = 'Valid'
-    $script:Signer = 'CN=Jordan Russell, O=Jordan Russell'
+    $script:Signer = 'CN=Pyrsys B.V., O=Pyrsys B.V.'
     $script:ExitCode = 0
     function Invoke-WebRequest {
         param($Uri, $OutFile, $TimeoutSec, [switch]$UseBasicParsing)
@@ -57,7 +57,7 @@ try {
     $script:Signer = 'CN=Unrelated Publisher'
     Assert-Throws { Install-InnoCompiler } 'Reject a different signed publisher'
     Assert-Equal $script:Installs 0 'Foreign installer must never execute'
-    $script:Signer = 'CN=Jordan Russell, O=Jordan Russell'
+    $script:Signer = 'CN=Pyrsys B.V., O=Pyrsys B.V.'
     $script:ExitCode = 5
     Assert-Throws { Install-InnoCompiler } 'Report installation failures'
     $script:ExitCode = 0
