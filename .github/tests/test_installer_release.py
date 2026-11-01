@@ -184,14 +184,63 @@ class DiscussionTests(unittest.TestCase):
         self.assertIn(f"[Updated documentation]({url})", body)
         self.assertNotIn("/pull/", body)
 
-    def test_documentation_none_is_explicit_and_missing_mapping_fails(self):
+    def test_documentation_none_is_explicit_and_missing_mapping_warns(self):
         self.assertEqual(release.documentation_links({"body": "Documentation: none"}), [])
-        for body in (None, "", "Unrelated docs link: " + release.DOCS_ROOT + "engine",
+        for body in (None, "", "Documentation:",
                      "Documentation: https://github.com/example/docs/pull/123",
-                     "Documentation: https://unrelated.example/docs/engine",
-                     "Documentation: none\nDocumentation: " + release.DOCS_ROOT + "engine"):
-            with self.subTest(body=body), self.assertRaisesRegex(ValueError, "Documentation"):
-                release.documentation_links({"body": body})
+                     "Documentation: https://unrelated.example/docs/engine"):
+            with self.subTest(body=body), patch("builtins.print") as output:
+                self.assertEqual(release.documentation_links({"body": body}), [])
+                self.assertIn("::warning::", output.call_args.args[0])
+
+    def test_ordinary_documentation_links_work_without_metadata(self):
+        url = release.DOCS_ROOT + "guides/gameplay-programming#hot-reload"
+        self.assertEqual(release.documentation_links({"body": f"Read [the guide]({url})."}), [url])
+        self.assertEqual(release.documentation_links({"body": (
+            f"Read [the guide]({url}).\nDocumentation: none"
+        )}), [])
+
+    def test_explicit_mapping_takes_precedence_and_keeps_valid_pages(self):
+        url = release.DOCS_ROOT + "engine"
+        self.assertEqual(release.documentation_links({"body": (
+            f"Unrelated: {release.DOCS_ROOT}api/overview\n"
+            f"Documentation: none\nDocumentation: {url}\nDocumentation: broken"
+        )}), [url])
+
+    def test_publication_without_docs_metadata_announces_after_upload_and_copies_labels(self):
+        fixture = InstallerReleaseTests()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        pr = fixture.pr | self.pr | {"body": "Fix toolbar hover flicker.",
+                                    "base": fixture.pr["base"] | self.pr["base"],
+                                    "labels": [{"node_id": "fix"}]}
+        responses = [self.repository, self.page(), {"createDiscussion": {
+            "discussion": {"id": "discussion", "url": "url"}
+        }}, {}]
+        sequence = []
+
+        def gh(*args):
+            sequence.append(args[:2])
+            return ""
+
+        def graphql(query, **variables):
+            sequence.append(("graphql", query))
+            return responses.pop(0)
+
+        with patch.object(release, "api_list", side_effect=[[pr], [], [self.file]]), \
+                patch.object(release, "gh", side_effect=gh), \
+                patch.object(release, "graphql", side_effect=graphql) as api:
+            release.publish(REPOSITORY, fixture.run, fixture.temp.name)
+        self.assertEqual(sequence[:3], [("release", "create"), ("release", "upload"),
+                                        ("release", "edit")])
+        announcement = api.call_args_list[2].kwargs["body"]
+        self.assertIn(fixture.installer.name, announcement)
+        self.assertIn("Fix editor startup", announcement)
+        self.assertIn("Diff preview", announcement)
+        self.assertNotIn("/pull/", announcement)
+        self.assertNotIn("Updated documentation", announcement)
+        self.assertIn("addLabelsToLabelable", api.call_args.args[0])
+        self.assertEqual(api.call_args.kwargs["labels"], ["fix"])
 
     def test_large_and_binary_diffs_have_full_diff_links(self):
         files = [self.file | {"filename": f"file-{i}", "patch": "x" * 10000}
