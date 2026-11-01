@@ -83,6 +83,12 @@ pub(super) fn export_website(
         destination.join("rustic-browser.js"),
     )
     .map_err(|e| e.to_string())?;
+    fs::write(
+        destination.join("Ubuntu-Font-Licence.txt"),
+        include_bytes!("../../../../LICENSES/Ubuntu-Font-Licence.txt"),
+    )
+    .map_err(|e| e.to_string())?;
+    fs::write(destination.join("Font-Copyright.txt"), "Ubuntu font: Copyright 2011 Canonical Ltd. Licensed under the Ubuntu Font Licence 1.0; see Ubuntu-Font-Licence.txt.\n").map_err(|e| e.to_string())?;
     fs::write(destination.join("index.html"), include_str!("player.html"))
         .map_err(|e| e.to_string())?;
     fs::write(destination.join("player.js"), include_str!("player.js"))

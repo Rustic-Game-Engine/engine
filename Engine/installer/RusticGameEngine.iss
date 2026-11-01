@@ -69,6 +69,7 @@ Name: "addtopath"; Description: "Add the installation folder to PATH"; GroupDesc
 #endif
 
 [Files]
+Source: "..\LICENSES\Ubuntu-Font-Licence.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\LICENSES\Gradle-Apache-2.0.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\Luau-LICENSE.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
 Source: "..\licenses\Symphonia-MPL-2.0.txt"; DestDir: "{app}\licenses"; Flags: ignoreversion
