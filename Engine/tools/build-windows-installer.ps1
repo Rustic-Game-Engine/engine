@@ -95,6 +95,10 @@ try {
     $buildCommit = (& git rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or $buildCommit -notmatch '^[0-9a-f]{40}$') { throw 'Could not determine the build commit.' }
 
+    Write-Host 'Building the shared browser and Android game runtime...'
+    & python 'tools\build-browser-runtime.py' --install-sdk
+    if ($LASTEXITCODE -ne 0) { throw "Browser runtime build failed with exit code $LASTEXITCODE. Activate Emscripten SDK and provide libclang/Python first." }
+
     Write-Host 'Building bundled Luau API host...'
     & $cargo build --locked --manifest-path 'apps/luau-host/Cargo.toml' --profile distribution --target-dir 'target'
     if ($LASTEXITCODE -ne 0) { throw "Luau host build failed with exit code $LASTEXITCODE." }
@@ -107,10 +111,6 @@ try {
         --package rustic-agent-backend `
         --package rustic-setup-helper
     if ($LASTEXITCODE -ne 0) { throw "Cargo build failed with exit code $LASTEXITCODE." }
-
-    Write-Host 'Building the shared browser and Android game runtime...'
-    & python 'tools\build-browser-runtime.py' --install-sdk
-    if ($LASTEXITCODE -ne 0) { throw "Browser runtime build failed with exit code $LASTEXITCODE. Activate Emscripten SDK and provide libclang/Python first." }
 
     Write-Host 'Testing console-free installer launches...'
     & powershell -NoProfile -ExecutionPolicy Bypass -File 'tools\test-installer-launch.ps1' `

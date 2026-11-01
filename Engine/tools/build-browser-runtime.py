@@ -14,6 +14,20 @@ def bindgen_sysroot_arguments(sysroot):
     return shlex.join(['--sysroot=' + sysroot.as_posix()])
 
 
+def emscripten_tool_environment(resolve_tool=None):
+    resolve_tool = resolve_tool or shutil.which
+    environment = {}
+    for variable, command in [('CC', 'emcc'), ('CXX', 'em++'), ('AR', 'emar')]:
+        executable = resolve_tool(command)
+        if executable is None:
+            raise RuntimeError(f'Emscripten SDK tool is missing: {command}')
+        # cc-rs otherwise guesses legacy .bat names on Windows. SDK launchers
+        # may instead be executables, and their directories can contain spaces.
+        environment[f'{variable}_wasm32_unknown_emscripten'] = str(Path(executable).resolve())
+    environment['CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_LINKER'] = environment['CXX_wasm32_unknown_emscripten']
+    return environment
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--profile', default='distribution')
@@ -59,7 +73,7 @@ def main():
         flags.extend(['-C', f'link-arg={option}'])
     environment['CARGO_ENCODED_RUSTFLAGS'] = '\x1f'.join(flags[:2])
     environment['CARGO_INCREMENTAL'] = '0'
-    environment['CARGO_TARGET_WASM32_UNKNOWN_EMSCRIPTEN_LINKER'] = 'em++'
+    environment.update(emscripten_tool_environment())
     environment['CXXFLAGS_wasm32_unknown_emscripten'] = '-fwasm-exceptions'
     environment.setdefault('BINDGEN_EXTRA_CLANG_ARGS', bindgen_sysroot_arguments(Path(shutil.which('emcc')).resolve().parent / 'cache' / 'sysroot'))
     environment[f'CARGO_PROFILE_{args.profile.upper().replace("-", "_")}_LTO'] = 'false'
