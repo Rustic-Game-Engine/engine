@@ -151,9 +151,9 @@ impl ProjectBuild {
                                     field(ui, "Version", &mut self.settings.version);
                                     field(ui, "Publisher", &mut self.settings.publisher);
                                     field(ui, "Welcome message", &mut self.settings.welcome);
-                                    field(ui, "License file (project relative, optional)", &mut self.settings.license);
-                                    field(ui, "Setup icon (.ico, project relative, optional)", &mut self.settings.icon);
-                                    field(ui, "Wizard image (.bmp, project relative, optional)", &mut self.settings.banner);
+                                    project_file_field(ui, "License file (project relative, optional)", &mut self.settings.license, root, ("Plain text license", &["txt"]), &mut self.status);
+                                    project_file_field(ui, "Setup icon (.ico, project relative, optional)", &mut self.settings.icon, root, ("Setup icon", &["ico"]), &mut self.status);
+                                    project_file_field(ui, "Wizard image (.bmp, project relative, optional)", &mut self.settings.banner, root, ("Wizard image", &["bmp"]), &mut self.status);
                                     ui.checkbox(&mut self.settings.modern, "Modern wizard style");
                                     ui.checkbox(&mut self.settings.desktop_shortcut, "Offer desktop shortcut");
                                     field(ui, "Inno Setup compiler (ISCC.exe path)", &mut self.settings.compiler);
@@ -271,6 +271,45 @@ impl ProjectBuild {
 fn field(ui: &mut egui::Ui, label: &str, value: &mut String) {
     ui.label(label);
     ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
+}
+
+fn project_file_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut String,
+    root: &Path,
+    filter: (&str, &[&str]),
+    status: &mut String,
+) {
+    ui.label(label);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Browse…").clicked()
+                && let Some(path) = rfd::FileDialog::new()
+                    .set_title(label)
+                    .set_directory(root)
+                    .add_filter(filter.0, filter.1)
+                    .pick_file()
+            {
+                let selected = root
+                    .canonicalize()
+                    .and_then(|root| path.canonicalize().map(|path| (root, path)));
+                match selected {
+                    Ok((root, path)) => match path.strip_prefix(root) {
+                        Ok(relative) => match relative.to_str() {
+                            Some(relative) => *value = relative.replace('\\', "/"),
+                            None => *status = "Choose a file with a Unicode path.".into(),
+                        },
+                        Err(_) => {
+                            *status = "Copy the selected file into your project folder first, then browse to it again.".into();
+                        }
+                    },
+                    Err(error) => *status = format!("Could not select file: {error}"),
+                }
+            }
+            ui.add(egui::TextEdit::singleline(value).desired_width(f32::INFINITY));
+        });
+    });
 }
 
 fn project_path(root: &Path, relative: &str) -> Result<PathBuf, String> {
