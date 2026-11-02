@@ -1,6 +1,7 @@
 //! Concrete wgpu backend. No type from the implementation dependency appears in the public API.
 
 mod sky;
+mod surface;
 
 use engine_rhi::{
     BindingKind, RendererBackend, ShaderBinding, ShaderReflection, ShaderStage, SurfaceLifecycle,
@@ -76,57 +77,131 @@ struct Light {
     cone: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
+struct Surface { uv: vec4<f32>, strength: vec4<f32>, mask: vec4<u32> };
+@group(1) @binding(0) var maps: texture_2d_array<f32>;
+@group(1) @binding(1) var map_sampler: sampler;
+@group(1) @binding(2) var<uniform> surface: Surface;
+fn has_map(layer: u32) -> bool { return (surface.mask.x & (1u << layer)) != 0u; }
+fn sample_map(layer: u32, uv: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
+    if !has_map(layer) { return fallback; }
+    return textureSampleLevel(maps, map_sampler, uv, i32(layer), 0.0);
+}
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) normal: vec3<f32>,
     @location(1) world_position: vec3<f32>,
+    @location(2) uv: vec2<f32>,
 };
 @vertex fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.position = uniforms.model_view_projection * vec4<f32>(input.position, 1.0);
+    output.uv = input.uv * surface.uv.xy + surface.uv.zw;
+    var position = input.position;
+    if uniforms.lighting.y < 0.5 && has_map(5u) {
+        position += input.normal * (sample_map(5u, output.uv, vec4<f32>(0.5)).r - 0.5) * surface.strength.x;
+    }
+    output.position = uniforms.model_view_projection * vec4<f32>(position, 1.0);
     output.normal = normalize((uniforms.normal_matrix * vec4<f32>(input.normal, 0.0)).xyz);
-    output.world_position = (uniforms.model * vec4<f32>(input.position, 1.0)).xyz;
+    output.world_position = (uniforms.model * vec4<f32>(position, 1.0)).xyz;
     return output;
 }
 fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), color * 12.92, color <= vec3<f32>(0.0031308));
 }
+// Derivative tangent frame supports authored UVs, mirrored islands and meshes without tangents.
+fn mapped_normal(uv: vec2<f32>, normal: vec3<f32>, position: vec3<f32>, layer: u32) -> vec3<f32> {
+    let p1 = dpdx(position); let p2 = dpdy(position);
+    let t1 = dpdx(uv); let t2 = dpdy(uv);
+    let determinant = t1.x * t2.y - t1.y * t2.x;
+    let tangent = (p1 * t2.y - p2 * t1.y) * sign(determinant);
+    let bitangent = (-p1 * t2.x + p2 * t1.x) * sign(determinant);
+    let scale = max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 0.000001);
+    let detail = sample_map(layer, uv, vec4<f32>(0.5, 0.5, 1.0, 1.0)).xyz * 2.0 - 1.0;
+    return normalize(tangent * inverseSqrt(scale) * detail.x + bitangent * inverseSqrt(scale) * detail.y + normal * detail.z);
+}
+fn fresnel(f0: vec3<f32>, cosine: f32) -> vec3<f32> {
+    return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - cosine, 0.0, 1.0), 5.0);
+}
+fn brdf(n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, uv: vec2<f32>, base: vec3<f32>) -> vec3<f32> {
+    let h = normalize(v + l + vec3<f32>(0.000001));
+    let nv = max(dot(n, v), 0.001); let nl = max(dot(n, l), 0.0); let nh = max(dot(n, h), 0.0);
+    let rough = clamp(sample_map(2u, uv, vec4<f32>(0.5)).r, 0.04, 1.0);
+    let metallic = clamp(sample_map(3u, uv, vec4<f32>(0.0)).r, 0.0, 1.0);
+    let specular = max(sample_map(14u, uv, vec4<f32>(1.0)).r, 0.0);
+    let spec_color = sample_map(15u, uv, vec4<f32>(1.0)).rgb;
+    let f = fresnel(mix(0.04 * specular * spec_color, base, metallic), max(dot(h, v), 0.0));
+    let anisotropy_map = sample_map(16u, uv, vec4<f32>(1.0, 0.5, 0.0, 1.0));
+    let anisotropy = clamp(anisotropy_map.b, 0.0, 0.95);
+    // Red/green encode a tangent-space direction; blue encodes strength.
+    let direction = anisotropy_map.rg * 2.0 - 1.0;
+    let axis = normalize(select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.9));
+    let tangent = normalize(cross(axis, n)); let bitangent = cross(n, tangent);
+    let along = tangent * direction.x + bitangent * direction.y;
+    let stretched = max(0.04, rough * (1.0 - anisotropy * abs(dot(h, along))));
+    let a2 = pow(stretched, 4.0);
+    let denom = nh * nh * (a2 - 1.0) + 1.0;
+    let distribution = a2 / max(3.14159265 * denom * denom, 0.000001);
+    let k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    let geometry = nv / (nv * (1.0-k)+k) * nl / max(nl * (1.0-k)+k, 0.001);
+    let transmission = clamp(sample_map(10u, uv, vec4<f32>(0.0)).r, 0.0, 1.0);
+    let thickness = max(sample_map(11u, uv, vec4<f32>(0.0)).r, 0.0);
+    var result = ((vec3<f32>(1.0)-f) * (1.0-metallic) * (1.0-transmission) * base / 3.14159265
+        + distribution * geometry * f / max(4.0 * nv * nl, 0.001)) * nl;
+    // Thin-surface transmitted light with Beer-Lambert absorption.
+    result += base * exp(-thickness * (vec3<f32>(1.0)-base)) * transmission * (1.0-metallic) * max(dot(-n,l),0.0);
+    let sheen = sample_map(12u, uv, vec4<f32>(0.0)).rgb;
+    let sheen_rough = clamp(sample_map(13u, uv, vec4<f32>(0.5)).r, 0.04, 1.0);
+    result += sheen * pow(1.0-max(dot(h,v),0.0), mix(10.0,2.0,sheen_rough)) * nl;
+    let coat = clamp(sample_map(7u, uv, vec4<f32>(0.0)).r,0.0,1.0);
+    let coat_rough = clamp(sample_map(8u, uv, vec4<f32>(0.1)).r,0.04,1.0);
+    let coat_nh = max(dot(coat_n,h),0.0); let coat_a2 = pow(coat_rough,4.0);
+    let coat_d = coat_nh*coat_nh*(coat_a2-1.0)+1.0;
+    let coat_f = fresnel(vec3<f32>(0.04),max(dot(h,v),0.0));
+    result *= vec3<f32>(1.0)-coat*coat_f;
+    result += coat * coat_f * coat_a2 / max(3.14159265*coat_d*coat_d*4.0*nv,0.001) * max(dot(coat_n,l),0.0);
+    return result;
+}
 @fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+    let geometric = normalize(input.normal);
+    let n = mapped_normal(input.uv, geometric, input.world_position, 1u);
+    let coat_n = mapped_normal(input.uv, geometric, input.world_position, 9u);
     if uniforms.lighting.y > 0.5 { return uniforms.color; }
-    var illumination = uniforms.ambient.rgb * uniforms.ambient.w;
-    illumination += uniforms.sun.rgb * uniforms.sun.w * max(dot(normalize(input.normal), uniforms.sun_direction.xyz), 0.0);
+    let color = uniforms.color * sample_map(0u, input.uv, vec4<f32>(1.0));
+    let v = normalize(uniforms.camera.xyz-input.world_position+vec3<f32>(0.000001));
+    let ao = clamp(sample_map(4u,input.uv,vec4<f32>(1.0)).r,0.0,1.0);
+    var radiance = color.rgb * uniforms.ambient.rgb * uniforms.ambient.w * ao;
+    let pbr = surface.mask.x != 0u;
+    var sun_response = color.rgb * max(dot(n,uniforms.sun_direction.xyz),0.0);
+    if pbr { sun_response = brdf(n,coat_n,v,uniforms.sun_direction.xyz,input.uv,color.rgb); }
+    radiance += uniforms.sun.rgb * uniforms.sun.w * sun_response;
     for (var i = 0u; i < u32(uniforms.lighting.x); i += 1u) {
         let light = uniforms.lights[i];
         var direction = -light.direction_range.xyz;
         var attenuation = 1.0;
         if light.position_kind.w > 0.5 {
-            let offset = light.position_kind.xyz - input.world_position;
+            let offset = light.position_kind.xyz-input.world_position;
             let distance = length(offset);
-            direction = offset / max(distance, 0.0001);
-            // Inverse-square irradiance, with a smooth finite-range cutoff.
-            // Clamp only the near-field singularity (0.1 world units).
-            let relative_distance = distance / max(light.direction_range.w, 0.0001);
-            let relative_distance_squared = relative_distance * relative_distance;
-            let cutoff = max(1.0 - relative_distance_squared * relative_distance_squared, 0.0);
-            attenuation = cutoff * cutoff / max(dot(offset, offset), 0.01);
+            direction = offset/max(distance,0.0001);
+            let relative_distance = distance/max(light.direction_range.w,0.0001);
+            let cutoff = max(1.0-pow(relative_distance,4.0),0.0);
+            attenuation = cutoff*cutoff/max(dot(offset,offset),0.01);
             if light.position_kind.w > 1.5 {
-                let cosine = dot(-direction, light.direction_range.xyz);
-                attenuation *= smoothstep(light.cone.x, light.cone.y, cosine);
+                attenuation *= smoothstep(light.cone.x,light.cone.y,dot(-direction,light.direction_range.xyz));
             }
         }
-        illumination += light.color_intensity.rgb * light.color_intensity.w * attenuation * max(dot(normalize(input.normal), direction), 0.0);
+        var response = color.rgb * max(dot(n,direction),0.0);
+        if pbr { response = brdf(n,coat_n,v,direction,input.uv,color.rgb); }
+        radiance += light.color_intensity.rgb*light.color_intensity.w*attenuation*response;
     }
-    let distance = max(length(input.world_position - uniforms.camera.xyz) - uniforms.camera.w, 0.0);
-    let haze = 1.0 - exp(-uniforms.haze.w * distance);
-    // Inspector and imported material colors are already linear. Compress lit
-    // highlights, mix the linear haze color, then encode once for the UI/runtime.
-    let radiance = uniforms.color.rgb * illumination;
-    let mapped = radiance / (vec3<f32>(1.0) + radiance);
-    return vec4<f32>(linear_to_srgb(mix(mapped, uniforms.haze.rgb, haze)), uniforms.color.a);
+    radiance += sample_map(6u,input.uv,vec4<f32>(0.0)).rgb*surface.strength.y;
+    let distance = max(length(input.world_position-uniforms.camera.xyz)-uniforms.camera.w,0.0);
+    let haze = 1.0-exp(-uniforms.haze.w*distance);
+    let mapped = radiance/(vec3<f32>(1.0)+radiance);
+    return vec4<f32>(linear_to_srgb(mix(mapped,uniforms.haze.rgb,haze)),color.a);
 }
 ";
 
@@ -275,6 +350,7 @@ pub struct TexturedMesh {
 /// Backend-independent vertex accepted by the persistent editor viewport.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewportVertex {
+    pub uv: [f32; 2],
     pub position: [f32; 3],
     pub normal: [f32; 3],
 }
@@ -282,6 +358,7 @@ pub struct ViewportVertex {
 /// One immutable scene instance. Stable keys allow GPU resource reuse across frames.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewportMesh {
+    pub textures: engine_world::SurfaceTextures,
     pub instance_key: u64,
     pub mesh_key: u64,
     pub vertices: Vec<ViewportVertex>,
@@ -980,6 +1057,7 @@ struct PendingViewportReadback {
 /// no backend type crosses this crate's public API.
 pub struct SceneViewportRenderer {
     sky: sky::SkyRenderer,
+    surfaces: surface::SurfaceCache,
     environment_root: std::path::PathBuf,
     request: BackendRequest,
     context: BackendContext,
@@ -1006,27 +1084,32 @@ impl SceneViewportRenderer {
         validate_and_reflect_wgsl(VIEWPORT_SHADER)?;
         let context = pollster::block_on(BackendContext::initialize(request))?;
         let bind_layout = viewport_bind_layout(&context.device);
+        let surfaces = surface::SurfaceCache::new(&context.device);
         let solid_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
+            &surfaces.layout,
             ViewportPass::Solid,
             "rustic-viewport-solid-pipeline",
         );
         let outline_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
+            &surfaces.layout,
             ViewportPass::Outline,
             "rustic-viewport-outline-pipeline",
         );
         let line_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
+            &surfaces.layout,
             ViewportPass::Lines,
             "rustic-viewport-grid-pipeline",
         );
         let sky = sky::SkyRenderer::new(&context.device)?;
         Ok(Self {
             sky,
+            surfaces,
             environment_root: std::path::PathBuf::new(),
             request,
             context,
@@ -1051,6 +1134,7 @@ impl SceneViewportRenderer {
     /// Resolves scene sky image paths against a project or immutable play snapshot.
     pub fn set_environment_root(&mut self, root: impl Into<std::path::PathBuf>) {
         self.environment_root = root.into();
+        self.surfaces.clear();
     }
 
     pub const fn stats(&self) -> ViewportResourceStats {
@@ -1141,6 +1225,12 @@ impl SceneViewportRenderer {
             self.pending_readback = None;
             return Ok(Some(self.completed_frame(width, height, rgba8)));
         }
+        self.surfaces.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &self.environment_root,
+            scene,
+        )?;
         self.ensure_targets(width, height);
         self.ensure_grid(&scene.grid_vertices)?;
         for guide in &scene.guides {
@@ -1218,6 +1308,7 @@ impl SceneViewportRenderer {
             if scene.environment.enabled {
                 self.sky.draw(&mut pass);
             }
+            pass.set_bind_group(1, self.surfaces.default_group(), &[]);
             if let Some(grid) = &self.grid {
                 let key = u64::MAX;
                 if let Some(instance) = self.instances.get(&key) {
@@ -1259,6 +1350,7 @@ impl SceneViewportRenderer {
                         continue;
                     };
                     pass.set_bind_group(0, &instance.bind_group, &[]);
+                    pass.set_bind_group(1, self.surfaces.group(&mesh.textures), &[]);
                     pass.set_vertex_buffer(0, gpu_mesh.vertices.slice(..));
                     pass.set_index_buffer(gpu_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
@@ -1266,6 +1358,7 @@ impl SceneViewportRenderer {
             }
 
             pass.set_pipeline(&self.line_pipeline);
+            pass.set_bind_group(1, self.surfaces.default_group(), &[]);
             for guide in &scene.guides {
                 let (Some(gpu_mesh), Some(instance)) =
                     (self.meshes.get(&guide.key), self.instances.get(&guide.key))
@@ -1443,6 +1536,7 @@ impl SceneViewportRenderer {
         let vertices: Vec<_> = positions
             .iter()
             .map(|position| ViewportVertex {
+                uv: [0.0; 2],
                 position: *position,
                 normal: [0.0, 1.0, 0.0],
             })
@@ -1451,6 +1545,7 @@ impl SceneViewportRenderer {
             .map_err(|_| RendererError::InvalidMesh("grid vertex count exceeds u32".to_owned()))?)
             .collect();
         let mesh = ViewportMesh {
+            textures: engine_world::SurfaceTextures::default(),
             instance_key: u64::MAX,
             mesh_key: u64::MAX,
             vertices,
@@ -1510,6 +1605,7 @@ impl SceneViewportRenderer {
             .vertices
             .iter()
             .map(|position| ViewportVertex {
+                uv: [0.0; 2],
                 position: *position,
                 normal: [0.0, 1.0, 0.0],
             })
@@ -1519,6 +1615,7 @@ impl SceneViewportRenderer {
         })?)
             .collect::<Vec<_>>();
         let mesh = ViewportMesh {
+            textures: engine_world::SurfaceTextures::default(),
             instance_key: guide.key,
             mesh_key: guide.key,
             vertices,
@@ -1714,6 +1811,7 @@ impl ViewportPass {
 fn viewport_pipeline(
     device: &wgpu::Device,
     bind_layout: &wgpu::BindGroupLayout,
+    surface_layout: &wgpu::BindGroupLayout,
     pass: ViewportPass,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
@@ -1724,7 +1822,7 @@ fn viewport_pipeline(
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("rustic-viewport-pipeline-layout"),
-        bind_group_layouts: &[Some(bind_layout)],
+        bind_group_layouts: &[Some(bind_layout), Some(surface_layout)],
         immediate_size: 0,
     });
     let attributes = [
@@ -1738,6 +1836,11 @@ fn viewport_pipeline(
             offset: 12,
             shader_location: 1,
         },
+        wgpu::VertexAttribute {
+            format: wgpu::VertexFormat::Float32x2,
+            offset: 24,
+            shader_location: 2,
+        },
     ];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
@@ -1747,7 +1850,7 @@ fn viewport_pipeline(
             entry_point: Some("vs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             buffers: &[Some(wgpu::VertexBufferLayout {
-                array_stride: 24,
+                array_stride: 32,
                 step_mode: wgpu::VertexStepMode::Vertex,
                 attributes: &attributes,
             })],
@@ -1806,7 +1909,13 @@ fn validate_viewport_mesh(mesh: &ViewportMesh) -> Result<(), RendererError> {
     if mesh
         .vertices
         .iter()
-        .flat_map(|vertex| vertex.position.into_iter().chain(vertex.normal))
+        .flat_map(|vertex| {
+            vertex
+                .position
+                .into_iter()
+                .chain(vertex.normal)
+                .chain(vertex.uv)
+        })
         .chain(mesh.model)
         .chain(mesh.color)
         .any(|value| !value.is_finite())
@@ -1819,9 +1928,14 @@ fn validate_viewport_mesh(mesh: &ViewportMesh) -> Result<(), RendererError> {
 }
 
 fn viewport_vertex_bytes(vertices: &[ViewportVertex]) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(vertices.len() * 24);
+    let mut bytes = Vec::with_capacity(vertices.len() * 32);
     for vertex in vertices {
-        for value in vertex.position.into_iter().chain(vertex.normal) {
+        for value in vertex
+            .position
+            .into_iter()
+            .chain(vertex.normal)
+            .chain(vertex.uv)
+        {
             bytes.extend_from_slice(&value.to_ne_bytes());
         }
     }
@@ -2525,10 +2639,12 @@ mod tests {
             camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: vec![ViewportMesh {
+                textures: engine_world::SurfaceTextures::default(),
                 instance_key: 1,
                 mesh_key: 1,
                 vertices: [[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]
                     .map(|position| ViewportVertex {
+                        uv: [0.0; 2],
                         position,
                         normal: [0.0, 0.0, -1.0],
                     })
@@ -2604,10 +2720,12 @@ mod tests {
             camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: vec![ViewportMesh {
+                textures: engine_world::SurfaceTextures::default(),
                 instance_key: 1,
                 mesh_key: 1,
                 vertices: [[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]
                     .map(|position| ViewportVertex {
+                        uv: [0.0; 2],
                         position,
                         normal: [0.0, 0.0, -1.0],
                     })
@@ -2807,19 +2925,23 @@ mod tests {
     fn persistent_viewport_reuses_resources_resizes_and_depth_tests() {
         let vertices = vec![
             ViewportVertex {
+                uv: [0.0; 2],
                 position: [-0.8, -0.8, 0.0],
                 normal: [0.0, 0.0, -1.0],
             },
             ViewportVertex {
+                uv: [0.0; 2],
                 position: [0.8, -0.8, 0.0],
                 normal: [0.0, 0.0, -1.0],
             },
             ViewportVertex {
+                uv: [0.0; 2],
                 position: [0.0, 0.8, 0.0],
                 normal: [0.0, 0.0, -1.0],
             },
         ];
         let mesh = |instance_key, mesh_key, z, color| ViewportMesh {
+            textures: engine_world::SurfaceTextures::default(),
             instance_key,
             mesh_key,
             vertices: vertices.clone(),
@@ -2907,6 +3029,7 @@ mod tests {
     fn selected_cube(model: glam::Mat4) -> ViewportMesh {
         let primitive = engine_world::Primitive::Cube { size: 1.0 }.mesh().unwrap();
         ViewportMesh {
+            textures: engine_world::SurfaceTextures::default(),
             instance_key: 10,
             mesh_key: 20,
             vertices: primitive
@@ -2914,6 +3037,7 @@ mod tests {
                 .iter()
                 .zip(&primitive.normals)
                 .map(|(position, normal)| ViewportVertex {
+                    uv: [0.0; 2],
                     position: *position,
                     normal: *normal,
                 })
@@ -3128,6 +3252,7 @@ mod tests {
             .iter()
             .zip(&primitive.normals)
             .map(|(position, normal)| ViewportVertex {
+                uv: [0.0; 2],
                 position: *position,
                 normal: *normal,
             })
@@ -3259,11 +3384,13 @@ mod tests {
             .iter()
             .zip(&primitive.normals)
             .map(|(position, normal)| ViewportVertex {
+                uv: [0.0; 2],
                 position: *position,
                 normal: *normal,
             })
             .collect::<Vec<_>>();
         let mesh = |scale: f32| ViewportMesh {
+            textures: engine_world::SurfaceTextures::default(),
             instance_key: 10,
             mesh_key: 20,
             vertices: vertices.clone(),
@@ -3348,13 +3475,16 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
         primitive.entity.hash(&mut hasher);
         let key = hasher.finish();
         scene.meshes.push(ViewportMesh {
+            textures: world.resolved_textures(primitive.entity),
             instance_key: key,
             mesh_key: key,
             vertices: mesh
                 .positions
                 .iter()
                 .zip(&mesh.normals)
-                .map(|(position, normal)| ViewportVertex {
+                .zip(&mesh.tex_coords)
+                .map(|((position, normal), uv)| ViewportVertex {
+                    uv: *uv,
                     position: *position,
                     normal: *normal,
                 })
@@ -3487,6 +3617,7 @@ pub fn game_scene_with_models(
                             .normalize_or_zero();
                     }
                     ViewportVertex {
+                        uv: source.texcoords.get(vertex).copied().unwrap_or([0.0; 2]),
                         position: position.to_array(),
                         normal: normal.to_array(),
                     }
@@ -3499,8 +3630,17 @@ pub fn game_scene_with_models(
                 .materials
                 .get(source.material_index.unwrap_or(0))
                 .map_or([0.6, 0.6, 0.6, 1.], |m| m.base_color);
-            color[3] *= world.part_attributes(entity).unwrap_or_default().color[3];
+            let textures = world.resolved_textures(entity);
+            if textures
+                .maps
+                .contains_key(&engine_world::TextureMap::BaseColor)
+            {
+                color = world.part_attributes(entity).unwrap_or_default().color;
+            } else {
+                color[3] *= world.part_attributes(entity).unwrap_or_default().color[3];
+            }
             scene.meshes.push(ViewportMesh {
+                textures,
                 instance_key: key,
                 mesh_key: key,
                 vertices,

@@ -48,6 +48,7 @@ pub struct EntitySnapshot {
     pub parent: Option<EntityId>,
     pub mesh: Option<Mesh>,
     pub material: Option<Material>,
+    pub textures: Option<crate::SurfaceTextures>,
     pub camera: Option<Camera>,
     pub light: Option<Light>,
     pub primitive: Option<Primitive>,
@@ -66,6 +67,7 @@ impl Default for EntitySnapshot {
             parent: None,
             mesh: None,
             material: None,
+            textures: None,
             camera: None,
             light: None,
             primitive: None,
@@ -88,6 +90,9 @@ impl EntitySnapshot {
                     entity: self.id,
                     message: error.to_string(),
                 })?;
+        }
+        if let Some(textures) = &self.textures {
+            textures.validate().map_err(WorldError::InvalidArgument)?;
         }
         for script in &self.scripts {
             script
@@ -392,6 +397,9 @@ impl EntityWire {
         if let Some(mesh) = snapshot.mesh {
             components.push(encode_component(MESH_SCHEMA, &mesh.asset)?);
         }
+        if let Some(textures) = &snapshot.textures {
+            components.push(encode_component("rustic.surface_textures", textures)?);
+        }
         if let Some(material) = snapshot.material {
             components.push(encode_component(MATERIAL_SCHEMA, &material.asset)?);
         }
@@ -684,6 +692,13 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                 diagnostics,
                 &mut snapshot.unknown_components,
                 |asset| snapshot.mesh = Some(Mesh { asset }),
+            ),
+            "rustic.surface_textures" => assign_or_preserve(
+                &raw,
+                entity.id,
+                diagnostics,
+                &mut snapshot.unknown_components,
+                |value| snapshot.textures = Some(value),
             ),
             MATERIAL_SCHEMA => assign_or_preserve(
                 &raw,
