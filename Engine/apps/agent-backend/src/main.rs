@@ -101,7 +101,7 @@ fn handle(session: &mut WorkspaceSession, request: &Value) -> Option<Value> {
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "rustic-workspace", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file and read the bundled authoring_guide before editing game content. Prefer custom models and persist complete scenes before playtesting. Use editor tools for properties, scenes, script scopes, model previews and playtest input."
+            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file and read the bundled authoring_guide before editing game content. Prefer custom models and persist complete scenes before playtesting. Read scene_explorer_guide for hierarchy organization and folder/object creation, duplication and deletion. Use editor tools for properties, scenes, script scopes, model previews and playtest input."
         }),
         "tools/list" => json!({"tools": tools()}),
         "tools/call" => {
@@ -155,6 +155,8 @@ fn tools() -> Value {
     ]);
     tools.as_array_mut().expect("tools array").push(json!({"name":"authoring_guide","description":"Read the bundled, current Rustic game design, modeling, scene, scope and playtest guidance. Works with existing customized integrations.","inputSchema":{"type":"object","properties":{}}}));
     tools.as_array_mut().expect("tools array").push(json!({"name":"texture_guide","description":"Read current HDR/PBR map, Texture child and sky guidance, including slot names, channel conventions, examples and renderer limits. Available even when installed skills were customized.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
+
+    tools.as_array_mut().expect("tools array").push(json!({"name":"scene_explorer_guide","description":"Read the current rustic-scene-explorer skill: organize hierarchy folders, add objects, duplicate/delete subtrees, reparent safely, undo and save. Available with preserved custom instructions.","inputSchema":{"type":"object","properties":{}}}));
     tools
         .as_array_mut()
         .expect("tools array")
@@ -168,6 +170,10 @@ fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
     }
     match name {
         "texture_guide" => Ok(json!({"content":engine_scripting::AGENT_TEXTURE_GUIDE})),
+
+        "scene_explorer_guide" => {
+            Ok(json!({"content":engine_scripting::AGENT_SCENE_EXPLORER_SKILL}))
+        }
         "authoring_guide" => Ok(json!({"content":engine_scripting::AGENT_AUTHORING_GUIDE})),
         "workspace_info" => {
             let project = Project::open(root).map_err(|error| error.to_string())?;
@@ -275,7 +281,7 @@ fn scene_summary(root: &Path, value: &str) -> Result<Value, String> {
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
     let load = engine_world::load_scene(&bytes).map_err(|error| error.to_string())?;
     let entities: Vec<_> = load.document.entities.iter().map(|entity| json!({
-        "id":entity.id.to_string(), "name":entity.name, "parent":entity.parent.map(|id| id.to_string()),
+        "id":entity.id.to_string(), "name":entity.name, "folder":entity.folder, "parent":entity.parent.map(|id| id.to_string()),
         "translation":entity.local_transform.translation.to_array(), "rotation":entity.local_transform.rotation.to_array(), "scale":entity.local_transform.scale.to_array(),
         "components":{"camera":entity.camera.is_some(),"light":entity.light.is_some(),"mesh":entity.mesh.is_some(),"material":entity.material.is_some(),"textures":entity.textures,"primitive":entity.primitive.as_ref().map(|p| format!("{p:?}")),"scripts":entity.scripts.len()}
     })).collect();

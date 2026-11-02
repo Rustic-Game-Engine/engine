@@ -7,7 +7,7 @@ pub fn tools() -> Vec<Value> {
     for (name, description, schema) in [
         (
             "editor_status",
-            "Read active scene, unsaved status, full object properties, script scopes and play state from the open editor.",
+            "Read active scene, unsaved status, scene explorer objects (IDs, parent and folder flags), full properties, script scopes and play state from the open editor.",
             empty.clone(),
         ),
         (
@@ -42,8 +42,18 @@ pub fn tools() -> Vec<Value> {
         ),
         (
             "object_create",
-            "Create an authored empty object, camera or light. For visible finished objects use model_create. Primitives are only for deliberate blockouts/colliders.",
-            json!({"type":"object","required":["name"],"properties":{"name":{"type":"string"},"kind":{"type":"string","enum":["empty","camera","light","blockout"]}}}),
+            "Create an authored folder, empty object, camera or light, optionally inside parent (null means scene root). Folders organize the scene explorer. For finished meshes use model_create; primitives are for deliberate blockouts/colliders.",
+            json!({"type":"object","required":["name"],"properties":{"name":{"type":"string"},"kind":{"type":"string","enum":["empty","folder","camera","light","blockout"]},"parent":{"type":["string","null"],"description":"Existing destination object/folder UUID, or null for scene root; defaults to root."}}}),
+        ),
+        (
+            "object_duplicate",
+            "Duplicate an object or folder and all descendants as one undoable edit, with fresh IDs. Defaults to the original parent; parent:null places the copy at scene root. Optional name renames the copy root. Local transforms, folder flags, assets and script attachments are retained.",
+            json!({"type":"object","required":["entity_id"],"properties":{"entity_id":{"type":"string"},"parent":{"type":["string","null"]},"name":{"type":"string"}},"additionalProperties":false}),
+        ),
+        (
+            "object_delete",
+            "Delete an object or folder and every descendant from the active scene as one undoable edit. Inspect editor_status first to understand the subtree. Asset and source files remain available. Save with scene_save; editor_undo restores the subtree.",
+            json!({"type":"object","required":["entity_id"],"properties":{"entity_id":{"type":"string"}},"additionalProperties":false}),
         ),
         (
             "script_attach",

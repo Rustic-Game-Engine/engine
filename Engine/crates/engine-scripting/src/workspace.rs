@@ -202,6 +202,22 @@ fn generate_agent_integrations(
     generate_agent_integrations_at(project_root, project_name, &storage, files)
 }
 
+fn write_scene_explorer_skills(
+    storage: &Path,
+    plugin: &Path,
+    files: &AtomicFileService,
+) -> Result<Vec<PathBuf>, WorkspaceError> {
+    let paths = vec![
+        plugin.join("skills/rustic-scene-explorer/SKILL.md"),
+        storage.join(".agents/skills/rustic-scene-explorer/SKILL.md"),
+        storage.join(".claude/skills/rustic-scene-explorer/SKILL.md"),
+    ];
+    for path in &paths {
+        write_agent_default(files, path, crate::AGENT_SCENE_EXPLORER_SKILL.as_bytes())?;
+    }
+    Ok(paths)
+}
+
 fn with_authoring_guide(skill: &str) -> String {
     format!(
         "{skill}\nRead `authoring_guide` before building game content.\n\n{}",
@@ -243,14 +259,9 @@ fn generate_agent_integrations_at(
     }))
     .expect("agent MCP configuration is serializable");
     let codex_plugin = storage.join(".agents/plugins/rustic-workspace");
+    let explorer_files = write_scene_explorer_skills(storage, &codex_plugin, files)?;
     let codex_skill = codex_plugin.join("skills/rustic-workspace");
     let claude_skill = storage.join(".claude/skills/rustic-workspace");
-    for directory in [&codex_skill, &claude_skill] {
-        fs::create_dir_all(directory).map_err(|source| WorkspaceError::Io {
-            path: directory.clone(),
-            source,
-        })?;
-    }
     let plugin_manifest = codex_plugin.join(".codex-plugin/plugin.json");
     fs::create_dir_all(plugin_manifest.parent().expect("manifest has parent")).map_err(
         |source| WorkspaceError::Io {
@@ -307,7 +318,7 @@ Use `workspace_info` to confirm the project root, then `read_agent_file` with pa
         &claude,
         format!("<!-- {GENERATED_MARKER} -->\n{instructions}").as_bytes(),
     )?;
-    Ok(vec![
+    let mut paths = vec![
         plugin_manifest,
         codex_skill_file,
         claude_skill_file,
@@ -316,7 +327,9 @@ Use `workspace_info` to confirm the project root, then `read_agent_file` with pa
         marketplace_file,
         agents,
         claude,
-    ])
+    ];
+    paths.extend(explorer_files);
+    Ok(paths)
 }
 
 /// Installs the Rustic skill, Claude slash command, and Codex plugin for this user.
@@ -409,6 +422,7 @@ Use the `rustic-workspace` MCP tools first to identify the active project root, 
     let claude_skill = storage.join(".claude/skills/rustic-workspace");
     let claude_command = storage.join(".claude/commands");
     let plugin = storage.join(".agents/plugins/plugins/rustic-workspace");
+    write_scene_explorer_skills(storage, &plugin, files)?;
     for directory in [
         &codex_skill,
         &claude_skill,
@@ -1041,5 +1055,32 @@ mod tests {
             document["mcp_servers"]["rustic-workspace"]["enabled"].as_bool(),
             Some(true)
         );
+    }
+}
+
+#[cfg(test)]
+mod scene_explorer_skill_tests {
+    use super::*;
+    #[test]
+    fn install_new_scene_explorer_skill_preserves_custom_instructions() {
+        let temp = tempfile::tempdir().unwrap();
+        let storage = temp.path().join("agents");
+        let plugin = storage.join("plugin");
+        let files = AtomicFileService::new();
+        write_scene_explorer_skills(&storage, &plugin, &files).unwrap();
+        for path in [
+            plugin.join("skills/rustic-scene-explorer/SKILL.md"),
+            storage.join(".agents/skills/rustic-scene-explorer/SKILL.md"),
+            storage.join(".claude/skills/rustic-scene-explorer/SKILL.md"),
+        ] {
+            let content = fs::read_to_string(&path).unwrap();
+            assert!(content.contains("object_duplicate"));
+            assert!(content.contains("object_delete"));
+            assert!(content.contains("kind\":\"folder"));
+        }
+        let custom = storage.join(".claude/skills/rustic-scene-explorer/SKILL.md");
+        write_agent_information(&custom, "custom explorer skill").unwrap();
+        write_scene_explorer_skills(&storage, &plugin, &files).unwrap();
+        assert_eq!(fs::read_to_string(custom).unwrap(), "custom explorer skill");
     }
 }

@@ -99,7 +99,7 @@ impl EditorApp {
         match tool {
             "editor_status" => {
                 let objects = self.document.entity_snapshots().map_err(|e| e.to_string())?.iter().map(|s| json!({
-                    "entity_id":s.id,"name":s.name,"parent":s.parent,"translation":s.local_transform.translation.to_array(),
+                    "entity_id":s.id,"name":s.name,"folder":s.folder,"parent":s.parent,"translation":s.local_transform.translation.to_array(),
                     "rotation":s.local_transform.rotation.to_array(),"scale":s.local_transform.scale.to_array(),
                     "part_attributes":s.part_attributes,"camera":s.camera,"light":s.light,"scripts":s.scripts,
                     "mesh_asset":s.mesh.map(|m| m.asset),"material_asset":s.material.map(|m| m.asset),"primitive":s.primitive,
@@ -261,16 +261,22 @@ impl EditorApp {
                 let kind = args["kind"].as_str().unwrap_or("empty");
                 let mut object = engine_world::EntitySnapshot {
                     name: Some(name.into()),
+                    parent: args
+                        .get("parent")
+                        .map(decode::<Option<EntityId>>)
+                        .transpose()?
+                        .flatten(),
                     ..Default::default()
                 };
                 match kind {
                     "empty" => {}
+                    "folder" => object.folder = true,
                     "camera" => object.camera = Some(engine_world::Camera::default()),
                     "light" => object.light = Some(engine_world::Light::default()),
                     "blockout" => {
                         object.primitive = Some(engine_world::Primitive::Cube { size: 1.0 });
                     }
-                    _ => return Err("kind must be empty, camera, light or blockout".into()),
+                    _ => return Err("kind must be empty, folder, camera, light or blockout".into()),
                 }
                 let id = object.id;
                 self.document
@@ -282,6 +288,49 @@ impl EditorApp {
                 self.refresh_preview();
                 self.agent_frame = None;
                 Ok(json!({"entity_id":id,"saved":false}))
+            }
+            "object_duplicate" => {
+                let source = entity_id(args)?;
+                let mut snapshots = self
+                    .document
+                    .snapshot_tree(source)
+                    .map_err(|e| e.to_string())?;
+                let original = snapshots.first_mut().ok_or("object subtree is empty")?;
+                let parent = args
+                    .get("parent")
+                    .map(decode::<Option<EntityId>>)
+                    .transpose()?
+                    .unwrap_or(original.parent);
+                if let Some(name) = args.get("name") {
+                    original.name = Some(decode(name)?);
+                }
+                let id = self
+                    .document
+                    .paste_tree(&snapshots, parent)
+                    .map_err(|e| e.to_string())?
+                    .ok_or("object subtree is empty")?;
+                let ids: Vec<_> = self
+                    .document
+                    .snapshot_tree(id)
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .map(|s| s.id)
+                    .collect();
+                self.refresh_preview();
+                Ok(json!({"entity_id":id,"entity_ids":ids,"source_entity_id":source,"saved":false}))
+            }
+            "object_delete" => {
+                let id = entity_id(args)?;
+                let ids: Vec<_> = self
+                    .document
+                    .snapshot_tree(id)
+                    .map_err(|e| e.to_string())?
+                    .iter()
+                    .map(|s| s.id)
+                    .collect();
+                self.document.delete_tree(id).map_err(|e| e.to_string())?;
+                self.refresh_preview();
+                Ok(json!({"deleted_entity_ids":ids,"saved":false}))
             }
             "script_attach" => self.agent_script(args),
             "model_create" => {
@@ -1258,5 +1307,200 @@ mod texture_flow_tests {
             app.agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
                 .is_ok()
         );
+    }
+}
+
+#[cfg(test)]
+mod scene_explorer_tests {
+    use super::*;
+    use engine_project::{Project, ProjectTemplate};
+
+    fn setup() -> (tempfile::TempDir, EditorApp, egui::Context) {
+        let temp = tempfile::tempdir().unwrap();
+        let project =
+            Project::create(temp.path().join("game"), "Explorer", ProjectTemplate::Blank).unwrap();
+        let context = egui::Context::default();
+        let app = EditorApp::new(project, &context).unwrap();
+        (temp, app, context)
+    }
+    fn create(app: &mut EditorApp, context: &egui::Context, args: &Value) -> EntityId {
+        decode(&app.agent_tool("object_create", args, context).unwrap()["entity_id"]).unwrap()
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "verify hierarchy organization, independent copied IDs, undo and saved scene data through actual agent tools"
+    )]
+    fn folders_duplicate_delete_undo_and_persist() {
+        let (_temp, mut app, context) = setup();
+        let world = create(&mut app, &context, &json!({"name":"World","kind":"folder"}));
+        let buildings = create(
+            &mut app,
+            &context,
+            &json!({"name":"Buildings","kind":"folder","parent":world}),
+        );
+        let child = create(
+            &mut app,
+            &context,
+            &json!({"name":"Camera","kind":"camera","parent":buildings}),
+        );
+        app.agent_tool(
+            "object_update",
+            &json!({"entity_id":world,"properties":{"translation":[100,200,300]}}),
+            &context,
+        )
+        .unwrap();
+        let script = engine_world::ScriptComponent::new(engine_core::ScriptId::new());
+        app.agent_tool(
+            "object_update",
+            &json!({"entity_id":child,"properties":{"translation":[1,2,3],"scripts":[script]}}),
+            &context,
+        )
+        .unwrap();
+        let status = app
+            .agent_tool("editor_status", &json!({}), &context)
+            .unwrap();
+        assert_eq!(
+            status["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["entity_id"] == json!(buildings))
+                .unwrap()["folder"],
+            true
+        );
+        let result = app
+            .agent_tool(
+                "object_duplicate",
+                &json!({"entity_id":buildings,"name":"Buildings copy"}),
+                &context,
+            )
+            .unwrap();
+        let copy: EntityId = decode(&result["entity_id"]).unwrap();
+        let copied = app.document.snapshot_tree(copy).unwrap();
+        assert_eq!(result["entity_ids"].as_array().unwrap().len(), 2);
+        assert!(copied.iter().all(|s| s.id != child && s.id != buildings));
+        assert_eq!(copied[0].parent, Some(world));
+        assert!(copied[0].folder);
+        assert_eq!(copied[0].name.as_deref(), Some("Buildings copy"));
+        assert_eq!(copied[1].parent, Some(copy));
+        assert_eq!(copied[1].scripts, vec![script]);
+        assert!(copied[1].camera.is_some());
+        assert_eq!(
+            copied[1].local_transform.translation,
+            Vec3::new(1.0, 2.0, 3.0)
+        );
+        assert_eq!(
+            app.document
+                .world()
+                .snapshot(buildings)
+                .unwrap()
+                .name
+                .as_deref(),
+            Some("Buildings")
+        );
+        app.agent_tool("editor_undo", &json!({}), &context).unwrap();
+        assert!(!app.document.world().contains(copy));
+        assert!(app.document.world().contains(child));
+        app.agent_tool("editor_redo", &json!({}), &context).unwrap();
+        assert!(app.document.world().contains(copied[1].id));
+        app.agent_tool(
+            "object_update",
+            &json!({"entity_id":copy,"properties":{"parent":null}}),
+            &context,
+        )
+        .unwrap();
+        let deleted = app
+            .agent_tool("object_delete", &json!({"entity_id":world}), &context)
+            .unwrap();
+        assert_eq!(deleted["deleted_entity_ids"].as_array().unwrap().len(), 3);
+        assert!(!app.document.world().contains(world));
+        assert!(!app.document.world().contains(child));
+        assert!(app.document.world().contains(copy));
+        assert!(app.document.world().contains(copied[1].id));
+        app.agent_tool("editor_undo", &json!({}), &context).unwrap();
+        assert_eq!(
+            app.document.world().snapshot(child).unwrap().parent,
+            Some(buildings)
+        );
+        app.agent_tool("scene_save", &json!({}), &context).unwrap();
+        let saved = engine_world::load_scene(&std::fs::read(app.document.scene_path()).unwrap())
+            .unwrap()
+            .document;
+        assert_eq!(saved.entities.iter().filter(|s| s.folder).count(), 3);
+        let saved_world = saved.create_world().unwrap();
+        assert_eq!(
+            saved_world
+                .world_transform(child)
+                .unwrap()
+                .0
+                .transform_point3(Vec3::ZERO),
+            Vec3::new(1.0, 2.0, 3.0)
+        );
+        assert_eq!(
+            saved.entities.iter().find(|s| s.id == copy).unwrap().parent,
+            None
+        );
+        assert_eq!(
+            saved
+                .entities
+                .iter()
+                .find(|s| s.id == copied[1].id)
+                .unwrap()
+                .scripts
+                .len(),
+            1
+        );
+        // An explicit parent:null duplicates at scene root; omitting it uses the old parent.
+        let root_copy = app
+            .agent_tool(
+                "object_duplicate",
+                &json!({"entity_id":child,"parent":null}),
+                &context,
+            )
+            .unwrap();
+        let root_copy_id: EntityId = decode(&root_copy["entity_id"]).unwrap();
+        assert_eq!(
+            app.document.world().snapshot(root_copy_id).unwrap().parent,
+            None
+        );
+    }
+
+    #[test]
+    fn bad_parents_cycles_missing_ids_and_pending_review_do_not_mutate_hierarchy() {
+        let (_temp, mut app, context) = setup();
+        let root = create(&mut app, &context, &json!({"name":"Root","kind":"folder"}));
+        let child = create(&mut app, &context, &json!({"name":"Child","parent":root}));
+        let missing = EntityId::new();
+        let before = app.document.entity_snapshots().unwrap();
+        for (tool, args) in [
+            (
+                "object_create",
+                json!({"name":"Bad","kind":"folder","parent":missing}),
+            ),
+            (
+                "object_duplicate",
+                json!({"entity_id":root,"parent":missing}),
+            ),
+            ("object_duplicate", json!({"entity_id":missing})),
+            ("object_delete", json!({"entity_id":missing})),
+            (
+                "object_update",
+                json!({"entity_id":root,"properties":{"parent":child}}),
+            ),
+        ] {
+            assert!(app.agent_tool(tool, &args, &context).is_err(), "{tool}");
+            assert_eq!(app.document.entity_snapshots().unwrap(), before);
+        }
+        app.pending_runtime_changes = Some(engine_play::RuntimeChangeSet::new("test", Vec::new()));
+        for (tool, args) in [
+            ("object_create", json!({"name":"Blocked","kind":"folder"})),
+            ("object_duplicate", json!({"entity_id":root})),
+            ("object_delete", json!({"entity_id":root})),
+        ] {
+            assert!(app.agent_tool(tool, &args, &context).is_err());
+            assert_eq!(app.document.entity_snapshots().unwrap(), before);
+        }
     }
 }

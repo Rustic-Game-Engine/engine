@@ -12,6 +12,8 @@ mod agent_model;
 pub use agent_bridge::{AgentBridge, AgentRequest, call_editor};
 pub use agent_model::build_agent_model;
 pub const AGENT_TEXTURE_GUIDE: &str = include_str!("agent_textures.md");
+
+pub const AGENT_SCENE_EXPLORER_SKILL: &str = include_str!("scene_explorer_skill.md");
 pub const AGENT_AUTHORING_GUIDE: &str = include_str!("agent_authoring.md");
 
 mod cpp_sdk;
