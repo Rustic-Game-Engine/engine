@@ -19,6 +19,7 @@ pub const MAX_RENDER_DIMENSION: u32 = 8_192;
 
 // Shared by viewport pipelines and their color/depth attachments.
 const VIEWPORT_SAMPLE_COUNT: u32 = 4;
+const VIEWPORT_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const SELECTION_OUTLINE_WIDTH_PIXELS: f32 = 3.0;
 
 const MESH_SHADER: &str = r"
@@ -1008,22 +1009,19 @@ impl SceneViewportRenderer {
         let solid_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
-            wgpu::PrimitiveTopology::TriangleList,
-            Some(wgpu::Face::Back),
+            ViewportPass::Solid,
             "rustic-viewport-solid-pipeline",
         );
         let outline_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
-            wgpu::PrimitiveTopology::TriangleList,
-            Some(wgpu::Face::Front),
+            ViewportPass::Outline,
             "rustic-viewport-outline-pipeline",
         );
         let line_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
-            wgpu::PrimitiveTopology::LineList,
-            None,
+            ViewportPass::Lines,
             "rustic-viewport-grid-pipeline",
         );
         let sky = sky::SkyRenderer::new(&context.device)?;
@@ -1207,7 +1205,10 @@ impl SceneViewportRenderer {
                         load: wgpu::LoadOp::Clear(1.0),
                         store: wgpu::StoreOp::Store,
                     }),
-                    stencil_ops: None,
+                    stencil_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0),
+                        store: wgpu::StoreOp::Discard,
+                    }),
                 }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
@@ -1228,7 +1229,10 @@ impl SceneViewportRenderer {
                 }
             }
 
-            for selected_pass in [true, false] {
+            // Record visible surfaces before drawing shells. Depth alone cannot
+            // stop an expanded shell from covering concave or disconnected parts
+            // of its own mesh; the stencil excludes visible selected surfaces.
+            for selected_pass in [false, true] {
                 pass.set_pipeline(if selected_pass {
                     &self.outline_pipeline
                 } else {
@@ -1238,6 +1242,11 @@ impl SceneViewportRenderer {
                     if selected_pass && !mesh.selected {
                         continue;
                     }
+                    pass.set_stencil_reference(if selected_pass {
+                        1
+                    } else {
+                        u32::from(mesh.selected)
+                    });
                     let instance_key = if selected_pass {
                         mesh.instance_key ^ (1_u64 << 63)
                     } else {
@@ -1360,7 +1369,7 @@ impl SceneViewportRenderer {
             mip_level_count: 1,
             sample_count: VIEWPORT_SAMPLE_COUNT,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
+            format: VIEWPORT_DEPTH_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -1645,13 +1654,70 @@ fn viewport_bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
+#[derive(Clone, Copy)]
+enum ViewportPass {
+    Solid,
+    Outline,
+    Lines,
+}
+
+impl ViewportPass {
+    fn settings(
+        self,
+    ) -> (
+        wgpu::PrimitiveTopology,
+        Option<wgpu::Face>,
+        wgpu::StencilState,
+    ) {
+        match self {
+            ViewportPass::Solid => {
+                let face = wgpu::StencilFaceState {
+                    pass_op: wgpu::StencilOperation::Replace,
+                    ..wgpu::StencilFaceState::IGNORE
+                };
+                (
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Back),
+                    wgpu::StencilState {
+                        front: face,
+                        back: face,
+                        read_mask: 0xff,
+                        write_mask: 0xff,
+                    },
+                )
+            }
+            ViewportPass::Outline => {
+                let face = wgpu::StencilFaceState {
+                    compare: wgpu::CompareFunction::NotEqual,
+                    ..wgpu::StencilFaceState::IGNORE
+                };
+                (
+                    wgpu::PrimitiveTopology::TriangleList,
+                    Some(wgpu::Face::Front),
+                    wgpu::StencilState {
+                        front: face,
+                        back: face,
+                        read_mask: 0xff,
+                        write_mask: 0,
+                    },
+                )
+            }
+            ViewportPass::Lines => (
+                wgpu::PrimitiveTopology::LineList,
+                None,
+                wgpu::StencilState::default(),
+            ),
+        }
+    }
+}
+
 fn viewport_pipeline(
     device: &wgpu::Device,
     bind_layout: &wgpu::BindGroupLayout,
-    topology: wgpu::PrimitiveTopology,
-    cull_mode: Option<wgpu::Face>,
+    pass: ViewportPass,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
+    let (topology, cull_mode, stencil) = pass.settings();
     let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("rustic-viewport-wgsl"),
         source: wgpu::ShaderSource::Wgsl(VIEWPORT_SHADER.into()),
@@ -1696,10 +1762,10 @@ fn viewport_pipeline(
             ..wgpu::PrimitiveState::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
-            depth_write_enabled: Some(true),
+            format: VIEWPORT_DEPTH_FORMAT,
+            depth_write_enabled: Some(!matches!(pass, ViewportPass::Outline)),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: wgpu::StencilState::default(),
+            stencil,
             bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState {
@@ -3041,6 +3107,143 @@ mod tests {
                     orange_pixels < 2000,
                     "outline covered {orange_pixels} pixels for camera {eye}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run explicitly for viewport qualification"]
+    fn selection_outline_preserves_concave_mesh_surfaces() {
+        let primitive = engine_world::Primitive::Torus {
+            major_radius: 0.7,
+            minor_radius: 0.25,
+            segments: 32,
+            sides: 16,
+        }
+        .mesh()
+        .unwrap();
+        let mut mesh = selected_cube(glam::Mat4::IDENTITY);
+        mesh.vertices = primitive
+            .positions
+            .iter()
+            .zip(&primitive.normals)
+            .map(|(position, normal)| ViewportVertex {
+                position: *position,
+                normal: *normal,
+            })
+            .collect();
+        mesh.indices = primitive.indices;
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        for eye in [
+            glam::Vec3::new(0.0, 3.0, 0.1),
+            glam::Vec3::new(0.0, 1.5, 3.0),
+            glam::Vec3::new(2.0, 0.2, 3.0),
+        ] {
+            let view = glam::camera::rh::view::look_at_mat4(eye, glam::Vec3::ZERO, glam::Vec3::Y);
+            let projection = glam::camera::rh::proj::directx::perspective(
+                60.0_f32.to_radians(),
+                1.0,
+                0.1,
+                100.0,
+            );
+            let mut scene = ViewportScene {
+                environment: engine_world::SceneEnvironment::default(),
+                camera_position: eye.to_array(),
+                view_projection: (projection * view).to_cols_array(),
+                meshes: vec![mesh.clone()],
+                lights: Vec::new(),
+                guides: Vec::new(),
+                grid_vertices: Vec::new(),
+                clear_color: [0.0, 0.0, 0.0, 1.0],
+            };
+            scene.meshes[0].selected = false;
+            let baseline = renderer.render(256, 256, &scene).unwrap().unwrap();
+            scene.meshes[0].selected = true;
+            let selected = renderer.render(256, 256, &scene).unwrap().unwrap();
+            let pixel = |frame: &RenderedFrame, x: usize, y: usize| -> [u8; 4] {
+                frame.rgba8[(y * 256 + x) * 4..(y * 256 + x + 1) * 4]
+                    .try_into()
+                    .unwrap()
+            };
+            let mut surface_pixels = 0;
+            for y in 1..255 {
+                for x in 1..255 {
+                    // Exclude the antialiased silhouette, where orange may
+                    // legitimately share a pixel with the original surface.
+                    if (y - 1..=y + 1)
+                        .all(|ny| (x - 1..=x + 1).all(|nx| pixel(&baseline, nx, ny)[2] > 32))
+                    {
+                        surface_pixels += 1;
+                        assert_eq!(
+                            pixel(&selected, x, y),
+                            pixel(&baseline, x, y),
+                            "selection painted a mesh surface at ({x}, {y}) for camera {eye}"
+                        );
+                    }
+                }
+            }
+            assert!(
+                surface_pixels > 500,
+                "fixture must contain visible surfaces"
+            );
+            assert!(
+                selected
+                    .rgba8
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|p| { p[0] > 64 && p[0] > p[1] && p[1] > p[2] }),
+                "selection must still have an orange border"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "requires a graphics adapter; run explicitly for viewport qualification"]
+    fn selection_outline_respects_unselected_occluders_and_backgrounds() {
+        let view = glam::camera::rh::view::look_at_mat4(
+            glam::Vec3::new(0.0, 0.0, 3.0),
+            glam::Vec3::ZERO,
+            glam::Vec3::Y,
+        );
+        let projection =
+            glam::camera::rh::proj::directx::perspective(60.0_f32.to_radians(), 1.0, 0.1, 100.0);
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        for z in [-1.0, 1.0] {
+            let mut other = selected_cube(
+                glam::Mat4::from_translation(glam::Vec3::new(0.0, 0.0, z))
+                    * glam::Mat4::from_scale(glam::Vec3::new(4.0, 4.0, 0.1)),
+            );
+            other.instance_key = 11;
+            other.selected = false;
+            for other_first in [false, true] {
+                let mut meshes = vec![selected_cube(glam::Mat4::IDENTITY), other.clone()];
+                if other_first {
+                    meshes.reverse();
+                }
+                let scene = ViewportScene {
+                    environment: engine_world::SceneEnvironment::default(),
+                    camera_position: [0.0, 0.0, 3.0],
+                    view_projection: (projection * view).to_cols_array(),
+                    meshes,
+                    lights: Vec::new(),
+                    guides: Vec::new(),
+                    grid_vertices: Vec::new(),
+                    clear_color: [0.0, 0.0, 0.0, 1.0],
+                };
+                let frame = renderer.render(256, 256, &scene).unwrap().unwrap();
+                let orange_pixels = frame
+                    .rgba8
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .filter(|p| p[0] > 64 && p[0] > p[1] && p[1] > p[2])
+                    .count();
+                if z < 0.0 {
+                    assert!(orange_pixels > 0, "background must not mask the outline");
+                } else {
+                    assert_eq!(orange_pixels, 0, "foreground must hide the outline");
+                }
             }
         }
     }

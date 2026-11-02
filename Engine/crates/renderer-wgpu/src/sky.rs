@@ -304,7 +304,7 @@ fn sky_pipeline(
             ..wgpu::PrimitiveState::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
-            format: wgpu::TextureFormat::Depth32Float,
+            format: super::VIEWPORT_DEPTH_FORMAT,
             depth_write_enabled: Some(false),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
