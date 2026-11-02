@@ -38,6 +38,18 @@ and deployment workflows run there.
 
 Whenever you change a script function, callback, Script API behavior, or other engine functionality, update the affected **website documentation** in the same task. In the docs repository, the website serves pages from `docs/` through `lib/docs.ts` and generates API pages from `lib/api-docs.ts`; update the relevant sources and ensure new guides are reachable through `lib/docs-catalog.ts`. Keep corresponding engine-local documentation in `Engine/docs` accurate too. Do not link or cross-reference docs pull requests and engine pull requests in either direction, including in PR descriptions or comments. Keep their merge and closure lifecycles independent; never use closing keywords to connect them. Report the separate PR links only in the user-facing chat. Write for a first-time user: state what works, where it works, exact setup and attachment steps, copyable examples, expected results, current limitations, and how to diagnose common failures. Correct older claims that the change makes inaccurate. Check the website content against the implemented behavior before reporting the work complete.
 
+# Agent plugin requirement for engine changes
+
+Whenever an AI agent adds a feature or fixes a bug in the engine, it must evaluate
+whether the Rustic Engine agent plugin's skills or tools need corresponding
+updates. Review the affected plugin guidance and tool behavior against the engine
+change. If updates are needed, make them in the plugin as part of the same task
+and validate that they match the implemented engine behavior. Do not stop at
+recommending updates. If the plugin source is unavailable or cannot be edited,
+report the blocker and the specific updates still required. Include the outcome
+of this evaluation in the completion summary, even when no plugin changes are
+needed.
+
 # Pull requests and labels
 
 When a feature is complete, finish the relevant validation and documentation, commit the changes on a feature branch, push it, and create a pull request against the branch the work started from. If the task already has a pull request, update it instead of creating a duplicate. Include a concise summary and the checks run in the PR description, then return the PR link to the user.
