@@ -1,4 +1,4 @@
-# Basic physics
+# Physics: forces, friction, contacts and slopes
 
 Built-in primitives simulate automatically in Play, New Window, and Standalone.
 No script or physics component is required. Edit mode never moves objects. Gravity
@@ -29,7 +29,8 @@ Rectangle2D or Circle2D above it. Gravity still acts along world Y.
 | `Anchored = false` | The primitive falls, including when collision is disabled. Unanchoring starts with zero velocity after an anchored tick. |
 | `CanCollide = true` | Solid response occurs only when both primitives have this flag enabled. Anchored primitives can be floors or walls. |
 | `CanCollide = false` | The object passes through other objects; it still falls if unanchored. |
-| `CanTouch` | Required for object clicks and touchscreen taps; it does not change solid response or enable collision callbacks. See [Touchscreen input and object clicks](/docs/api/touch-input). |
+| `CanTouch` | Enables collision subscriptions when both bodies allow touch, plus object clicks and taps. Does not change solid response. |
+| `Friction` | Finite coefficient from 0 to 10; default 0.5. Zero is frictionless. Set it in the Inspector or through `EditAttribute`. The contact coefficient is the geometric mean of both values. |
 | `Size` | Local transform scale, multiplied by primitive dimensions for collision bounds. |
 
 These flags are read every fixed tick, after all `FixedUpdate` script callbacks.
@@ -69,17 +70,52 @@ globalThis.behavior = {
 Attach this version as a JavaScript Object Component instead of the Lua script.
 Scene paths can also target other objects; see the **Edit scene objects** guide.
 
+## Forces, friction and slopes
+
+Use the falling-box scene above. Create a JavaScript **Object Component** in
+Programming, attach it to `Box` with **+ Add Component**, and replace its source:
+
+```javascript
+globalThis.behavior = {
+  Start() {
+    rustic.EditAttribute("Friction", 0.6);
+    Physics.onCollisionEnter(rustic.entity_id(), (other, normal) => {
+      print("Contact", other, "normal", normal);
+    });
+    Physics.onCollisionExit(rustic.entity_id(), other => print("Left", other));
+    Physics.impulse(rustic.entity_id(), [2, 0, 0]);
+  },
+  FixedUpdate(dt) {
+    // Unit mass: an upward force of 9.81 cancels gravity over this interval.
+    // Physics.force(rustic.entity_id(), [0, 9.81, 0], dt);
+    const support = Physics.ground(rustic.entity_id(), 45);
+    if (support && support.walkable) {
+      // normal is world-space; angle is degrees from world up.
+      // Use support.normal to project controller movement along the surface.
+    }
+  }
+};
+```
+
+Press Play. The box falls, emits one enter callback, and slows on the floor.
+Rotate the anchored floor about Z to make a ramp. With zero friction on either
+body the box slides down the slope; sufficiently high friction holds it. There
+is no automatic character stair stepping or slope-angle movement clamp.
+`Physics.ground` reads contacts from the most recent completed fixed step, so it
+is null before the first physics tick and may lag a scripted teleport by a tick.
+
+`Physics.force` adds `force * scaledDelta` to velocity. Call it once per
+`FixedUpdate`, passing `dt` in languages requiring an explicit interval. Impulse
+adds velocity immediately; launch replaces it. Applying force from every rendered
+frame with a fixed interval produces frame-rate-dependent acceleration.
+
 ## Current limits
 
 - Only built-in primitives participate. Imported mesh assets, cameras, lights,
   folders, and empty nodes have no physics bodies. Runtime-created primitives join
   the next fixed tick; removed primitives lose their velocity state.
-- Collision uses world-aligned boxes enclosing primitive dimensions, transformed
-  by rotation, scale, and the hierarchy. Spheres and circles behave as boxes, torus
-  holes are solid, and rotated slopes do not produce true slope sliding. Thin planes
-  and 2D shapes have a minimum collision half-thickness of 0.025 units.
-- Bodies have equal mass and translate without rotating, bouncing, friction,
-  joints, forces, configurable gravity, raycasts, or a velocity Script API.
+- Collision uses oriented boxes enclosing primitive dimensions, transformed by rotation, scale, and the hierarchy. Rotated boxes and planes provide slope normals. Spheres and circles still behave as boxes and torus holes are solid. Sheared parent transforms fall back to world-aligned boxes. Planes and 2D shapes have a minimum collision half-thickness of 0.025 units.
+- Bodies have equal unit mass and translate without rotating, bouncing, joints or configurable gravity. Coulomb friction reduces relative tangential motion and can hold bodies on shallow slopes. Live primitive raycasts, sphere casts, overlaps, forces, impulses and velocity changes are available through the Physics scripting API.
 - Swept box checks reduce tunnelling during simulated falls. Script teleports and
   script-moved anchored platforms are not swept. Fast multi-body impacts and large
   stacks are approximate; use separated starting positions and modest scene sizes.
@@ -90,8 +126,7 @@ Scene paths can also target other objects; see the **Edit scene objects** guide.
 - Child bodies receive world-space gravity and are converted back to local
   positions. Anchored children still follow their parent's transform. For predictable
   independent rigid bodies, place them at scene root or under an organizational folder.
-- No `OnCollisionEnter`, `OnCollisionStay`, or `OnCollisionExit` events are dispatched
-  by this simulator, even if a language adapter accepts those callback names.
+- Collision callbacks use explicit `Physics.onCollisionEnter`, `Physics.onCollisionStay`, and `Physics.onCollisionExit` subscriptions. Merely declaring lifecycle functions named `OnCollisionEnter` does not register a subscription. See [Contacts and slopes](/docs/api/physics-actions/contacts).
 
 ## Diagnose problems
 
@@ -102,7 +137,7 @@ Scene paths can also target other objects; see the **Edit scene objects** guide.
 - **The box falls through:** enable Can collide on both the box and floor. Imported
   models need a separate built-in primitive as a collision proxy for now.
 - **Objects hover or collide too early:** check primitive dimensions and transform
-  scale. Rotated or curved shapes use enclosing boxes rather than their surface.
+  scale. Curved primitives use enclosing boxes; sheared transforms use world-aligned enclosing boxes.
 - **The object vanishes:** check the camera view and floor placement. Without a
   collidable floor, a body continues falling beyond the camera.
 - **A script release fails:** verify attachment and language, and read Console

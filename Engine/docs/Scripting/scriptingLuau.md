@@ -74,7 +74,7 @@ instance creation, and camera selection. Use native member syntax for your langu
 Mutations apply after the callback, in call order. Getters read the callback's
 snapshot, so a getter after a setter still reads the original state. Properties and
 attributes must retain their engine types; numbers must be finite. Attribute names
-are `Name`, `Position`, `Size`, `Color`, `CanTouch`, `CanCollide`, `Anchored`, and
+are `Name`, `Position`, `Size`, `Color`, `CanTouch`, `CanCollide`, `Anchored`, `Friction`, and
 `Parent`. Color is three RGB numbers. Instance parents must be stable entity IDs;
 resolve a path with `Game.scene.Find` first. Scene List returns IDs, not path strings.
 

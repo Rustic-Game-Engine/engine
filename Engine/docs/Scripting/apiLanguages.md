@@ -222,6 +222,4 @@ Find/List retain their existing snapshot semantics in external adapters. List re
 
 Keyboard input remains limited to held WASD, arrows and Shift in embedded Play.
 [Touchscreen input and object clicks](/docs/api/touch-input) provide multi-touch
-input and CanTouch-gated click subscriptions in the embedded game view. Physics
-collision contact callbacks are not dispatched. These are shared runtime limits
-across languages.
+input and CanTouch-gated click subscriptions in the embedded game view. Physics contact subscriptions and ground queries are available across languages; see [Contacts and slopes](/docs/api/physics-actions/contacts).

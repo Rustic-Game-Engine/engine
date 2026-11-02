@@ -178,8 +178,7 @@ loop is timed out/restarted without editor failure; no project-language setting 
 - Implement initial Rapier rigid/static/kinematic bodies, colliders, triggers, layers,
   raycasts, fixed-step synchronization, and debug draw behind `physics-api`.
   Basic Play gravity and enclosing-box primitive collision are already implemented
-  in `engine-play`; see `PHYSICS.md`. Full rigid-body rotation, triggers, queries,
-  collision callbacks, and imported-mesh physics remain future work.
+  in `engine-play`, along with forces, friction, raycasts, contact subscriptions and slope support queries; see `PHYSICS.md`. Full rigid-body rotation, triggers and imported-mesh physics remain future work.
 - Implement WAV/MP3/AAC/FLAC/OGG 2D/3D playback, source/listener, attenuation, loop, bus, volume,
   pitch, and streaming music behind `audio-api`.
 - Implement native runtime labels, buttons, images, panels, text input, basic flex/grid

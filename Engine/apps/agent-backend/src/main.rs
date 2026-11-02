@@ -101,7 +101,7 @@ fn handle(session: &mut WorkspaceSession, request: &Value) -> Option<Value> {
             "protocolVersion": "2025-06-18",
             "capabilities": {"tools": {"listChanged": false}},
             "serverInfo": {"name": "rustic-workspace", "version": env!("CARGO_PKG_VERSION")},
-            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file and read the bundled authoring_guide before editing game content. Prefer custom models and persist complete scenes before playtesting. Read scene_explorer_guide for hierarchy organization and folder/object creation, duplication and deletion. Use editor tools for properties, scenes, script scopes, model previews and playtest input."
+            "instructions": "Call workspace_info first. If no game is selected, supply its absolute directory in project_root. Read project instructions with read_agent_file and read the bundled authoring_guide before editing game content. Prefer custom models and persist complete scenes before playtesting. Organize growing scenes with meaningful folders and nested subfolders. Read scene_explorer_guide for safe hierarchy edits and authoring_guide to choose separate menu, loading and map scenes and verify transitions. Use editor tools for properties, scenes, script scopes, model previews and playtest input."
         }),
         "tools/list" => json!({"tools": tools()}),
         "tools/call" => {
@@ -156,7 +156,7 @@ fn tools() -> Value {
     tools.as_array_mut().expect("tools array").push(json!({"name":"authoring_guide","description":"Read the bundled, current Rustic game design, modeling, scene, scope and playtest guidance. Works with existing customized integrations.","inputSchema":{"type":"object","properties":{}}}));
     tools.as_array_mut().expect("tools array").push(json!({"name":"texture_guide","description":"Read current HDR/PBR map, Texture child and sky guidance, including slot names, channel conventions, examples and renderer limits. Available even when installed skills were customized.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
 
-    tools.as_array_mut().expect("tools array").push(json!({"name":"scene_explorer_guide","description":"Read the current rustic-scene-explorer skill: organize hierarchy folders, add objects, duplicate/delete subtrees, reparent safely, undo and save. Available with preserved custom instructions.","inputSchema":{"type":"object","properties":{}}}));
+    tools.as_array_mut().expect("tools array").push(json!({"name":"scene_explorer_guide","description":"Read the current rustic-scene-explorer skill: organize folders and nested subfolders while authoring; distinguish folders from separate scenes; add objects, duplicate/delete subtrees, reparent safely, undo and save. Available with preserved custom instructions.","inputSchema":{"type":"object","properties":{}}}));
     tools
         .as_array_mut()
         .expect("tools array")

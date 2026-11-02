@@ -290,6 +290,14 @@ class Input:
 
 class Physics:
     @staticmethod
+    def ground(o,maxAngle=45): return rustic.query(dict(op="physics_ground",entity=_entity(o),max_angle=maxAngle))
+    @staticmethod
+    def onCollisionEnter(o,fn): return Events.connect(o,"CollisionEnter",fn)
+    @staticmethod
+    def onCollisionStay(o,fn): return Events.connect(o,"CollisionStay",fn)
+    @staticmethod
+    def onCollisionExit(o,fn): return Events.connect(o,"CollisionExit",fn)
+    @staticmethod
     def raycast(origin,direction,distance,ignore=None): return rustic.query(dict(op="physics_raycast",origin=origin,direction=direction,distance=distance,ignore=ignore or []))
     @staticmethod
     def sphereCast(origin,direction,distance,radius,ignore=None): return rustic.query(dict(op="physics_sphere_cast",origin=origin,direction=direction,distance=distance,radius=radius,ignore=ignore or []))
