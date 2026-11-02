@@ -1,0 +1,15 @@
+(
+    format_version: 2,
+    scripts: [
+        (
+            id: "6fc38a2e-9f27-44d0-a846-d6c8445448e9",
+            language: lua54,
+            relative_path: "scripts/orbit.lua",
+            api_version: (
+                major: 1,
+                minor: 1,
+            ),
+            public_properties: [],
+        ),
+    ],
+)

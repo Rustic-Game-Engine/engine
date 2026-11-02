@@ -153,6 +153,21 @@ const _rusticEntity = object => {
  return object.startsWith('game.scene.')?rustic.query({op:'scene_object',source:object}):Game.scene.Find(object)||object;
 };
 
+// Scene effects share the entity/query boundary and preserve existing tween helpers.
+Object.assign(Effects, {
+  spawn(asset,position,lifetime,parent=null) { return rustic.query({op:'effect_spawn',asset,parent:parent==null?null:_rusticEntity(parent),position,lifetime}); },
+  instantiate(asset,parent=null,position=[0,0,0]) { return rustic.query({op:'effect_instantiate',asset,parent:parent==null?null:_rusticEntity(parent),position}); },
+  types() { return rustic.query({op:'effect_types'}); },
+  sampleWind(position,time,layers=4294967295) { return rustic.query({op:'effect_wind',position,time,layers}); },
+  create(entity, kind) { return rustic.query({op:'effect_create', entity:_rusticEntity(entity), kind}); },
+  get(entity) { return rustic.query({op:'effect_get', entity:_rusticEntity(entity)}); },
+  configure(entity, settings) { return rustic.query({op:'effect_configure', entity:_rusticEntity(entity), settings}); },
+  state(entity) { return rustic.query({op:'effect_state', entity:_rusticEntity(entity)}); },
+});
+for (const action of ['play','pause','resume','stop','restart','reset','dispose']) {
+  Effects[action] = entity => rustic.query({op:'effect_control', entity:_rusticEntity(entity), action});
+}
+
 // Entity services use the live shared Rust world.
 globalThis.Tags={
 add(entity,name){return rustic.query({op:"tags_add",entity:_rusticEntity(entity),name:name});},

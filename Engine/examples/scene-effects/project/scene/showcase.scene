@@ -1,0 +1,2695 @@
+(
+    resource_kind: "rustic_scene",
+    schema_version: 2,
+    resource_id: "a0885823-28e9-4e2e-94a0-0887a80b3d04",
+    name: "Scene Effects Showcase",
+    checksum: Some("eac8ee48e18f9528449792d956a84839037c8da8c49d9cbe7411f6f0f1cda8a0"),
+    entities: [
+        /*[0]*/ (
+            id: "0104e2c8-aac2-4dec-ad0b-21af9afeb104",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"19 Animated Surface pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,-0.15,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[1]*/ (
+            id: "01ce7f97-9d46-43e7-9bac-b5fa70b7e5ea",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"06 Ribbon / Tube target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[2]*/ (
+            id: "061521cc-a34c-40fa-940b-56527eb02fb2",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"07 Particle Force Field pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,-0.15,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[3]*/ (
+            id: "0ab22307-bd19-4b03-80d0-a2c241bb7636",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"08 Particle Collision Volume point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,2.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[4]*/ (
+            id: "0cd53a4e-2717-42ad-b1df-f002a59c360e",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:102,priority:0),kind:Beam((start_target:None,end_target:None,start:(0.0,0.0,0.0),end:(2.0,2.0,0.0),width:0.1,segments:24,noise_amplitude:0.2,noise_frequency:3.0,noise_speed:5.0,branch_count:0,appearance:(color:(keys:[(time:0.0,color:(0.25,0.5,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"03 Beam / Lightning\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[5]*/ (
+            id: "1385b241-997a-4214-b0cd-ccab1eee6bcc",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"04 Shockwave pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,-0.15,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[6]*/ (
+            id: "1901c611-505e-4a25-a66e-b439ab7052cf",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"05 Mesh Particle Emitter target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[7]*/ (
+            id: "1d2d7847-da17-4e34-aea7-a6a287dcd80c",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"25 Screen Flash pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,-0.15,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[8]*/ (
+            id: "2635f0b1-9c38-4dc7-aaaf-463bdb63720c",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:123,priority:0),kind:CameraShake((target:None,position_amplitude:(0.015,0.015,0.015),rotation_amplitude:(0.002,0.002,0.002),frequency:20.0,falloff:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),radius:20.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"24 Camera Shake\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,0.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[9]*/ (
+            id: "27677f27-05ab-47ef-ae9d-d5ee8a5d1e55",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"10 Fog Volume pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,-0.15,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[10]*/ (
+            id: "2a6976e1-afd2-44cd-8199-21b27ae3eceb",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"17 Foliage Scatter point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,2.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[11]*/ (
+            id: "2abc8d6c-3882-44b2-829f-14bcc0c889c4",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"24 Camera Shake pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,-0.15,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[12]*/ (
+            id: "2ad211f5-9f7d-40ee-86fa-7f0f54b74dbc",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:110,priority:0),kind:Decal((dimensions:(1.0,1.0,1.0),appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)),normal_map:None,orm_map:None,roughness:0.8,metallic:0.0,edge_fade:0.1,angle_fade:0.5,layers:4294967295)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"11 Decal Projector\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,0.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[13]*/ (
+            id: "3024d25a-1689-4c4e-a1c1-a6b970861124",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"20 Lens Flare point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,2.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[14]*/ (
+            id: "31d4b42e-4fe7-4ce4-836a-5946f388dc4f",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"03 Beam / Lightning pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,-0.15,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[15]*/ (
+            id: "32e4c734-14f5-4b20-9f66-6ea3e281ee36",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:104,priority:0),kind:MeshParticle((prewarm:false,prewarm_time:5.0,max_particles:1000,rate:12.0,rate_over_distance:0.0,bursts:[],shape:Cone,dimensions:(1.0,1.0,1.0),surface_only:false,lifetime:(1.0,2.0),speed:(2.0,4.0),direction:(0.0,1.0,0.0),start_size:(0.15,0.35),gravity:(0.0,-5.0,0.0),force:(0.0,0.0,0.0),drag:0.1,wind_influence:1.0,noise:0.0,angular_velocity:0.0,inherit_velocity:0.0,velocity_limit:1000.0,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)),mesh:Some(\"1591b699-988f-4eb1-82e9-298b6e41bfde\"),mesh_spawn_triangles:[],collision:true,collision_layers:4294967295,bounce:0.5,friction:0.1,collision_response:Bounce,sub_emitter:None,sub_emitter_probability:1.0,max_generations:3,flipbook:(1,1),flipbook_fps:0.0,stretch:0.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"05 Mesh Particle Emitter\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[16]*/ (
+            id: "35e175df-a2db-4a61-a191-c94bed296218",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"13 Water Ripple / Wake target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,1.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[17]*/ (
+            id: "390be792-6876-4e4c-a06d-376e67fe1c46",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:107,priority:0),kind:CollisionVolume((shape:Plane,dimensions:(10.0,10.0,10.0),layers:4294967295,bounce:0.5,friction:0.1,response:Bounce,impact_effect:None)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"08 Particle Collision Volume\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,0.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[18]*/ (
+            id: "3db923e9-daed-46f7-9640-356b779ee395",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"18 Dissolve target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,1.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[19]*/ (
+            id: "40d4c380-2411-4e7b-8c0a-236f03fca70b",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:119,priority:0),kind:LensFlare((light:Some(\"3024d25a-1689-4c4e-a1c1-a6b970861124\"),intensity:1.0,scale:0.1,color:(1.0,0.8,0.5),ghosts:4,ghost_spacing:0.2,streak_length:0.3,fade_speed:5.0,texture:None)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"20 Lens Flare\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,0.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[20]*/ (
+            id: "44ac0de7-61bf-4221-a451-a2054c110253",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"11 Decal Projector target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,1.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[21]*/ (
+            id: "45dbb9ae-2e91-40c0-ad03-fafeacfe4d62",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"11 Decal Projector point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,2.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[22]*/ (
+            id: "466ebb6b-cd67-4c67-b656-3b7f4bbf9917",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"09 Projectile Tracer point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,2.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[23]*/ (
+            id: "4773eceb-8b1e-4424-9c16-3f519e8eee55",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"25 Screen Flash point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,2.0,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[24]*/ (
+            id: "47bc3132-bb7f-40cf-9df6-a0f583d90324",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"01 Trail Renderer point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[25]*/ (
+            id: "483ec965-1d51-4506-994a-6d4a89450dc8",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"12 Weather Volume pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,-0.15,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[26]*/ (
+            id: "495f498e-8b52-4ee3-b724-aecf840d7ee0",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"14 Wind Zone pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,-0.15,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[27]*/ (
+            id: "4c4e6fa6-e5b6-4b3b-999e-191790bc6b40",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"02 Particle Emitter target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[28]*/ (
+            id: "4ccb0627-259f-43d3-bb4b-3c69239ef9a7",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:100,priority:0),kind:Trail((emitting:true,lifetime:1.0,width:0.2,min_vertex_distance:0.05,max_points:256,teleport_distance:20.0,camera_facing:true,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"01 Trail Renderer\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.scripts",
+                    version: 1,
+                    payload: "[(format_version:1,script_id:\"6fc38a2e-9f27-44d0-a846-d6c8445448e9\",enabled:true,properties:{})]",
+                ),
+                /*[4]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[29]*/ (
+            id: "4e256006-6741-461c-9496-ccdebd7eae56",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"18 Dissolve point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,2.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[30]*/ (
+            id: "527c081b-4b08-45b3-8d75-f6ea72344cc2",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"10 Fog Volume target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,1.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[31]*/ (
+            id: "56f0f99a-33c2-480f-a155-fa773de62565",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"14 Wind Zone target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,1.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[32]*/ (
+            id: "59037f03-06b0-4e28-8320-f98fb655a214",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"13 Water Ripple / Wake pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,-0.15,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[33]*/ (
+            id: "5fbec516-35a8-4cef-9038-713a5ae59702",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"09 Projectile Tracer pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,-0.15,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[34]*/ (
+            id: "6534e18d-4439-4f18-a7ef-ce9c2a0983be",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"14 Wind Zone point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,2.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[35]*/ (
+            id: "66ab88b3-7bed-4da2-8458-6eb15baacf8d",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:105,priority:0),kind:Ribbon((points:[(0.0,0.0,0.0),(1.0,1.0,0.0),(2.0,0.0,0.0)],width:0.2,tube:false,radial_segments:8,subdivisions:8,twist:0.0,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"06 Ribbon / Tube\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[36]*/ (
+            id: "6ad30a03-f32b-4266-8a44-0768976d0c26",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"20 Lens Flare target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,1.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[37]*/ (
+            id: "6b5ef1bf-c98d-4d60-b61e-f43d7acfaaf1",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"16 Light Shaft point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,2.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[38]*/ (
+            id: "6e98df0d-3fef-4dc6-96aa-10ee6dab47b7",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"15 Heat Haze point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,2.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[39]*/ (
+            id: "6eaf97bc-1b03-4087-8b2f-e4dd594a8776",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"07 Particle Force Field target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,1.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[40]*/ (
+            id: "6ee6146b-50ba-43f0-b2c3-345138af955b",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"26 Reflection Probe pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,-0.15,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[41]*/ (
+            id: "70d6965d-e28b-44ef-b471-19e952d6d228",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"22 Post-Processing Volume pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,-0.15,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[42]*/ (
+            id: "71fa5443-37ae-4920-9de6-793fd4eba368",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"06 Ribbon / Tube point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[43]*/ (
+            id: "72d407da-dfe7-48c3-9590-32757fe65b94",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:117,priority:0),kind:Dissolve((target:Some(\"3db923e9-daed-46f7-9640-356b779ee395\"),progress:0.0,edge_width:0.05,edge_color:(1.0,0.4,0.0),edge_emission:3.0,noise_scale:10.0,curve:(keys:[(time:0.0,value:0.0),(time:1.0,value:1.0)]))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"18 Dissolve\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,0.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[44]*/ (
+            id: "74894c42-cde7-4a88-8c34-f95d791486ee",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"03 Beam / Lightning target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[45]*/ (
+            id: "76347871-0ac5-4b52-a6b9-bee258a04ee5",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"16 Light Shaft pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,-0.15,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[46]*/ (
+            id: "79197d23-911f-4e20-9c2c-c3e5dd8716ad",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"23 Outline / Highlight point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,2.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[47]*/ (
+            id: "79917dbc-8c73-482c-815d-56e4b1841d07",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"21 Light Pulse / Flicker pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,-0.15,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[48]*/ (
+            id: "7f0369c2-0ebe-498f-aff5-146155ecd137",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"26 Reflection Probe target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,1.0,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[49]*/ (
+            id: "8084b246-10b0-4d5d-9936-978b20c8d2db",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"19 Animated Surface target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,1.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[50]*/ (
+            id: "8266ce87-1863-4be3-b0bd-d057ab190e3c",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:124,priority:0),kind:ScreenFlash((target:None,color:(1.0,0.0,0.0,1.0),opacity:0.03,fade_in:0.05,fade_out:0.4,vignette:0.5,blend:Alpha)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"25 Screen Flash\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,0.0,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[51]*/ (
+            id: "82ae022f-5883-4459-960c-52914d79185f",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:directional,color:(1.0,0.9,0.75),intensity:2.0,range:10.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"Key light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,0.0,0.0),rotation:(-0.33606267,-0.18662454,0.06812327,0.9206478),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[52]*/ (
+            id: "850e74c2-7381-4192-9cb6-eab176ec0fc1",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"13 Water Ripple / Wake point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,2.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[53]*/ (
+            id: "862b460f-cc46-4d37-8186-ba5278c3f30e",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:120,priority:0),kind:LightPulse((target:Some(\"f09c8799-9e00-4d34-8b5b-b9a51a4f854d\"),intensity:(keys:[(time:0.0,value:0.0),(time:1.0,value:1.0)]),color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),frequency:1.0,randomness:0.0,phase:0.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"21 Light Pulse / Flicker\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,0.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[54]*/ (
+            id: "876780c8-227e-4377-b720-5df0a6ee8238",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"12 Weather Volume point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,2.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[55]*/ (
+            id: "8e6d0237-94ec-4866-bfe5-c7f47f017ee2",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:125,priority:0),kind:ReflectionProbe((dimensions:(5.0,5.0,5.0),cubemap:Some(\"afb9a09f-7c7b-40c3-a8da-a2ea29475a45\"),resolution:128,refresh:Baked,blend_distance:1.0,update_interval:1.0,parallax_correction:true)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"26 Reflection Probe\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,0.0,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[56]*/ (
+            id: "91a8cbd7-90fc-4175-b95b-be5352774d2c",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"01 Trail Renderer target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[57]*/ (
+            id: "98fdde01-9b5a-4df8-b65b-72b81e2c76cf",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:101,priority:0),kind:Particle((prewarm:false,prewarm_time:5.0,max_particles:1000,rate:30.0,rate_over_distance:0.0,bursts:[],shape:Cone,dimensions:(1.0,1.0,1.0),surface_only:false,lifetime:(1.0,2.0),speed:(1.0,3.0),direction:(0.0,1.0,0.0),start_size:(0.1,0.25),gravity:(0.0,-1.0,0.0),force:(0.0,0.0,0.0),drag:0.1,wind_influence:1.0,noise:0.0,angular_velocity:0.0,inherit_velocity:0.0,velocity_limit:1000.0,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)),mesh:None,mesh_spawn_triangles:[],collision:false,collision_layers:4294967295,bounce:0.5,friction:0.1,collision_response:Bounce,sub_emitter:None,sub_emitter_probability:1.0,max_generations:3,flipbook:(1,1),flipbook_fps:0.0,stretch:0.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"02 Particle Emitter\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[58]*/ (
+            id: "9e6bbf48-56b3-495f-a026-016af4dc3e45",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:113,priority:0),kind:Wind((shape:Sphere,dimensions:(3.0,3.0,3.0),force_type:Directional,direction:(1.0,0.0,0.0),strength:2.0,falloff:1.0,turbulence:0.0,frequency:1.0,layers:4294967295,global:false)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"14 Wind Zone\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,0.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[59]*/ (
+            id: "a05387f8-6c77-4076-9a6d-2918c69d306f",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"19 Animated Surface point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,2.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[60]*/ (
+            id: "a16fe331-ba86-4ae8-b796-8005ce650715",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"08 Particle Collision Volume target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,1.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[61]*/ (
+            id: "a5d6d77f-fa48-4ff1-85f2-3e3464d68cf2",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"25 Screen Flash target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,1.0,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[62]*/ (
+            id: "ad100edd-5c25-4474-868f-da70d48eaed0",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"09 Projectile Tracer target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,1.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[63]*/ (
+            id: "aec968e4-3583-460b-bee5-b9d36e5e9080",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"23 Outline / Highlight pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,-0.15,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[64]*/ (
+            id: "b138bc4d-abd4-49b1-bdb8-86d9dbeebf12",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:115,priority:0),kind:LightShaft((light:Some(\"6b5ef1bf-c98d-4d60-b61e-f43d7acfaaf1\"),intensity:0.5,color:(1.0,0.9,0.6),density:0.1,anisotropy:0.5,max_distance:100.0,samples:32)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"16 Light Shaft\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,0.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[65]*/ (
+            id: "b38e3e49-6de2-4b5e-9fa3-0f1bad4c45f9",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:114,priority:0),kind:HeatHaze((strength:0.01,noise_scale:10.0,speed:1.0,radius:3.0,edge_falloff:1.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"15 Heat Haze\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,0.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[66]*/ (
+            id: "b46a37cc-7252-4f63-820f-78dbd4c525e7",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:116,priority:0),kind:FoliageScatter((meshes:[\"b3abde13-c11c-4504-9506-836e3a02547b\"],density:1.0,dimensions:(3.0,1.0,3.0),scale:(0.5,1.5),max_instances:40,wind_response:1.0,appearance:(color:(keys:[(time:0.0,color:(0.2,0.6,0.12,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"17 Foliage Scatter\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,0.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[67]*/ (
+            id: "b4e923b2-1fbc-4532-80eb-c6ad36123503",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"12 Weather Volume target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,1.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[68]*/ (
+            id: "baa911bc-c022-403d-91de-bbbdef7442f5",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:121,priority:0),kind:PostProcess((global:false,dimensions:(3.0,3.0,3.0),blend_distance:1.0,weight:1.0,exposure:0.0,saturation:1.1,contrast:1.0,brightness:0.0,tint:(1.0,1.0,1.0),bloom:0.0,vignette:0.2,chromatic_aberration:0.0,grain:0.0,depth_of_field:0.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"22 Post-Processing Volume\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,0.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[69]*/ (
+            id: "bc09314e-b4d9-4118-8c85-6ae67d0ae5ff",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:122,priority:0),kind:Outline((targets:[\"dd587403-9c26-41de-a267-6bd18914290a\"],color:(1.0,0.6,0.0,1.0),thickness:0.03,pulse_speed:0.0,through_walls:false)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"23 Outline / Highlight\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,0.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[70]*/ (
+            id: "be96d399-d095-4bca-bad4-4d56061e4620",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:103,priority:0),kind:Shockwave((target:None,source_velocity:(0.0,0.0,0.0),wake_angle:0.6,foam_intensity:0.5,foam_lifetime:1.0,normal_strength:1.0,max_disturbances:32,initial_radius:0.1,final_radius:4.0,thickness:0.2,vertical_offset:0.01,amplitude:0.1,wavelength:1.0,damping:1.0,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"04 Shockwave\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[71]*/ (
+            id: "c006fe07-3ca7-40f4-9625-4231822b0b6d",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"26 Reflection Probe point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,2.0,20.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[72]*/ (
+            id: "c1df5b30-9559-4e62-ad6f-70a065914998",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:112,priority:0),kind:WaterRipple((target:None,source_velocity:(0.0,0.0,0.0),wake_angle:0.6,foam_intensity:0.5,foam_lifetime:1.0,normal_strength:1.0,max_disturbances:32,initial_radius:0.1,final_radius:4.0,thickness:0.2,vertical_offset:0.01,amplitude:0.1,wavelength:1.0,damping:1.0,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"13 Water Ripple / Wake\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.scripts",
+                    version: 1,
+                    payload: "[(format_version:1,script_id:\"6fc38a2e-9f27-44d0-a846-d6c8445448e9\",enabled:true,properties:{})]",
+                ),
+                /*[4]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,0.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[73]*/ (
+            id: "c21b48c8-6fb0-4d89-a819-5224da6af92d",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"02 Particle Emitter point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[74]*/ (
+            id: "c3064273-2a95-4806-92c8-cb818b7eacab",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"17 Foliage Scatter target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,1.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[75]*/ (
+            id: "c7ccb861-8a44-4969-a520-161398ed6f4d",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"20 Lens Flare pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,-0.15,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[76]*/ (
+            id: "c871abfe-324a-4804-b49c-d2e97cce32f9",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:106,priority:0),kind:ForceField((shape:Sphere,dimensions:(3.0,3.0,3.0),force_type:Directional,direction:(1.0,0.0,0.0),strength:2.0,falloff:1.0,turbulence:0.0,frequency:1.0,layers:4294967295,global:false)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"07 Particle Force Field\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,0.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[77]*/ (
+            id: "c9306f35-2f7e-4fdd-bbc7-b0dcbe417c64",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"04 Shockwave target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,1.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[78]*/ (
+            id: "c9a0d950-db7d-4245-9d86-5114c6a9bc47",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:111,priority:0),kind:Weather((weather:Rain,emitter:(prewarm:false,prewarm_time:5.0,max_particles:300,rate:200.0,rate_over_distance:0.0,bursts:[],shape:Box,dimensions:(3.0,4.0,3.0),surface_only:false,lifetime:(2.0,3.0),speed:(8.0,10.0),direction:(0.0,-1.0,0.0),start_size:(0.1,0.25),gravity:(0.0,0.0,0.0),force:(0.0,0.0,0.0),drag:0.1,wind_influence:1.0,noise:0.0,angular_velocity:0.0,inherit_velocity:0.0,velocity_limit:1000.0,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)),mesh:None,mesh_spawn_triangles:[],collision:false,collision_layers:4294967295,bounce:0.5,friction:0.1,collision_response:Bounce,sub_emitter:None,sub_emitter_probability:1.0,max_generations:3,flipbook:(1,1),flipbook_fps:0.0,stretch:0.0),intensity:1.0,camera_follow:false)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"12 Weather Volume\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,0.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[79]*/ (
+            id: "cb9ca10a-497a-438a-abf2-501b190d2e93",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"01 Trail Renderer pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,-0.15,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[80]*/ (
+            id: "cccfd505-954b-426c-8d52-88aa62a15e86",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"24 Camera Shake target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,1.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[81]*/ (
+            id: "cf28f330-33be-4512-9392-0a421132571a",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"18 Dissolve pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,-0.15,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[82]*/ (
+            id: "cf54cdfe-28bb-4124-ae71-1697cbf7b8f7",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"05 Mesh Particle Emitter point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[83]*/ (
+            id: "d084f656-beba-4df2-8b6d-22afde07c522",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:109,priority:0),kind:Fog((shape:Box,dimensions:(3.0,2.0,3.0),density:0.08,color:(0.6,0.7,0.8),height_falloff:0.5,edge_falloff:1.0,noise_scale:1.0,noise_speed:0.1,anisotropy:0.0,steps:32)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"10 Fog Volume\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,0.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[84]*/ (
+            id: "d1144650-d058-4f4e-a40a-0c38ea9bd1c6",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"24 Camera Shake point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,2.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[85]*/ (
+            id: "d9da673f-61d4-40f7-900e-8cb056772f75",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"21 Light Pulse / Flicker target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,1.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[86]*/ (
+            id: "d9f197ae-99d2-4bb1-99f9-90a4189c7160",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"15 Heat Haze pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,-0.15,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[87]*/ (
+            id: "dae9238c-dbca-4260-8e38-061516986caa",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"04 Shockwave point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[88]*/ (
+            id: "dbe4e477-6e4b-445c-ad57-1f4fc70ac9dc",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"16 Light Shaft target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,1.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[89]*/ (
+            id: "dd587403-9c26-41de-a267-6bd18914290a",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"23 Outline / Highlight target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,1.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[90]*/ (
+            id: "de4872c9-c957-4dfe-8f8a-b40c5218f648",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"Showcase floor\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.12,0.14,0.18,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"plane\",size:(45.0,40.0))",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(12.5,-0.3,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[91]*/ (
+            id: "df42a82a-322f-4bb8-97fd-42ebf6e81eba",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"07 Particle Force Field point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,2.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[92]*/ (
+            id: "e4ec4b1f-8a20-44ab-8dcd-1783adca7ea2",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"17 Foliage Scatter pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,-0.15,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[93]*/ (
+            id: "e5d8d390-bd84-4610-84b1-6e31badd0d0b",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"06 Ribbon / Tube pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(25.0,-0.15,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[94]*/ (
+            id: "ed66fe47-2a73-46e4-9bcd-59ce033a7410",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"11 Decal Projector pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,-0.15,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[95]*/ (
+            id: "ef400e19-1227-429a-a4e4-12a079fd6fbb",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"10 Fog Volume point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,2.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[96]*/ (
+            id: "f09c8799-9e00-4d34-8b5b-b9a51a4f854d",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"21 Light Pulse / Flicker point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,2.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[97]*/ (
+            id: "f10c2227-5280-4022-af04-7f42a4b0eabd",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"05 Mesh Particle Emitter pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(20.0,-0.15,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[98]*/ (
+            id: "f257339d-44e1-490f-9077-8b1310efdeb7",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"02 Particle Emitter pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,-0.15,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[99]*/ (
+            id: "f8f20726-c8cd-4e22-8ebd-83bc5b0ed36e",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"15 Heat Haze target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,1.0,10.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[100]*/ (
+            id: "faa5c19b-2cf4-4e2d-a045-60dc4603a1aa",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:108,priority:0),kind:ProjectileTracer((velocity:(0.0,0.0,10.0),length:2.0,width:0.05,appearance:(color:(keys:[(time:0.0,color:(1.0,1.0,1.0,1.0))]),opacity:(keys:[(time:0.0,value:1.0),(time:1.0,value:0.0)]),size:(keys:[(time:0.0,value:1.0),(time:1.0,value:1.0)]),material:None,texture:None,emission:1.0,blend:Alpha,uv_scale:(1.0,1.0),uv_scroll:(0.0,0.0)))))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"09 Projectile Tracer\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,0.0,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[101]*/ (
+            id: "fb69078d-f696-4078-8a1c-50bdc3a944bb",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"22 Post-Processing Volume target\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.2,0.45,0.65,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"sphere\",radius:0.6,segments:24,rings:16)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,1.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[102]*/ (
+            id: "fb99133b-fbab-48fd-a285-e092aca067a1",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"22 Post-Processing Volume point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(15.0,2.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[103]*/ (
+            id: "fdb17b37-4e5a-4093-9bb9-f462fd37c321",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"08 Particle Collision Volume pedestal\"",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.07,0.09,0.13,1.0),can_touch:true,can_collide:true,anchored:true)",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.primitive",
+                    version: 1,
+                    payload: "(kind:\"cylinder\",radius:2.0,height:0.2,segments:48)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(5.0,-0.15,5.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[104]*/ (
+            id: "fdbd309f-5712-4d34-9b98-73a2af25987c",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.camera",
+                    version: 1,
+                    payload: "(projection:(kind:\"perspective\",vertical_fov_radians:1.0471976,near:0.1,far:1000.0),zoom:1.0,active:true,order:0)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"Showcase Camera\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(12.5,18.0,-25.0),rotation:(0.1888589,0.0,0.0,0.9820042),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[105]*/ (
+            id: "fdd6d2f2-b8e3-4c00-a0e1-bd6eeeb27586",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.effect",
+                    version: 1,
+                    payload: "(source:None,common:(parameters:{},bounds:None,enabled:true,visible:true,auto_play:true,looping:true,duration:5.0,delay:0.0,time_scale:1.0,simulation_space:World,attachment_target:None,visibility_layers:4294967295,render_distance:1000.0,quality:Medium,random_seed:118,priority:0),kind:AnimatedSurface((target:Some(\"8084b246-10b0-4d5d-9936-978b20c8d2db\"),uv_scroll:(0.2,0.0),uv_scale:(1.0,1.0),uv_rotation:0.0,color:(keys:[(time:0.0,color:(0.1,0.4,1.0,1.0)),(time:1.0,color:(1.0,0.2,0.5,1.0))]),emission:1.0,speed:1.0)))",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"19 Animated Surface\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(0.0,0.0,15.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+        /*[106]*/ (
+            id: "fe8463b6-82c4-41bd-adb4-5c7b13fd02a3",
+            components: [
+                /*[0]*/ (
+                    schema: "rustic.light",
+                    version: 1,
+                    payload: "(kind:point,color:(1.0,1.0,1.0),intensity:4.0,range:5.0,spot_outer_angle_radians:0.7853982,casts_shadows:true)",
+                ),
+                /*[1]*/ (
+                    schema: "rustic.name",
+                    version: 1,
+                    payload: "\"03 Beam / Lightning point light\"",
+                ),
+                /*[2]*/ (
+                    schema: "rustic.part_attributes",
+                    version: 1,
+                    payload: "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)",
+                ),
+                /*[3]*/ (
+                    schema: "rustic.transform",
+                    version: 1,
+                    payload: "(translation:(10.0,2.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+                ),
+            ],
+        ),
+    ],
+    instances: [],
+)

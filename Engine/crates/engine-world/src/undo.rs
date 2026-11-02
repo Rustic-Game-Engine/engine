@@ -7,6 +7,11 @@ use crate::{
 /// command batch and therefore cannot leave a partial hierarchy edit behind.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneEdit {
+    Effect {
+        entity: EntityId,
+        before: Option<crate::EffectComponent>,
+        after: Option<crate::EffectComponent>,
+    },
     Environment {
         before: crate::SceneEnvironment,
         after: crate::SceneEnvironment,
@@ -84,6 +89,7 @@ impl SceneEdit {
 
     pub fn label(&self) -> &str {
         match self {
+            Self::Effect { .. } => "Scene effect",
             Self::Environment { .. } => "Scene environment",
             Self::Camera { .. } => "Camera",
             Self::Light { .. } => "Light",
@@ -102,6 +108,10 @@ impl SceneEdit {
 
     fn append_forward(&self, output: &mut Vec<WorldCommand>) {
         match self {
+            Self::Effect { entity, after, .. } => output.push(WorldCommand::SetEffect {
+                entity: *entity,
+                value: after.clone().map(Box::new),
+            }),
             Self::Environment { after, .. } => {
                 output.push(WorldCommand::SetEnvironment(after.clone()));
             }
@@ -157,6 +167,10 @@ impl SceneEdit {
 
     fn append_reverse(&self, output: &mut Vec<WorldCommand>) {
         match self {
+            Self::Effect { entity, before, .. } => output.push(WorldCommand::SetEffect {
+                entity: *entity,
+                value: before.clone().map(Box::new),
+            }),
             Self::Environment { before, .. } => {
                 output.push(WorldCommand::SetEnvironment(before.clone()));
             }

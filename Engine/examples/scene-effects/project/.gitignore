@@ -1,0 +1,14 @@
+/.rustic/generated/
+/project.engine.bak
+!/logs/
+logs/*
+!logs/.gitkeep
+!/builds/
+builds/*
+!builds/.gitkeep
+!/cache/
+cache/*
+!cache/.gitkeep
+!/temp/
+temp/*
+!temp/.gitkeep

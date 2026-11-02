@@ -80,7 +80,7 @@ impl SurfaceCache {
         Ok(())
     }
 }
-fn load(root: &Path, relative: &str) -> Result<image::Rgba32FImage, RendererError> {
+pub(super) fn load(root: &Path, relative: &str) -> Result<image::Rgba32FImage, RendererError> {
     let fail = |e| RendererError::InvalidMesh(format!("Texture {relative}: {e}"));
     let root = root.canonicalize().map_err(|e| fail(e.to_string()))?;
     let path = root

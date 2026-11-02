@@ -1,4 +1,5 @@
 mod agent_tools;
+mod effects;
 mod explorer_selection;
 mod play_session;
 mod pointer_input;
@@ -168,6 +169,7 @@ struct EditorApp {
     scene_graph: scene_graph::SceneGraph,
     ui_designer: ui_designer::UiDesigner,
     render_world: RenderWorldBuffer,
+    effect_preview: effects::EffectPreview,
     model_assets: BTreeMap<AssetId, ModelArtifact>,
     detach_inspector: bool,
     game_settings: GameSettings,
@@ -289,6 +291,7 @@ impl EditorApp {
             scene_graph: scene_graph::SceneGraph::default(),
             ui_designer: ui_designer::UiDesigner::default(),
             render_world: RenderWorldBuffer::new(),
+            effect_preview: effects::EffectPreview::default(),
             model_assets,
             detach_inspector: false,
             game_settings,
@@ -361,18 +364,27 @@ impl EditorApp {
         }
         self.agent_frame = None;
         self.preview_dirty = true;
-        let scene = viewport_scene(
+        self.effect_preview
+            .update(&self.document, self.camera.position());
+        let mut scene = viewport_scene(
             &self.document,
             self.camera,
             self.viewport_extent,
             &mut self.render_world,
             &self.model_assets,
         );
+        let effects = self.effect_preview.runtime.frame().clone();
+        renderer_wgpu::append_mesh_particle_models(&mut scene, &effects, &self.model_assets);
+        renderer_wgpu::append_effect_frame(&mut scene, &effects);
+        if self.effect_preview.show_bounds {
+            effects::append_bounds(&mut scene, &self.document);
+        }
         let request = ViewportRenderRequest {
             sequence: self.agent_frame_sequence + 1,
             width: self.viewport_extent[0],
             height: self.viewport_extent[1],
             scene,
+            effects,
         };
         match self.viewport_request.try_send(request) {
             Ok(()) => {
@@ -431,7 +443,9 @@ impl EditorApp {
                         frame.adapter.backend,
                         frame.digest_hex()
                     );
-                    self.log(Severity::Info, "renderer", self.preview_status.clone());
+                    if !self.effect_preview.playing {
+                        self.log(Severity::Info, "renderer", self.preview_status.clone());
+                    }
                 }
                 Ok(None) => {
                     "Viewport suspended while minimized".clone_into(&mut self.preview_status);
@@ -443,6 +457,12 @@ impl EditorApp {
             }
             if self.preview_dirty {
                 self.refresh_preview();
+            }
+        }
+        if self.play.is_none() && self.effect_preview.playing {
+            context.request_repaint_after(Duration::from_millis(33));
+            if self.effect_preview.last_tick.elapsed() >= Duration::from_millis(33) {
+                self.preview_dirty = true;
             }
         }
         if self.preview_dirty && self.play.is_none() {
@@ -1654,6 +1674,7 @@ impl eframe::App for EditorApp {
             gizmo_widget: &mut self.gizmo_widget,
             scene_graph: &mut self.scene_graph,
             ui_designer: &mut self.ui_designer,
+            effect_preview: &mut self.effect_preview,
             model_assets: &mut self.model_assets,
             project_file_action: &mut project_file_action,
         };
@@ -1696,6 +1717,7 @@ struct EditorViewer<'a> {
     gizmo_widget: &'a mut transform_widget::TransformWidget,
     scene_graph: &'a mut scene_graph::SceneGraph,
     ui_designer: &'a mut ui_designer::UiDesigner,
+    effect_preview: &'a mut effects::EffectPreview,
     model_assets: &'a mut BTreeMap<AssetId, ModelArtifact>,
     project_file_action: &'a mut Option<ProjectFileAction>,
 }
@@ -1871,8 +1893,56 @@ impl EditorViewer<'_> {
                 self.viewport_input(ui, &response);
             }
         }
+        if !is_2d
+            && !self.playing
+            && !self.document.is_read_only()
+            && let Some(payload) = response.dnd_release_payload::<effects::PresetDrop>()
+        {
+            match self.document.add_effect_asset(&payload.0, None) {
+                Ok(id) => {
+                    let position = ui
+                        .input(|input| input.pointer.interact_pos())
+                        .and_then(|point| {
+                            viewport_ground_position(*self.camera, response.rect, point)
+                        })
+                        .unwrap_or(self.camera.focus);
+                    let _ = self.document.set_transform(
+                        id,
+                        LocalTransform {
+                            translation: position,
+                            ..LocalTransform::IDENTITY
+                        },
+                    );
+                    self.request_preview = true;
+                }
+                Err(error) => self.console.push(simple_console(
+                    Severity::Error,
+                    "effects.asset",
+                    error.to_string(),
+                )),
+            }
+        }
         if let Some(ViewportDrop::File(path)) = dropped.as_deref() {
-            if path.extension().is_some_and(|extension| {
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("effect"))
+                && !is_2d
+                && !self.playing
+            {
+                let result =
+                    effects::load_effect_asset(self.project_root, path).and_then(|asset| {
+                        self.document
+                            .add_effect_asset(&asset, selected_scene_folder(self.document))
+                            .map_err(|e| e.to_string())
+                    });
+                match result {
+                    Ok(_) => self.request_preview = true,
+                    Err(error) => {
+                        self.console
+                            .push(simple_console(Severity::Error, "effects.asset", error))
+                    }
+                }
+            } else if path.extension().is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("scene") || extension.eq_ignore_ascii_case("rscene")
             }) {
                 let relative = path
@@ -2314,6 +2384,27 @@ impl EditorViewer<'_> {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("+ Add", |ui| {
+                    ui.menu_button("Effects", |ui| {
+                        for kind in engine_world::effects::EffectKind::all_defaults() {
+                            if ui
+                                .add_enabled(
+                                    !self.document.is_read_only() && !self.playing,
+                                    egui::Button::new(kind.name()),
+                                )
+                                .clicked()
+                            {
+                                match self.document.add_effect(kind, selected_folder) {
+                                    Ok(_) => self.request_preview = true,
+                                    Err(error) => self.console.push(simple_console(
+                                        Severity::Error,
+                                        "effects",
+                                        error.to_string(),
+                                    )),
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
                     if ui
                         .add_enabled(!self.document.is_read_only(), egui::Button::new("Folder"))
                         .clicked()
@@ -2478,6 +2569,23 @@ impl EditorViewer<'_> {
             SceneTreeAction::TextureFiles(entity, paths) => {
                 self.assign_texture_files(entity, &paths);
                 return;
+            }
+            SceneTreeAction::EffectPreset(entity, asset) => self
+                .document
+                .add_effect_asset(&asset, Some(entity))
+                .map(|_| ()),
+            SceneTreeAction::EffectFile(entity, path) => {
+                match effects::load_effect_asset(self.project_root, &path) {
+                    Ok(asset) => self
+                        .document
+                        .add_effect_asset(&asset, Some(entity))
+                        .map(|_| ()),
+                    Err(error) => {
+                        self.console
+                            .push(simple_console(Severity::Error, "effects.asset", error));
+                        return;
+                    }
+                }
             }
             SceneTreeAction::Rename(entity, name) => self.document.set_name(entity, name),
             SceneTreeAction::Delete(entity) => self.document.delete_tree(entity),
@@ -2781,6 +2889,7 @@ impl EditorViewer<'_> {
     )]
     fn inspector_contents(&mut self, ui: &mut egui::Ui) {
         self.environment_inspector(ui);
+        self.effects_panel(ui);
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
@@ -2807,6 +2916,7 @@ impl EditorViewer<'_> {
             snapshot.local_transform.scale = live.scale.into();
             snapshot.part_attributes = live.part_attributes;
             snapshot.scripts.clone_from(&live.scripts);
+            snapshot.effect.clone_from(&live.effect);
         }
         let mut name = snapshot.name.clone().unwrap_or_else(|| "Entity".into());
         if ui.text_edit_singleline(&mut name).changed()
@@ -2959,6 +3069,7 @@ impl EditorViewer<'_> {
             );
         }
         self.texture_inspector(ui, &snapshot);
+        self.effect_inspector(ui, &snapshot);
         self.script_inspector(ui, entity, snapshot.scripts);
     }
 
@@ -3296,6 +3407,7 @@ struct ViewportRenderRequest {
     width: u32,
     height: u32,
     scene: ViewportScene,
+    effects: engine_world::effects::EffectFrame,
 }
 
 fn spawn_viewport_renderer(
@@ -3325,7 +3437,8 @@ fn spawn_viewport_renderer(
                     request = newer;
                 }
                 let result = renderer
-                    .render(request.width, request.height, &request.scene)
+                    .set_effect_frame(&request.effects)
+                    .and_then(|()| renderer.render(request.width, request.height, &request.scene))
                     .map_err(|error| error.to_string());
                 if result_sender.send((request.sequence, result)).is_err() {
                     break;
@@ -4131,6 +4244,8 @@ struct SceneTreeDrag {
 enum SceneTreeAction {
     Rename(EntityId, String),
     TextureFiles(EntityId, Vec<PathBuf>),
+    EffectFile(EntityId, PathBuf),
+    EffectPreset(EntityId, engine_world::effects::EffectAsset),
     Copy(EntityId),
     Cut(EntityId),
     Paste(Option<EntityId>),
@@ -4263,9 +4378,14 @@ fn scene_entry_row(
         response.dnd_set_drag_payload(SceneTreeDrag { entity });
     }
     if can_edit {
+        if let Some(payload) = response.dnd_release_payload::<effects::PresetDrop>() {
+            result.action = Some(SceneTreeAction::EffectPreset(entity, payload.0.clone()));
+        }
         if let Some(payload) = response.dnd_release_payload::<ViewportDrop>() {
             let paths = payload.project_paths();
-            if paths.iter().all(|p| textures::is_texture(p)) {
+            if paths.len() == 1 && paths[0].extension().is_some_and(|ext| ext == "effect") {
+                result.action = Some(SceneTreeAction::EffectFile(entity, paths[0].clone()));
+            } else if !paths.is_empty() && paths.iter().all(|p| textures::is_texture(p)) {
                 result.action = Some(SceneTreeAction::TextureFiles(entity, paths));
             }
         }
@@ -5751,6 +5871,7 @@ mod explorer_tests {
             gizmo_widget: &mut transform_widget::TransformWidget::default(),
             scene_graph: &mut scene_graph::SceneGraph::default(),
             ui_designer: &mut ui_designer::UiDesigner::default(),
+            effect_preview: &mut effects::EffectPreview::default(),
             model_assets: &mut BTreeMap::new(),
             project_file_action: &mut action,
         };
@@ -6084,6 +6205,7 @@ mod explorer_tests {
                 gizmo_widget: &mut transform_widget::TransformWidget::default(),
                 scene_graph: &mut scene_graph::SceneGraph::default(),
                 ui_designer: &mut ui_designer::UiDesigner::default(),
+                effect_preview: &mut effects::EffectPreview::default(),
                 model_assets: &mut BTreeMap::new(),
                 project_file_action: &mut action,
             };

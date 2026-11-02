@@ -482,6 +482,7 @@ fn render_runtime(
             .as_mut()
             .ok_or("runtime renderer was not initialized")?;
         let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, models);
+        renderer.set_effect_frame(world.effect_frame()).map_err(|error| error.to_string())?;
         let frame = renderer
             .render(width, height, &scene)
             .map_err(|e| e.to_string())?

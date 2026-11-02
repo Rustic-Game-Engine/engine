@@ -1,0 +1,31 @@
+---@class RusticEffectCommon
+---@field enabled boolean
+---@field visible boolean
+---@field auto_play boolean
+---@field looping boolean
+---@field duration number Seconds, positive.
+---@field delay number Seconds, nonnegative.
+---@field time_scale number Nonnegative.
+---@field simulation_space 'Local'|'World'
+---@field random_seed integer
+---@class RusticEffectComponent
+---@field common RusticEffectCommon
+---@field kind table<string,table> One enum variant, e.g. Particle={rate=30}.
+---@class RusticEffectsApi
+---@field types fun():string[]
+---@field spawn fun(asset:string,position:number[],lifetime:number,parent:string|RusticObjectPath|nil):string
+---@field instantiate fun(asset:string,parent:string|RusticObjectPath|nil,position:number[]|nil):string
+---@field sampleWind fun(position:number[],time:number,layers:integer|nil):number[]
+---@field create fun(entity:string|RusticObjectPath|nil,kind:string):RusticEffectComponent
+---@field get fun(entity:string|RusticObjectPath|nil):RusticEffectComponent|nil
+---@field configure fun(entity:string|RusticObjectPath|nil,settings:table):RusticEffectComponent
+---@field state fun(entity:string|RusticObjectPath|nil):string
+---@field play fun(entity:string|RusticObjectPath|nil)
+---@field pause fun(entity:string|RusticObjectPath|nil)
+---@field resume fun(entity:string|RusticObjectPath|nil)
+---@field stop fun(entity:string|RusticObjectPath|nil)
+---@field restart fun(entity:string|RusticObjectPath|nil)
+---@field reset fun(entity:string|RusticObjectPath|nil)
+---@field dispose fun(entity:string|RusticObjectPath|nil)
+---@type RusticEffectsApi
+Effects=Effects

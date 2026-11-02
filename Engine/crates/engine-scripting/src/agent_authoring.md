@@ -68,3 +68,54 @@ These are optional references, not installed dependencies or engine API specific
 - Game UI workflow and checklist: https://github.com/jeremylongworth-source/AgentSkills/blob/main/skills/game-ui-design/SKILL.md
 - Broader design/accessibility reference catalog: https://github.com/jeremylongworth-source/AgentSkills/tree/main/skills
 - Blender workflow reference: https://github.com/Chara-Xh/blender-modeling-skill/tree/main/skills/blender-modeling
+
+## Author scene effects
+
+Use `editor_status` to inspect each object's `effect` component. `object_create`
+accepts an optional `effect`; `object_update` accepts `properties.effect`. These
+values use the typed scene representation: `common` contains playback settings,
+and `kind` contains exactly one variant such as `Particle`, `Trail`, `Beam`,
+`Weather`, or `ScreenFlash`. For example, attach a particle emitter with
+`{"entity_id":"<live UUID>","properties":{"effect":{"kind":{"Particle":{"rate":40}},"common":{"random_seed":42}}}}`.
+Unspecified fields use the engine defaults. Update by reading the existing
+component, changing its fields, then submitting the complete component. Set
+`properties.effect` to null to remove it. Creation, edits and removal participate
+in ordinary scene undo/redo; duplicate retains authored effect configuration.
+Save with `scene_save`. Do not attach generators as gameplay scripts.
+
+Runtime Lua/Luau, JavaScript and Python expose `Effects.types()`,
+`Effects.create(entity,kind)`, `Effects.get(entity)`,
+`Effects.configure(entity,settings)`, `Effects.state(entity)`, and
+`Effects.play/pause/resume/stop/restart/reset/dispose(entity)`. Existing
+`Effects.fade/flash/pulse/shake` helpers remain available. Kind names are exact,
+case-sensitive serialized enum variants returned by `Effects.types()`.
+`configure` merges existing nested fields and rejects unknown property names;
+for example `Effects.configure(id,{kind={Particle={rate=50}}})` in Lua, or
+`Effects.configure(id,{kind:{Particle:{rate:50}}})` in JavaScript. Runtime effects
+advance on the existing scaled scene clock. Runtime edits are temporary; use
+editor component edits and save for authored persistence. Dispose removes the
+effect component, retaining its entity. Other language SDKs can use the existing
+query boundary with `effect_types`, `effect_create`, `effect_get`,
+`effect_configure`, `effect_control`, and `effect_state` operations.
+
+Inspect actual viewport output in editor and Play. Do not imply every configured
+advanced renderer option is supported on every backend; consult the Scene Effects
+compatibility documentation before promising GPU simulation, captures, or depth
+features.
+
+Reusable `.effect` assets retain standard adjacent `.rmeta` stable IDs. The runtime
+loads these sources when opening a scene. `Effects.instantiate(assetUUID,parent,
+position)` creates an independent group at local `position` (defaults to origin;
+null parent means scene root). `Effects.spawn(assetUUID,position,lifetime,parent)`
+creates a temporary instance and destroys its whole group after positive lifetime
+seconds on the existing scene clock. Use an explicit lifetime long enough for
+smoke/tails to finish. Group playback controls apply to descendant effects;
+`dispose` removes their effect components while retaining scene entities.
+
+`Effects.sampleWind(position,time,layers)` samples the same global/local wind
+fields as particles; time is seconds and layers defaults to all bits. Subscribe
+to effect events with existing `Events.connect(entity,'EffectCompleted',callback)`
+or `EffectBirth`, `EffectCollision`, `EffectDeath`. Each event supplies an xyz
+position argument and uses the existing bounded signal queue. Completion is
+meaningful for non-looping effects. Cosmetic particle contacts do not apply
+authoritative damage or physics forces.

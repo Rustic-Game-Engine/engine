@@ -202,6 +202,8 @@ pub enum DerivedArtifact {
     Audio(AudioArtifact),
     /// Font face.
     Font(FontArtifact),
+    /// Versioned reusable scene effects.
+    Effect(engine_world::effects::EffectAsset),
     /// Deterministic placeholder used before a first successful import.
     Placeholder(PlaceholderArtifact),
 }
@@ -229,6 +231,8 @@ pub enum AssetKind {
     Audio,
     /// Font source.
     Font,
+    /// Reusable scene effects asset.
+    Effect,
 }
 
 impl DerivedArtifact {
@@ -239,6 +243,7 @@ impl DerivedArtifact {
             Self::Model(_) => AssetKind::Model,
             Self::Audio(_) => AssetKind::Audio,
             Self::Font(_) => AssetKind::Font,
+            Self::Effect(_) => AssetKind::Effect,
             Self::Placeholder(value) => value.kind,
         }
     }
