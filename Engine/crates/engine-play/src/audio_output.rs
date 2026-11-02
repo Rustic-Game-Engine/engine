@@ -1,6 +1,24 @@
 //! Native device handles and streams stay on the audio thread, outside scene locks.
+use std::sync::{Arc, Mutex};
+pub(crate) type StreamAudio = Arc<Mutex<Vec<f32>>>;
+thread_local! {
+    static STREAM_AUDIO: std::cell::RefCell<Option<StreamAudio>> = const { std::cell::RefCell::new(None) };
+}
+
+// New scene contexts inherit the connection's sink without changing other players.
+pub(crate) fn with_stream_audio<T>(sink: &StreamAudio, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<StreamAudio>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            STREAM_AUDIO.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(STREAM_AUDIO.with(|slot| slot.replace(Some(Arc::clone(sink)))));
+    operation()
+}
 #[derive(Default)]
 pub(crate) struct AudioOutput {
+    stream: Option<StreamAudio>,
     #[cfg(windows)]
     sender: Option<std::sync::mpsc::SyncSender<Command>>,
 }
@@ -22,6 +40,13 @@ enum Command {
 
 impl AudioOutput {
     pub fn new() -> Self {
+        if let Some(stream) = STREAM_AUDIO.with(|slot| slot.borrow().clone()) {
+            return Self {
+                stream: Some(stream),
+                #[cfg(windows)]
+                sender: None,
+            };
+        }
         // Tests must not initialize native device drivers for each scene fixture.
         #[cfg(all(windows, not(test)))]
         {
@@ -33,6 +58,7 @@ impl AudioOutput {
             {
                 return Self {
                     sender: Some(sender),
+                    stream: None,
                 };
             }
         }
@@ -83,6 +109,15 @@ impl AudioOutput {
 
     #[allow(clippy::unused_self)]
     pub fn submit(&self, samples: Vec<f32>) {
+        if let Some(stream) = &self.stream {
+            if let Ok(mut queue) = stream.lock() {
+                if queue.len() + samples.len() > 48_000 {
+                    queue.clear();
+                }
+                queue.extend(samples.into_iter().take(48_000));
+            }
+            return;
+        }
         #[cfg(windows)]
         if let Some(sender) = &self.sender {
             let _ = sender.try_send(Command::Samples(samples));
@@ -225,4 +260,23 @@ thread_local! { static BROWSER_AUDIO: std::cell::RefCell<Vec<f32>> = const { std
 #[cfg(target_os = "emscripten")]
 pub(crate) fn take_browser_audio() -> Vec<f32> {
     BROWSER_AUDIO.with(|queue| std::mem::take(&mut *queue.borrow_mut()))
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+    #[test]
+    fn streamed_audio_is_bounded_and_connection_scoped() {
+        let first = StreamAudio::default();
+        let second = StreamAudio::default();
+        let output = with_stream_audio(&first, AudioOutput::new);
+        let other = with_stream_audio(&second, AudioOutput::new);
+        assert!(AudioOutput::new().stream.is_none());
+        output.submit(vec![0.25; 100]);
+        other.submit(vec![0.5; 200]);
+        assert_eq!(first.lock().unwrap().len(), 100);
+        assert_eq!(*second.lock().unwrap(), vec![0.5; 200]);
+        output.submit(vec![1.0; 96_000]);
+        assert_eq!(first.lock().unwrap().len(), 48_000);
+    }
 }

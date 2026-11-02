@@ -1,4 +1,5 @@
 //! Project distribution UI and shell-free packaging jobs.
+mod hosted;
 mod portable;
 use eframe::egui;
 use engine_editor::AuthoringDocument;
@@ -31,6 +32,13 @@ impl Target {
     }
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+enum WebsiteMode {
+    #[default]
+    Static,
+    Hosted,
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
@@ -48,6 +56,8 @@ struct Settings {
     android_package: String,
     android_version_code: u32,
     compiler: String,
+    #[serde(default)]
+    website_mode: WebsiteMode,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -66,6 +76,7 @@ impl Default for Settings {
             android_package: "org.rustic.game".into(),
             android_version_code: 1,
             compiler: "ISCC.exe".into(),
+            website_mode: WebsiteMode::Hosted,
         }
     }
 }
@@ -174,7 +185,13 @@ impl ProjectBuild {
                             }
                         }
                         Target::Website => {
-                            ui.label("Turns the current game into a playable website: scenes, scripts, assets and the WebAssembly runtime are packaged automatically. Upload the generated website folder to any static host. No web source folder or game server is needed.");
+                            ui.radio_value(&mut self.settings.website_mode, WebsiteMode::Hosted, "Hosted runtime (all scripting languages)");
+                            ui.radio_value(&mut self.settings.website_mode, WebsiteMode::Static, "Static WebAssembly (Lua 5.4, JavaScript, HTML/CSS)");
+                            if self.settings.website_mode == WebsiteMode::Hosted {
+                                ui.label("Packages a website and native game server. Run start-website on a matching host with the game’s language toolchains and a compatible GPU. Players use their browser; each connection gets its own game session. Static hosting alone cannot run this mode.");
+                            } else {
+                                ui.label("Packages the WebAssembly game runtime for any static host. No game server is needed. External desktop scripting languages require Hosted runtime mode.");
+                            }
                         }
                         Target::Apk | Target::Aab => {
                             field(ui, "Android package ID", &mut self.settings.android_package);
@@ -229,7 +246,7 @@ impl ProjectBuild {
             .project()
             .directory(VirtualDirectory::Builds)
             .map_err(|e| e.to_string())?;
-        if self.settings.target != Target::Windows {
+        if uses_browser_runtime(&self.settings) {
             portable::validate_scripts(&root)?;
         }
         let staging = tempfile::Builder::new()
@@ -251,7 +268,7 @@ impl ProjectBuild {
         let settings = self.settings.clone();
         let runtime = std::env::current_exe()
             .map_err(|e| e.to_string())?
-            .with_file_name("rustic-runtime.exe");
+            .with_file_name(native_runtime_name());
         let (sender, receiver) = mpsc::channel();
         std::thread::Builder::new()
             .name("project-build".into())
@@ -425,6 +442,19 @@ fn available(program: &str, argument: &str) -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
+fn native_runtime_name() -> &'static str {
+    if cfg!(windows) {
+        "rustic-runtime.exe"
+    } else {
+        "rustic-runtime"
+    }
+}
+
+fn uses_browser_runtime(settings: &Settings) -> bool {
+    matches!(settings.target, Target::Apk | Target::Aab)
+        || (settings.target == Target::Website && settings.website_mode == WebsiteMode::Static)
+}
+
 fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
     let mut missing = Vec::new();
     match settings.target {
@@ -444,7 +474,14 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
                 missing.push("The custom Inno Setup compiler path does not exist. Use ISCC.exe for automatic setup.".into());
             }
         }
-        Target::Website => {}
+        Target::Website => {
+            if settings.website_mode == WebsiteMode::Hosted
+                && !std::env::current_exe()
+                    .is_ok_and(|exe| exe.with_file_name(native_runtime_name()).is_file())
+            {
+                missing.push(format!("{} beside the editor.", native_runtime_name()));
+            }
+        }
         Target::Apk | Target::Aab => {
             if java_executable().is_none() {
                 missing.push("JAVA_HOME pointing to a JDK with bin/java.".into());
@@ -463,7 +500,7 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
             }
         }
     }
-    if settings.target != Target::Windows {
+    if uses_browser_runtime(settings) {
         if !std::env::current_exe()
             .is_ok_and(|exe| portable::runtime_available(&portable::runtime_directory(&exe)))
         {
@@ -594,6 +631,15 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                     return Err("Installer compiler did not produce setup.exe.".into());
                 }
             }
+        }
+        Target::Website if settings.website_mode == WebsiteMode::Hosted => {
+            hosted::export(
+                &output.join("data"),
+                &output.join("website"),
+                runtime,
+                &settings.name,
+            )?;
+            fs::remove_dir_all(output.join("data")).map_err(|e| e.to_string())?;
         }
         Target::Website => {
             portable::export_website(
@@ -818,6 +864,23 @@ Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_website_settings_stay_static_and_new_builds_offer_all_languages() {
+        let previous: Settings =
+            serde_json::from_str(r#"{"target":"Website","name":"Old Game"}"#).unwrap();
+        assert!(previous.website_mode == WebsiteMode::Static);
+        assert!(uses_browser_runtime(&previous));
+        let current = Settings {
+            target: Target::Website,
+            ..Settings::default()
+        };
+        assert!(current.website_mode == WebsiteMode::Hosted);
+        assert!(!uses_browser_runtime(&current));
+        assert!(uses_browser_runtime(&Settings {
+            target: Target::Apk,
+            ..current
+        }));
+    }
     #[test]
     fn rejects_installer_directive_and_path_injection() {
         for name in [

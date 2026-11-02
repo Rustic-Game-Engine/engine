@@ -117,6 +117,23 @@ These are optional references, not installed dependencies or engine API specific
 - Broader design/accessibility reference catalog: https://github.com/jeremylongworth-source/AgentSkills/tree/main/skills
 - Blender workflow reference: https://github.com/Chara-Xh/blender-modeling-skill/tree/main/skills/blender-modeling
 
+## Exporting a game website
+
+Use File → Build Project… → Website (playable game). Hosted runtime supports all
+Rustic scripting languages through the native runtime; it packages launchers and
+a verified game snapshot, and requires a matching GPU-capable host with the used
+external language toolchains. Players need only a browser. Run start-website.cmd
+(Windows) or sh start-website.sh (Unix), then open http://127.0.0.1:8080. Remote
+hosting requires an HTTPS reverse proxy with /play WebSocket forwarding and
+matching Host/Origin. Each player gets temporary isolated game files; saves do
+not persist. PNG frames are streamed at 640 × 360/up to 30 fps; bandwidth varies by scene.
+Static WebAssembly mode needs no game server but only supports Lua 5.4,
+JavaScript and HTML/CSS; external languages and standalone PHP pages must not be
+silently omitted. Existing saved build settings retain static mode. Do not create
+a separate web/ project or attach export helpers as gameplay scripts. See the
+project builds guide for host requirements and troubleshooting. There is no
+agent export tool; use the editor's build dialog.
+
 ## Physics authoring
 
 Built-in primitives use oriented box collision proxies and unit mass in Play. Anchor floors and ramps, enable can_collide on both bodies, and author friction (0..10, default 0.5) through object_update.part_attributes. Rotated planes/boxes provide slope normals; curved primitives remain boxes and sheared transforms use enclosing AABBs. Use Physics.force once per FixedUpdate with dt, impulse to add velocity, and launch to replace it. Raycasts/sphere casts return rotated surface normals. Physics.ground(entity, maxAngle) reads the last completed fixed step and returns null or {entity, normal, angle, walkable}; it does not implement a character controller. Register Physics.onCollisionEnter/Stay/Exit explicitly from Start; callbacks arrive during Update with (other ID, world normal), using native array callbacks in C/C++/C#/Java. Both bodies need can_touch and can_collide; at least one must be unanchored. Defining OnCollisionEnter lifecycle functions alone does not register them. Inspect logs and test sliding, landing and leaving contact.

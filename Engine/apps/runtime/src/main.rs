@@ -24,6 +24,7 @@ use winit::window::{Window, WindowId};
 
 mod game_ui;
 mod standalone;
+mod website;
 
 const TOKEN_ENVIRONMENT_VARIABLE: &str = "RUSTIC_RUNTIME_IPC_TOKEN";
 
@@ -73,6 +74,22 @@ fn main() -> ExitCode {
 }
 
 fn run(arguments: &[OsString]) -> Result<(), String> {
+    if arguments.first().is_some_and(|value| value == "--website") {
+        let address = match arguments {
+            [_] => "127.0.0.1:8080",
+            [_, option, address] if option == "--website-address" => address
+                .to_str()
+                .ok_or("Website address is not valid UTF-8")?,
+            _ => {
+                return Err("Usage: rustic-runtime --website [--website-address <IP:port>]".into());
+            }
+        };
+        let executable = std::env::current_exe().map_err(|e| e.to_string())?;
+        return website::run(
+            executable.parent().ok_or("Missing runtime directory")?,
+            address,
+        );
+    }
     if arguments.is_empty() {
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         return standalone::run(&executable);

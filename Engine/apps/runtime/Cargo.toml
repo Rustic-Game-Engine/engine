@@ -16,6 +16,10 @@ glam.workspace = true
 resvg.workspace = true
 winit.workspace = true
 tempfile.workspace = true
+image.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tungstenite = { version = "0.28", default-features = false, features = ["handshake"] }
 
 [dev-dependencies]
 engine-world = { path = "../../crates/engine-world", version = "0.1.0" }
