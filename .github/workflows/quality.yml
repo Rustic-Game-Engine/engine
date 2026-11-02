@@ -126,6 +126,8 @@ jobs:
           npm exec --prefix tools/browser-tests -- playwright install --with-deps chromium
       - name: Play an exported game without a game server
         run: npm test --prefix tools/browser-tests
+      - name: Hosted native website rendering and Python input
+        run: EGL_PLATFORM=surfaceless cargo test --locked -p rustic-runtime --profile dev-fast native_website_streams_rendered_frames_and_executes_python_input -- --ignored
 
   rust-security:
     name: Rust dependency security and licenses
@@ -198,6 +200,8 @@ jobs:
       - run: rustup show active-toolchain
       - run: cargo build --locked --manifest-path apps/luau-host/Cargo.toml --target-dir target
       - run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-scripting external_runtime -- --nocapture
+      - name: Hosted website sessions across all adapters
+        run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play streamed_sessions_execute_available_native_language_adapters -- --nocapture
       - name: Scene environment scripting across all adapters
         run: PATH="$PWD/target/debug:$PATH" cargo test --locked -p engine-play environment -- --nocapture
       - name: Audio, capture and live reads across all adapters
