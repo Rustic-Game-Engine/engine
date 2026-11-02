@@ -1263,6 +1263,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "engine-core",
+ "engine-world",
  "gltf",
  "hound",
  "image",
@@ -1312,6 +1313,7 @@ dependencies = [
 name = "engine-editor"
 version = "0.1.0"
 dependencies = [
+ "engine-assets",
  "engine-core",
  "engine-platform",
  "engine-play",
@@ -1368,6 +1370,7 @@ dependencies = [
 name = "engine-project"
 version = "0.1.0"
 dependencies = [
+ "engine-assets",
  "engine-core",
  "engine-platform",
  "engine-scripting",
@@ -1416,6 +1419,7 @@ dependencies = [
  "glam 0.33.6",
  "ron",
  "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.20",

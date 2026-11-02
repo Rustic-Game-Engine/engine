@@ -16,6 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 
+mod effects;
 mod scene_files;
 
 #[derive(Debug, Error)]
@@ -160,7 +161,7 @@ impl AuthoringDocument {
             document,
             recovery_read_only,
             recovered_from_backup,
-            scene_diagnostics,
+            mut scene_diagnostics,
             checksum_refresh_pending,
         ) = if let Some(loaded) = loaded {
             let checksum_refresh_pending = loaded.needs_checksum_refresh();
@@ -174,7 +175,8 @@ impl AuthoringDocument {
         } else {
             (SceneDocument::new("Main"), false, false, Vec::new(), false)
         };
-        let world = document.create_world()?;
+        let mut world = document.create_world()?;
+        scene_diagnostics.extend(effects::refresh_sources(&mut world, project.root()));
         let mut undo = UndoStack::new();
         undo.mark_saved();
         Ok(Self {
@@ -350,6 +352,17 @@ impl AuthoringDocument {
             .entity_ids()
             .map(|id| self.world.snapshot(id).map_err(AuthoringError::from))
             .collect()
+    }
+
+    /// Builds an isolated cosmetic preview world with the same source assets.
+    /// Gameplay systems and scripts do not run in this world.
+    /// # Errors
+    /// Returns an error if the current authored scene cannot be copied safely.
+    pub fn effect_preview_world(&self) -> Result<SceneWorld, AuthoringError> {
+        let scene = SceneDocument::from_world(self.scene_id, &self.scene_name, &self.world)?;
+        let mut world = scene.create_world()?;
+        let _ = effects::refresh_sources(&mut world, self.project.root());
+        Ok(world)
     }
 
     /// Creates a primitive through the centralized undo stack.
@@ -611,6 +624,90 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// Replaces an entity's effect as one validated, undoable authoring edit.
+    /// Preview simulation is intentionally kept outside the saved document.
+    ///
+    /// # Errors
+    /// Returns an error for read-only documents, missing entities, or invalid effects.
+    pub fn set_effect(
+        &mut self,
+        entity: EntityId,
+        after: Option<engine_world::effects::EffectComponent>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.snapshot(entity)?.effect;
+        if before != after {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::Effect {
+                    entity,
+                    before,
+                    after,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Instantiates an effect asset as a selectable group of timed child entities.
+    /// All children are created or removed together by undo/redo.
+    ///
+    /// # Errors
+    /// Rejects invalid assets, read-only documents, and invalid parent references.
+    pub fn add_effect_asset(
+        &mut self,
+        asset: &engine_world::effects::EffectAsset,
+        parent: Option<EntityId>,
+    ) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        asset
+            .validate()
+            .map_err(AuthoringError::SceneFileOperation)?;
+        let group = EntitySnapshot {
+            name: Some(asset.name.clone()),
+            folder: true,
+            parent,
+            ..EntitySnapshot::default()
+        };
+        let id = group.id;
+        let mut edits = vec![SceneEdit::Create { snapshot: group }];
+        for mut snapshot in asset.instances_with_ids(None) {
+            snapshot.parent = Some(id);
+            edits.push(SceneEdit::Create { snapshot });
+        }
+        self.undo.execute(
+            &mut self.world,
+            SceneEdit::Transaction {
+                label: format!("Instantiate {}", asset.name),
+                edits,
+            },
+        )?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
+    /// Adds one effect entity through the usual hierarchy and undo workflow.
+    /// # Errors
+    /// Returns an error for read-only access or an invalid effect or parent.
+    pub fn add_effect(
+        &mut self,
+        kind: engine_world::effects::EffectKind,
+        parent: Option<EntityId>,
+    ) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        let snapshot = EntitySnapshot {
+            name: Some(kind.name().into()),
+            effect: Some(engine_world::effects::EffectComponent::new(kind)),
+            parent,
+            ..EntitySnapshot::default()
+        };
+        let id = snapshot.id;
+        self.undo
+            .execute(&mut self.world, SceneEdit::Create { snapshot })?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
     /// # Errors
     /// Returns an error for read-only state or an absent entity.
     pub fn set_textures(
@@ -765,6 +862,9 @@ impl AuthoringDocument {
             .map(|snapshot| {
                 let mut copy = snapshot.clone();
                 copy.id = ids[&snapshot.id];
+                if let Some(effect) = &mut copy.effect {
+                    effect.remap_entities(&ids);
+                }
                 copy.parent = snapshot
                     .parent
                     .and_then(|id| ids.get(&id).copied())
@@ -1870,5 +1970,155 @@ mod agent_authoring_tests {
         assert!(reopened.set_textures(child, None).is_err());
         let folder = document.add_folder(None).unwrap();
         assert!(document.add_texture_child(folder).is_err());
+    }
+}
+
+#[cfg(test)]
+mod effect_authoring_tests {
+    use super::*;
+    use engine_project::ProjectTemplate;
+    use engine_world::effects::*;
+
+    #[test]
+    fn all_effect_types_persist_and_edits_undo_without_changing_other_components() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("game"),
+            "Game",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        let mut expected = Vec::new();
+        for kind in EffectKind::all_defaults() {
+            let id = document.add_effect(kind, None).unwrap();
+            let before = document.world().snapshot(id).unwrap();
+            let mut effect = before.effect.clone().unwrap();
+            effect.common.random_seed = 12345;
+            document.set_effect(id, Some(effect.clone())).unwrap();
+            document.undo().unwrap();
+            assert_eq!(document.world().snapshot(id).unwrap(), before);
+            document.redo().unwrap();
+            expected.push((id, effect));
+        }
+        document.save().unwrap();
+        let mut reopened = AuthoringDocument::open(project, true).unwrap();
+        for (id, effect) in expected {
+            assert_eq!(reopened.world().effect(id).unwrap(), Some(effect));
+            assert!(reopened.set_effect(id, None).is_err());
+        }
+    }
+
+    #[test]
+    fn composite_create_undo_redo_and_duplicate_remap_internal_effect_targets() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("game"),
+            "Game",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let asset = EffectAsset::new(
+            "Composite",
+            vec![
+                EffectComponent::new(EffectKind::Particle(ParticleEmitter::default())),
+                EffectComponent::new(EffectKind::Beam(BeamRenderer::default())),
+            ],
+        );
+        let group = document.add_effect_asset(&asset, None).unwrap();
+        let children = document.world().children(group).unwrap().to_vec();
+        assert_eq!(children.len(), 2);
+        document.undo().unwrap();
+        assert!(!document.world().contains(group));
+        for child in &children {
+            assert!(!document.world().contains(*child));
+        }
+        document.redo().unwrap();
+        let particle = children
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    document.world().effect(*id).unwrap().unwrap().kind,
+                    EffectKind::Particle(_)
+                )
+            })
+            .unwrap();
+        let beam = children.iter().copied().find(|id| *id != particle).unwrap();
+        let mut effect = document.world().effect(beam).unwrap().unwrap();
+        if let EffectKind::Beam(config) = &mut effect.kind {
+            config.end_target = Some(particle);
+        }
+        document.set_effect(beam, Some(effect)).unwrap();
+        let tree = document.snapshot_tree(group).unwrap();
+        let duplicate = document.paste_tree(&tree, None).unwrap().unwrap();
+        let copied = document.world().children(duplicate).unwrap();
+        let copied_particle = copied
+            .iter()
+            .copied()
+            .find(|id| {
+                matches!(
+                    document.world().effect(*id).unwrap().unwrap().kind,
+                    EffectKind::Particle(_)
+                )
+            })
+            .unwrap();
+        let copied_beam = copied
+            .iter()
+            .copied()
+            .find(|id| *id != copied_particle)
+            .unwrap();
+        match document.world().effect(copied_beam).unwrap().unwrap().kind {
+            EffectKind::Beam(config) => assert_eq!(config.end_target, Some(copied_particle)),
+            _ => panic!("copied beam type changed"),
+        }
+        assert_ne!(copied_particle, particle);
+    }
+}
+
+#[cfg(test)]
+mod shared_effect_source_tests {
+    use super::*;
+    use engine_world::effects::*;
+    #[test]
+    fn reopening_scene_refreshes_shared_defaults_preserving_saved_overrides() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("game"),
+            "Game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let path = project.root().join("assets/shared.effect");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let meta = engine_assets::AssetMeta::new("rustic.effect", 1);
+        engine_assets::save_meta(&engine_assets::sidecar_path(&path), &meta).unwrap();
+        let mut asset = EffectAsset::new("Shared", vec![EffectComponent::default()]);
+        std::fs::write(&path, asset.to_bytes().unwrap()).unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        let id = document.add_effect(EffectKind::default(), None).unwrap();
+        let mut instance = asset.instantiate_from(meta.asset_id).remove(0);
+        instance.common.duration = 7.0;
+        document.set_effect(id, Some(instance)).unwrap();
+        document.save().unwrap();
+        asset.effects[0].common.duration = 10.0;
+        asset.effects[0].common.render_distance = 200.0;
+        std::fs::write(&path, asset.to_bytes().unwrap()).unwrap();
+        let reopened = AuthoringDocument::open(project.clone(), false).unwrap();
+        let instance = reopened.world().effect(id).unwrap().unwrap();
+        assert!((instance.common.duration - 7.0).abs() < f32::EPSILON);
+        assert!((instance.common.render_distance - 200.0).abs() < f32::EPSILON);
+        assert!(reopened.scene_diagnostics().is_empty());
+        std::fs::remove_file(path).unwrap();
+        let missing = AuthoringDocument::open(project, false).unwrap();
+        assert!(missing.world().effect(id).unwrap().is_some());
+        assert!(!missing.is_read_only());
+        assert!(
+            missing
+                .scene_diagnostics()
+                .iter()
+                .any(|diagnostic| diagnostic.component.as_deref() == Some("Effect"))
+        );
     }
 }

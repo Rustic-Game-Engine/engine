@@ -1,0 +1,36 @@
+(
+    version: 1,
+    name: "Damage flash",
+    effects: [
+        (
+            source: None,
+            common: (
+                parameters: {},
+                bounds: None,
+                enabled: true,
+                visible: true,
+                auto_play: true,
+                looping: true,
+                duration: 5.0,
+                delay: 0.0,
+                time_scale: 1.0,
+                simulation_space: World,
+                attachment_target: None,
+                visibility_layers: 4294967295,
+                render_distance: 1000.0,
+                quality: Medium,
+                random_seed: 1,
+                priority: 0,
+            ),
+            kind: ScreenFlash((
+                target: None,
+                color: (1.0, 0.0, 0.0, 1.0),
+                opacity: 0.5,
+                fade_in: 0.05,
+                fade_out: 0.4,
+                vignette: 0.5,
+                blend: Alpha,
+            )),
+        ),
+    ],
+)

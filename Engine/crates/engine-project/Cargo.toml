@@ -18,6 +18,7 @@ thiserror.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+engine-assets = { path = "../engine-assets", version = "0.1.0" }
 tempfile.workspace = true
 
 [lints]

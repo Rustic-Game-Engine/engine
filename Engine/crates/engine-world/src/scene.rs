@@ -27,6 +27,7 @@ const MATERIAL_SCHEMA: &str = "rustic.material";
 const CAMERA_SCHEMA: &str = "rustic.camera";
 const LIGHT_SCHEMA: &str = "rustic.light";
 const PRIMITIVE_SCHEMA: &str = "rustic.primitive";
+const EFFECT_SCHEMA: &str = "rustic.effect";
 const SCRIPTS_SCHEMA: &str = "rustic.scripts";
 const PART_ATTRIBUTES_SCHEMA: &str = "rustic.part_attributes";
 
@@ -52,6 +53,7 @@ pub struct EntitySnapshot {
     pub camera: Option<Camera>,
     pub light: Option<Light>,
     pub primitive: Option<Primitive>,
+    pub effect: Option<crate::EffectComponent>,
     pub part_attributes: PartAttributes,
     pub scripts: Vec<ScriptComponent>,
     pub unknown_components: Vec<RawComponent>,
@@ -71,6 +73,7 @@ impl Default for EntitySnapshot {
             camera: None,
             light: None,
             primitive: None,
+            effect: None,
             part_attributes: PartAttributes::default(),
             scripts: Vec::new(),
             unknown_components: Vec::new(),
@@ -98,6 +101,9 @@ impl EntitySnapshot {
         }
         if let Some(textures) = &self.textures {
             textures.validate().map_err(WorldError::InvalidArgument)?;
+        }
+        if let Some(effect) = &self.effect {
+            effect.validate().map_err(WorldError::InvalidArgument)?;
         }
         for script in &self.scripts {
             script
@@ -435,6 +441,9 @@ impl EntityWire {
         if let Some(primitive) = snapshot.primitive {
             components.push(encode_component(PRIMITIVE_SCHEMA, &primitive)?);
         }
+        if let Some(effect) = snapshot.effect {
+            components.push(encode_component(EFFECT_SCHEMA, &effect)?);
+        }
         components.push(encode_component(
             PART_ATTRIBUTES_SCHEMA,
             &snapshot.part_attributes,
@@ -748,6 +757,13 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                 diagnostics,
                 &mut snapshot.unknown_components,
                 |value| snapshot.primitive = Some(value),
+            ),
+            EFFECT_SCHEMA => assign_or_preserve(
+                &raw,
+                entity.id,
+                diagnostics,
+                &mut snapshot.unknown_components,
+                |value| snapshot.effect = Some(value),
             ),
             PART_ATTRIBUTES_SCHEMA => assign_or_preserve(
                 &raw,

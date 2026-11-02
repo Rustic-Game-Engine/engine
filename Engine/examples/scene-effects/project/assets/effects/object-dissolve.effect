@@ -1,0 +1,47 @@
+(
+    version: 1,
+    name: "Object dissolve",
+    effects: [
+        (
+            source: None,
+            common: (
+                parameters: {},
+                bounds: None,
+                enabled: true,
+                visible: true,
+                auto_play: true,
+                looping: true,
+                duration: 5.0,
+                delay: 0.0,
+                time_scale: 1.0,
+                simulation_space: World,
+                attachment_target: None,
+                visibility_layers: 4294967295,
+                render_distance: 1000.0,
+                quality: Medium,
+                random_seed: 1,
+                priority: 0,
+            ),
+            kind: Dissolve((
+                target: None,
+                progress: 0.0,
+                edge_width: 0.05,
+                edge_color: (1.0, 0.4, 0.0),
+                edge_emission: 3.0,
+                noise_scale: 10.0,
+                curve: (
+                    keys: [
+                        (
+                            time: 0.0,
+                            value: 0.0,
+                        ),
+                        (
+                            time: 1.0,
+                            value: 1.0,
+                        ),
+                    ],
+                ),
+            )),
+        ),
+    ],
+)

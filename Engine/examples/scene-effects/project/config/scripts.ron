@@ -1,0 +1,25 @@
+(
+    format_version: 2,
+    scripts: [
+        (
+            id: "0a2272f6-0304-4dc8-a66b-e31819988d7c",
+            language: lua54,
+            relative_path: "scripts/orbit.lua",
+            api_version: (
+                major: 1,
+                minor: 1,
+            ),
+            public_properties: [],
+        ),
+        (
+            id: "2c6833c0-ce36-41c6-a889-a2d14f20ff6c",
+            language: lua54,
+            relative_path: "scripts/replay.lua",
+            api_version: (
+                major: 1,
+                minor: 1,
+            ),
+            public_properties: [],
+        ),
+    ],
+)

@@ -71,9 +71,15 @@ pub extern "C" fn rustic_tick(width: u32, height: u32, seconds: f64) {
         game.session
             .step(seconds, input.keys, input.pointers, input.reset)?;
         let [width, height] = engine_play::game_view_extent([width, height]);
-        let scene = game.session.render_world(|world| {
-            renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &game.models)
+        let (scene, effects) = game.session.render_world(|world| {
+            (
+                renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &game.models),
+                world.effect_frame().clone(),
+            )
         })?;
+        game.renderer
+            .set_effect_frame(&effects)
+            .map_err(|error| error.to_string())?;
         #[cfg(target_os = "emscripten")]
         {
             let audio: Vec<u8> = game
