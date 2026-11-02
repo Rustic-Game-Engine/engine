@@ -276,6 +276,7 @@ inline std::pair<double,double> smoothDamp(double c,double t,double v,double tim
 }
 namespace Interpolation=Smooth;
 namespace Physics{
+inline RusticValue ground(const std::string&e,double maxAngle=45){return rustic.query(rustic_detail::object({{"op","physics_ground"},{"entity",Gameplay::entity(e)},{"max_angle",maxAngle}}));}
 struct Hit{std::string entity;RusticVector3 point,normal;double distance;};
 inline RusticValue vec(RusticVector3 p){return RusticValue::Array{p.x,p.y,p.z};}
 inline RusticVector3 vector(const RusticValue& v){auto&a=v.array();return {a[0].number(),a[1].number(),a[2].number()};}
@@ -350,6 +351,11 @@ inline auto on(const std::string&name,std::function<void(const RusticValue::Arra
 inline auto once(const std::string&name,std::function<void(const RusticValue::Array&)> fn){return connect("",name,std::move(fn),true);}
 inline void emit(const std::string&name,RusticValue::Array arguments={},const std::string&source=""){rustic.gameplay(rustic_detail::object({{"command","emit"},{"signal",rustic_detail::object({{"name",name},{"source",source.empty()?RusticValue():RusticValue(Gameplay::entity(source))}})},{"arguments",std::move(arguments)}}));}
 inline void disconnect(Connection& c){c.disconnect();}
+}
+namespace Physics{
+inline auto onCollisionEnter(const std::string&e,std::function<void(const RusticValue::Array&)> fn){return Events::connect(e,"CollisionEnter",std::move(fn));}
+inline auto onCollisionStay(const std::string&e,std::function<void(const RusticValue::Array&)> fn){return Events::connect(e,"CollisionStay",std::move(fn));}
+inline auto onCollisionExit(const std::string&e,std::function<void(const RusticValue::Array&)> fn){return Events::connect(e,"CollisionExit",std::move(fn));}
 }
 namespace Input{
 inline RusticValue touches(){return rustic.query(rustic_detail::object({{"op","input_touches"}}));}

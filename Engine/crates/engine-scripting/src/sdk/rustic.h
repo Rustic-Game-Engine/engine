@@ -198,10 +198,11 @@ static RusticPointerEvent r_pointer_event(size_t i){
 }
 typedef struct {char *source,*pending;RToken *tokens;size_t count,at;bool audio_devices;} RQuerySave;
 typedef struct {bool hit;char entity[64];RusticVector3 point,normal;double distance;} RusticHit;
+typedef struct {bool found;char entity[64];RusticVector3 normal;double angle;bool walkable;} RusticGround;
 typedef struct {double value,velocity;} RusticDamping;
 typedef struct {bool found;char status[16],error[256];} RusticOperationState;
 typedef struct {double scale;bool paused;} RusticClockState;
-typedef struct {RusticClockState clock;RusticOperationState operation;RusticValue value;RusticHit hit;RusticDamping damping;char *json;RusticList list;RusticAudioDevices devices;RusticCaptureData capture;RusticPointerEvents pointers;RusticObjectClicks clicks;} RQueryResult;
+typedef struct {RusticClockState clock;RusticOperationState operation;RusticValue value;RusticHit hit;RusticGround ground;RusticDamping damping;char *json;RusticList list;RusticAudioDevices devices;RusticCaptureData capture;RusticPointerEvents pointers;RusticObjectClicks clicks;} RQueryResult;
 static char *r_query_owned[8192];static size_t r_query_owned_count;
 static char *r_owned(const char *s,size_t length){if(r_query_owned_count>=8192)r_fail("Rustic C: query allocation budget");char *copy=(char*)malloc(length+1);if(!copy)r_fail("Rustic C: allocation failed");if(s)memcpy(copy,s,length);else memset(copy,0,length);copy[length]=0;r_query_owned[r_query_owned_count++]=copy;return copy;}
 static RQuerySave r_query_begin(const char *op){
@@ -235,6 +236,7 @@ static RQueryResult r_query_end(RQuerySave saved){
             }
             size_t status=r_field(result,"status");if(status<r_count){out.operation.found=true;snprintf(out.operation.status,sizeof out.operation.status,"%s",r_string(status));const char *message=r_string(r_field(result,"error"));if(message)snprintf(out.operation.error,sizeof out.operation.error,"%s",message);}
             size_t entity=r_field(result,"entity");if(entity<r_count){out.hit.hit=true;snprintf(out.hit.entity,sizeof out.hit.entity,"%s",r_string(entity));out.hit.point=r_as_vec(r_value(r_field(result,"point")));out.hit.normal=r_as_vec(r_value(r_field(result,"normal")));out.hit.distance=r_number(r_field(result,"distance"));}
+            if(r_field(result,"angle")<r_count){out.ground.found=true;snprintf(out.ground.entity,sizeof out.ground.entity,"%s",r_string(r_field(result,"entity")));out.ground.normal=r_as_vec(r_value(r_field(result,"normal")));out.ground.angle=r_number(r_field(result,"angle"));out.ground.walkable=r_bool(r_field(result,"walkable"));}
             out.damping.value=r_number(r_field(result,"value"));out.damping.velocity=r_number(r_field(result,"velocity"));
         }else{
             if(r_tokens[result].kind=='['){
@@ -346,7 +348,7 @@ static void r_launch(const char *entity,RusticVector3 v){r_physics_vector("physi
 static void r_force(const char *entity,RusticVector3 v,double delta){r_physics_vector("physics_force",entity,v,delta);}
 static RusticList r_explosion(RusticVector3 center,double radius,double strength){RQuerySave s=r_query_begin("physics_explosion");r_q_value("center",r_vec(center));r_q_number("radius",radius);r_q_number("strength",strength);return r_query_end(s).list;}
 static const struct {RusticValue(*lerp)(RusticValue,RusticValue,double,const char*),(*slerp)(RusticValue,RusticValue,double,const char*);double(*inverseLerp)(double,double,double),(*remap)(double,double,double,double,double);RusticDamping(*smoothDamp)(double,double,double,double,double);} Smooth={r_smooth_lerp,r_smooth_slerp,r_inverse_lerp,r_remap,r_smooth_damp},Interpolation={r_smooth_lerp,r_smooth_slerp,r_inverse_lerp,r_remap,r_smooth_damp};
-static const struct {RusticHit(*raycast)(RusticVector3,RusticVector3,double),(*sphereCast)(RusticVector3,RusticVector3,double,double);RusticList(*overlap)(RusticVector3,double);void(*impulse)(const char*,RusticVector3),(*launch)(const char*,RusticVector3),(*knockback)(const char*,RusticVector3),(*force)(const char*,RusticVector3,double);RusticList(*explosion)(RusticVector3,double,double);} Physics={r_raycast,r_sphere_cast,r_overlap,r_impulse,r_launch,r_impulse,r_force,r_explosion};
+
 /* High-level tween/timer handles own no world state. */
 typedef uint64_t RusticGameplayHandle;
 typedef struct { RusticGameplayHandle id,owner; void (*finished)(void);void(*arguments)(const RusticValue*,size_t);void(*value)(RusticValue);bool persistent,signal; } RGameplaySlot;
@@ -537,6 +539,11 @@ static RusticConnection r_input_touch_start(void(*fn)(const RusticValue*,size_t)
 static RusticConnection r_input_touch_move(void(*fn)(const RusticValue*,size_t)){return r_events_on("TouchMove",fn);}
 static RusticConnection r_input_touch_end(void(*fn)(const RusticValue*,size_t)){return r_events_on("TouchEnd",fn);}
 static RusticConnection r_input_touch_cancel(void(*fn)(const RusticValue*,size_t)){return r_events_on("TouchCancel",fn);}
+static RusticGround r_ground(const char *e,double maxAngle){const char *id=r_resolve(e);RQuerySave s=r_query_begin("physics_ground");r_q_string("entity",id);r_q_number("max_angle",maxAngle);return r_query_end(s).ground;}
+static RusticConnection r_collision_enter(const char *e,void(*fn)(const RusticValue*,size_t)){return r_events_connect(e,"CollisionEnter",fn,false);}
+static RusticConnection r_collision_stay(const char *e,void(*fn)(const RusticValue*,size_t)){return r_events_connect(e,"CollisionStay",fn,false);}
+static RusticConnection r_collision_exit(const char *e,void(*fn)(const RusticValue*,size_t)){return r_events_connect(e,"CollisionExit",fn,false);}
+static const struct {RusticHit(*raycast)(RusticVector3,RusticVector3,double),(*sphereCast)(RusticVector3,RusticVector3,double,double);RusticList(*overlap)(RusticVector3,double);void(*impulse)(const char*,RusticVector3),(*launch)(const char*,RusticVector3),(*knockback)(const char*,RusticVector3),(*force)(const char*,RusticVector3,double);RusticList(*explosion)(RusticVector3,double,double);RusticGround(*ground)(const char*,double);RusticConnection(*onCollisionEnter)(const char*,void(*)(const RusticValue*,size_t)),(*onCollisionStay)(const char*,void(*)(const RusticValue*,size_t)),(*onCollisionExit)(const char*,void(*)(const RusticValue*,size_t));} Physics={r_raycast,r_sphere_cast,r_overlap,r_impulse,r_launch,r_impulse,r_force,r_explosion,r_ground,r_collision_enter,r_collision_stay,r_collision_exit};
 static const struct {RusticPointerEvents(*touches)(void),(*touchEvents)(void);RusticObjectClicks(*clicks)(const char*);RusticConnection(*onClick)(const char*,void(*)(const RusticValue*,size_t));RusticConnection(*onTouchStart)(void(*)(const RusticValue*,size_t)),(*onTouchMove)(void(*)(const RusticValue*,size_t)),(*onTouchEnd)(void(*)(const RusticValue*,size_t)),(*onTouchCancel)(void(*)(const RusticValue*,size_t));} Input={r_input_touches,r_input_touch_events,r_input_clicks,r_input_on_click,r_input_touch_start,r_input_touch_move,r_input_touch_end,r_input_touch_cancel};
 typedef struct {double duration,speed;bool useSpeed;const char *easing;} RusticMotionOptions;
 static RusticGameplayHandle r_tween_options(const char *e,const char *p,RusticValue to,RusticMotionOptions opts,void(*fn)(void)){const char *id=r_resolve(e);RActionSave s=r_action_begin();r_append("{\"kind\":\"tween\",\"target\":{\"entity\":");r_quote(id);r_q_string("property",p);r_append("}");r_q_value("to",to);r_q_number(opts.useSpeed?"speed":"duration",opts.useSpeed?opts.speed:opts.duration);r_q_string("easing",opts.easing?opts.easing:"Linear");r_append("}");return r_run_action(r_action_end(s),fn);}

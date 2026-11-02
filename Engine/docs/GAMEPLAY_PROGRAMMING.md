@@ -40,14 +40,12 @@ Global scripts are instantiated first when the game starts. Scene scripts are ne
 when their scene loads. Component scripts are instantiated with their object and are
 disabled/unregistered with it. Only callbacks actually supplied by a script are
 invoked. The canonical callbacks are `Start`, `Update`, `FixedUpdate`,
-`OnCollisionEnter`, `OnCollisionStay`, `OnCollisionExit`, `OnEnable`, `OnDisable`, and
-`OnDestroy`. Original snake-case callback names continue to work.
+`OnEnable`, `OnDisable`, and `OnDestroy`. Original snake-case callback names continue to work. Collision notifications use explicit Physics event subscriptions.
 
 The basic Play simulator runs gravity and primitive box collision response after
 `FixedUpdate`, including in scenes with no scripts. `Anchored` prevents physics
 movement; `CanCollide` must be enabled on both objects for solid response. Collision
-callback names are reserved: the simulator does not dispatch collision or touch
-events. See `PHYSICS.md` for floor setup, falling objects, and current limitations.
+subscriptions use `Physics.onCollisionEnter/Stay/Exit`, delivered during Update after resolution. Merely declaring an OnCollisionEnter lifecycle function does not subscribe. See [Contacts and slopes](/docs/api/physics-actions/contacts).
 
 Execution is deterministic: scope (global, scene, component), explicit execution
 order, entity Asset ID, script Asset ID, then attachment order. Scripts communicate
@@ -74,7 +72,7 @@ The global `rustic` table exposes `entity_id`, `get_translation`, `set_translati
 `find_entity`, `get_attribute`/`GetAttribute`, `edit_attribute`/`EditAttribute`,
 `input`, `log`, `delta_time`, `fixed_delta_time`, `get_property`, `set_property`, and
 `set_enabled`. The built-in attributes are `Name`, `Position`, `Size`, `Color`,
-`CanTouch`, `CanCollide`, `Anchored`, and `Parent`.
+`CanTouch`, `CanCollide`, `Anchored`, `Friction`, and `Parent`.
 Lua also provides `print(...)` for an info Console entry and `warn(...)` for a
 warning Console entry. Use `rustic.log(level, message)` to choose a different level.
 
@@ -188,7 +186,7 @@ CSS alone is styling; HTML inline JavaScript has the JavaScript API.
 Each SDK handles omitted callbacks automatically. Supported names are `on_create`,
 `on_start`, `on_enable`, `fixed_update`, `update`, `on_disable`, `on_destroy`, and
 `on_stop`. Only frame callbacks take dt. Luau also accepts the capitalized Lua
-aliases. External collision callbacks remain unavailable. API 1.1 adds shared
+aliases. Collision subscriptions are available through `Physics.onCollisionEnter/Stay/Exit`; see [Contacts and slopes](/docs/api/physics-actions/contacts). API 1.1 adds shared
 `Events` to every supported script type, backed by the same scene services.
 See [Shared gameplay actions](Scripting/gameplayActions.md) for coverage and setup. Use `rustic.log` for game diagnostics and run scripts through Play.
 

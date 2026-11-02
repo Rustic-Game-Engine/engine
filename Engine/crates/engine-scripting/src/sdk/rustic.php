@@ -221,6 +221,10 @@ final class Input{
     static function onTouchCancel(callable $fn){return Events::on("TouchCancel",$fn);}
 }
 final class Physics{
+    static function ground(?string $e,float $maxAngle=45):?array{global $rustic;return $rustic->query(["op"=>"physics_ground","entity"=>Gameplay::entity($e),"max_angle"=>$maxAngle]);}
+    static function onCollisionEnter(string $e,callable $fn){return Events::connect($e,"CollisionEnter",$fn);}
+    static function onCollisionStay(string $e,callable $fn){return Events::connect($e,"CollisionStay",$fn);}
+    static function onCollisionExit(string $e,callable $fn){return Events::connect($e,"CollisionExit",$fn);}
     static function raycast(array $origin,array $direction,float $distance):?array{global $rustic;return $rustic->query(["op"=>"physics_raycast","origin"=>$origin,"direction"=>$direction,"distance"=>$distance]);}
     static function sphereCast(array $origin,array $direction,float $distance,float $radius):?array{global $rustic;return $rustic->query(["op"=>"physics_sphere_cast","origin"=>$origin,"direction"=>$direction,"distance"=>$distance,"radius"=>$radius]);}
     static function overlap(array $center,float $radius):array{global $rustic;return $rustic->query(["op"=>"physics_overlap","center"=>$center,"radius"=>$radius]);}

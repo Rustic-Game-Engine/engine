@@ -9,6 +9,16 @@ const SKIN: f32 = 0.025;
 #[derive(Default)]
 pub(crate) struct PhysicsWorld {
     velocities: BTreeMap<EntityId, Vec3>,
+    contacts: BTreeMap<(EntityId, EntityId), Vec3>,
+    pub events: Vec<ContactEvent>,
+    notified: BTreeMap<(EntityId, EntityId), Vec3>,
+}
+
+pub(crate) struct ContactEvent {
+    pub entity: EntityId,
+    pub other: EntityId,
+    pub name: &'static str,
+    pub normal: Vec3,
 }
 
 struct Body {
@@ -18,6 +28,8 @@ struct Body {
     center: Vec3,
     half: Vec3,
     velocity: Vec3,
+    axes: [Vec3; 3],
+    friction: f32,
     dynamic: bool,
     solid: bool,
 }
@@ -54,6 +66,86 @@ impl PhysicsWorld {
         }
         Ok(result)
     }
+    pub fn cast(
+        world: &mut SceneWorld,
+        origin: [f64; 3],
+        direction: [f64; 3],
+        distance: f64,
+        radius: f64,
+        ignore: &[EntityId],
+    ) -> Result<Option<engine_core::gameplay::physics::Hit>, String> {
+        use engine_core::gameplay::physics::{Collider, cast};
+        // Validate even an empty scene.
+        cast(&[], origin, direction, distance, radius, ignore)?;
+        world.propagate_transforms();
+        let mut best: Option<engine_core::gameplay::physics::Hit> = None;
+        for id in world.entity_ids() {
+            if ignore.contains(&id)
+                || !world
+                    .part_attributes(id)
+                    .map_err(|e| e.to_string())?
+                    .can_collide
+            {
+                continue;
+            }
+            let Some(primitive) = world.primitive(id).map_err(|e| e.to_string())? else {
+                continue;
+            };
+            let (min, max) = bounds(primitive);
+            let (center, half, axes) = shape(
+                world.world_transform(id).map_err(|e| e.to_string())?.0,
+                min,
+                max,
+            );
+            let basis =
+                glam::DMat3::from_cols(axes[0].as_dvec3(), axes[1].as_dvec3(), axes[2].as_dvec3());
+            let local_origin =
+                basis.transpose() * (glam::DVec3::from_array(origin) - center.as_dvec3());
+            let local_direction = basis.transpose() * glam::DVec3::from_array(direction);
+            let collider = Collider {
+                entity: id,
+                center: [0.0; 3],
+                half: half.as_dvec3().to_array(),
+            };
+            if let Some(mut hit) = cast(
+                &[collider],
+                local_origin.to_array(),
+                local_direction.to_array(),
+                distance,
+                radius,
+                &[],
+            )? && best.as_ref().is_none_or(|old| hit.distance < old.distance)
+            {
+                hit.point =
+                    (basis * glam::DVec3::from_array(hit.point) + center.as_dvec3()).to_array();
+                hit.normal = (basis * glam::DVec3::from_array(hit.normal)).to_array();
+                best = Some(hit);
+            }
+        }
+        Ok(best)
+    }
+    pub fn ground(&self, id: EntityId, max_angle: f64) -> Result<serde_json::Value, String> {
+        if !max_angle.is_finite() || !(0.0..=90.0).contains(&max_angle) {
+            return Err("maximum slope must be between 0 and 90 degrees".into());
+        }
+        let mut support: Option<(EntityId, Vec3)> = None;
+        for (&(a, b), &normal) in &self.contacts {
+            let (other, n) = if a == id {
+                (b, normal)
+            } else if b == id {
+                (a, -normal)
+            } else {
+                continue;
+            };
+            if n.y > 0.0 && support.is_none_or(|(_, old)| n.y > old.y) {
+                support = Some((other, n));
+            }
+        }
+        Ok(support.map_or(serde_json::Value::Null, |(entity, normal)| {
+            let angle = f64::from(normal.y.clamp(-1.0, 1.0).acos().to_degrees());
+            serde_json::json!({"entity":entity,"normal":normal.to_array(),"angle":angle,"walkable":angle <= max_angle})
+        }))
+    }
     pub fn impulse(
         &mut self,
         world: &SceneWorld,
@@ -88,7 +180,10 @@ impl PhysicsWorld {
         id: EntityId,
         velocity: [f64; 3],
     ) -> Result<(), String> {
-        self.impulse(world, id, velocity)?;
+        if !glam::DVec3::from_array(velocity).as_vec3().is_finite() {
+            return Err("velocity must be finite and representable".into());
+        }
+        self.impulse(world, id, [0.0; 3])?;
         self.velocities
             .insert(id, glam::DVec3::from_array(velocity).as_vec3());
         Ok(())
@@ -109,18 +204,16 @@ impl PhysicsWorld {
             };
             let (min, max) = bounds(primitive);
             let matrix = world.world_transform(id)?.0;
-            let center = matrix.transform_point3((min + max) * 0.5);
-            let half = (max - min) * 0.5;
-            let half = matrix.x_axis.truncate().abs() * half.x
-                + matrix.y_axis.truncate().abs() * half.y
-                + matrix.z_axis.truncate().abs() * half.z;
+            let (center, half, axes) = shape(matrix, min, max);
             let attributes = world.part_attributes(id)?;
             bodies.push(Body {
                 id,
                 start: center,
                 original: center,
                 center,
-                half: half.max(Vec3::splat(SKIN)),
+                half,
+                axes,
+                friction: attributes.friction,
                 velocity: if attributes.anchored {
                     Vec3::ZERO
                 } else {
@@ -136,6 +229,7 @@ impl PhysicsWorld {
             reason = "finite positive delta is clamped to 0.1 before converting to simulation precision"
         )]
         let dt = delta.min(0.1) as f32 / 4.0;
+        let mut contacts = BTreeMap::new();
         for _ in 0..4 {
             for body in &mut bodies {
                 body.start = body.center;
@@ -155,6 +249,7 @@ impl PhysicsWorld {
                     if let Some((time, normal)) = sweep(a, b) {
                         let relative_move = (a.center - a.start) - (b.center - b.start);
                         let correction = normal * (-relative_move.dot(normal) * (1.0 - time));
+                        record_contact(&mut contacts, a, b, normal);
                         separate(a, b, correction, normal);
                     }
                 }
@@ -168,25 +263,60 @@ impl PhysicsWorld {
                         if !a.solid || !b.solid || (!a.dynamic && !b.dynamic) {
                             continue;
                         }
-                        let distance = a.center - b.center;
-                        let overlap = a.half + b.half - distance.abs();
-                        if overlap.min_element() <= 0.0 {
-                            continue;
+                        if let Some((depth, normal)) = penetration(a, b) {
+                            record_contact(&mut contacts, a, b, normal);
+                            separate(a, b, normal * depth.max(0.0), normal);
                         }
-                        let axis = if overlap.y <= overlap.x && overlap.y <= overlap.z {
-                            1
-                        } else if overlap.x <= overlap.z {
-                            0
-                        } else {
-                            2
-                        };
-                        let mut normal = Vec3::ZERO;
-                        normal[axis] = if distance[axis] >= 0.0 { 1.0 } else { -1.0 };
-                        separate(a, b, normal * overlap[axis], normal);
                     }
                 }
             }
         }
+        self.events.clear();
+        let notified: BTreeMap<_, _> = contacts
+            .iter()
+            .filter(|((a, b), _)| {
+                world.part_attributes(*a).is_ok_and(|p| p.can_touch)
+                    && world.part_attributes(*b).is_ok_and(|p| p.can_touch)
+            })
+            .map(|(pair, normal)| (*pair, *normal))
+            .collect();
+        for (&(a, b), &normal) in &notified {
+            let name = if self.notified.contains_key(&(a, b)) {
+                "CollisionStay"
+            } else {
+                "CollisionEnter"
+            };
+            self.events.push(ContactEvent {
+                entity: a,
+                other: b,
+                name,
+                normal,
+            });
+            self.events.push(ContactEvent {
+                entity: b,
+                other: a,
+                name,
+                normal: -normal,
+            });
+        }
+        for (&(a, b), &normal) in &self.notified {
+            if !notified.contains_key(&(a, b)) {
+                self.events.push(ContactEvent {
+                    entity: a,
+                    other: b,
+                    name: "CollisionExit",
+                    normal,
+                });
+                self.events.push(ContactEvent {
+                    entity: b,
+                    other: a,
+                    name: "CollisionExit",
+                    normal: -normal,
+                });
+            }
+        }
+        self.contacts = contacts;
+        self.notified = notified;
         self.velocities.clear();
         // Parents must be written first, then convert each absolute target through
         // the updated parent matrix. Otherwise moving parents double-move children.
@@ -238,37 +368,124 @@ fn separate(a: &mut Body, b: &mut Body, correction: Vec3, normal: Vec3) {
     if closing < 0.0 {
         a.velocity -= normal * (closing * wa / total);
         b.velocity += normal * (closing * wb / total);
+        let relative = a.velocity - b.velocity;
+        let tangent = relative - normal * relative.dot(normal);
+        let speed = tangent.length();
+        if speed > 1e-8 {
+            // Coulomb friction cannot reverse the tangential relative velocity.
+            let coefficient = (a.friction * b.friction).sqrt();
+            let impulse = tangent / speed * speed.min(-closing * coefficient);
+            a.velocity -= impulse * (wa / total);
+            b.velocity += impulse * (wb / total);
+        }
     }
 }
 
+// SAT handles oriented boxes without introducing angular dynamics. Continuous
+// SAT uses the same axes, so fast bodies cannot tunnel through rotated ramps.
+fn axes(a: &Body, b: &Body) -> impl Iterator<Item = Vec3> {
+    let cross: [Vec3; 9] = std::array::from_fn(|i| a.axes[i / 3].cross(b.axes[i % 3]));
+    a.axes
+        .into_iter()
+        .chain(b.axes)
+        .chain(cross.into_iter().filter_map(Vec3::try_normalize))
+}
+fn radius(body: &Body, axis: Vec3) -> f32 {
+    body.axes
+        .iter()
+        .enumerate()
+        .map(|(i, a)| a.dot(axis).abs() * body.half[i])
+        .sum()
+}
+fn penetration(a: &Body, b: &Body) -> Option<(f32, Vec3)> {
+    let distance = a.center - b.center;
+    let mut best = (f32::INFINITY, Vec3::Y);
+    for axis in axes(a, b) {
+        let depth = radius(a, axis) + radius(b, axis) - distance.dot(axis).abs();
+        if depth < -1e-5 {
+            return None;
+        }
+        if depth < best.0 {
+            best = (
+                depth,
+                axis * if distance.dot(axis) >= 0.0 { 1.0 } else { -1.0 },
+            );
+        }
+    }
+    Some(best)
+}
+fn record_contact(
+    contacts: &mut BTreeMap<(EntityId, EntityId), Vec3>,
+    a: &Body,
+    b: &Body,
+    normal: Vec3,
+) {
+    contacts.insert((a.id, b.id), normal);
+}
 fn sweep(a: &Body, b: &Body) -> Option<(f32, Vec3)> {
     let origin = a.start - b.start;
-    let half = a.half + b.half;
-    if (half - origin.abs()).min_element() > 0.0 {
-        return None;
-    }
     let movement = (a.center - a.start) - (b.center - b.start);
     let mut enter = f32::NEG_INFINITY;
     let mut exit = f32::INFINITY;
     let mut normal = Vec3::ZERO;
-    for axis in 0..3 {
-        if movement[axis].abs() < 1e-8 {
-            if origin[axis].abs() >= half[axis] {
+    for axis in axes(a, b) {
+        let half = radius(a, axis) + radius(b, axis);
+        let position = origin.dot(axis);
+        let speed = movement.dot(axis);
+        if speed.abs() < 1e-8 {
+            if position.abs() > half {
                 return None;
             }
             continue;
         }
-        let t1 = (-half[axis] - origin[axis]) / movement[axis];
-        let t2 = (half[axis] - origin[axis]) / movement[axis];
-        let near = t1.min(t2);
-        if near > enter {
-            enter = near;
-            normal = Vec3::ZERO;
-            normal[axis] = -movement[axis].signum();
+        let t1 = (-half - position) / speed;
+        let t2 = (half - position) / speed;
+        if t1.min(t2) > enter {
+            enter = t1.min(t2);
+            normal = -axis * speed.signum();
         }
         exit = exit.min(t1.max(t2));
     }
     ((0.0..=1.0).contains(&enter) && enter <= exit).then_some((enter, normal))
+}
+
+// A nonuniformly scaled, rotated parent can shear its children. Conservatively
+// enclose sheared transforms; orthogonal transforms retain their slope surfaces.
+fn shape(matrix: glam::Mat4, min: Vec3, max: Vec3) -> (Vec3, Vec3, [Vec3; 3]) {
+    let center = matrix.transform_point3((min + max) * 0.5);
+    let local_half = (max - min) * 0.5;
+    let columns = [
+        matrix.x_axis.truncate(),
+        matrix.y_axis.truncate(),
+        matrix.z_axis.truncate(),
+    ];
+    let axes = columns.map(|v| v.try_normalize().unwrap_or(Vec3::ZERO));
+    if axes.iter().all(|v| v.length_squared() > 0.5)
+        && axes[0].dot(axes[1]).abs() < 1e-4
+        && axes[0].dot(axes[2]).abs() < 1e-4
+        && axes[1].dot(axes[2]).abs() < 1e-4
+    {
+        (
+            center,
+            (local_half
+                * Vec3::new(
+                    columns[0].length(),
+                    columns[1].length(),
+                    columns[2].length(),
+                ))
+            .max(Vec3::splat(SKIN)),
+            axes,
+        )
+    } else {
+        (
+            center,
+            (columns[0].abs() * local_half.x
+                + columns[1].abs() * local_half.y
+                + columns[2].abs() * local_half.z)
+                .max(Vec3::splat(SKIN)),
+            [Vec3::X, Vec3::Y, Vec3::Z],
+        )
+    }
 }
 
 pub(crate) fn bounds(primitive: &Primitive) -> (Vec3, Vec3) {
@@ -336,6 +553,168 @@ mod tests {
         for _ in 0..count {
             physics.step(world, 1.0 / 60.0).unwrap();
         }
+    }
+
+    fn floor(world: &mut SceneWorld, rotation: f32, friction: f32) -> EntityId {
+        let mut e = EntitySnapshot::default();
+        e.primitive = Some(Primitive::RectangularPrism {
+            size: [40.0, 1.0, 20.0],
+        });
+        e.local_transform.rotation = Quat::from_rotation_z(rotation);
+        e.part_attributes.anchored = true;
+        e.part_attributes.friction = friction;
+        let id = e.id;
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(e))])
+            .unwrap();
+        id
+    }
+    fn friction(world: &mut SceneWorld, id: EntityId, value: f32) {
+        let mut attributes = world.part_attributes(id).unwrap();
+        attributes.friction = value;
+        world
+            .apply_commands(&[WorldCommand::SetPartAttributes {
+                entity: id,
+                value: attributes,
+            }])
+            .unwrap();
+    }
+    #[test]
+    fn friction_stops_sliding_and_zero_friction_preserves_speed() {
+        for coefficient in [0.0, 1.0] {
+            let mut world = SceneWorld::new();
+            floor(&mut world, 0.0, coefficient);
+            let id = cube(&mut world, Vec3::Y, false);
+            friction(&mut world, id, coefficient);
+            let mut physics = PhysicsWorld::default();
+            physics.launch(&world, id, [3.0, 0.0, 0.0]).unwrap();
+            tick(&mut physics, &mut world, 60);
+            let speed = physics.velocities[&id].x;
+            if coefficient == 0.0 {
+                assert!((speed - 3.0).abs() < 0.001);
+            } else {
+                assert!(speed.abs() < 0.001);
+            }
+        }
+    }
+    #[test]
+    fn slopes_slide_or_hold_using_the_surface_normal() {
+        for coefficient in [0.0, 1.0] {
+            let mut world = SceneWorld::new();
+            let angle = 0.4_f32;
+            let ramp = floor(&mut world, angle, coefficient);
+            let id = cube(&mut world, Vec3::Y * 3.0, false);
+            friction(&mut world, id, coefficient);
+            let mut physics = PhysicsWorld::default();
+            tick(&mut physics, &mut world, 100);
+            let ground = physics.ground(id, 30.0).unwrap();
+            assert_eq!(ground["entity"], serde_json::json!(ramp));
+            assert!(
+                (ground["angle"].as_f64().unwrap() - f64::from(angle.to_degrees())).abs() < 0.01
+            );
+            assert_eq!(ground["walkable"], true);
+            assert_eq!(physics.ground(id, 10.0).unwrap()["walkable"], false);
+            if coefficient == 0.0 {
+                assert!(physics.velocities[&id].x < -1.0);
+            } else {
+                assert!(physics.velocities[&id].length() < 0.01);
+            }
+        }
+    }
+    #[test]
+    fn casts_hit_rotated_surfaces_and_respect_ignore() {
+        let mut world = SceneWorld::new();
+        let angle = 0.4_f32;
+        let id = floor(&mut world, angle, 0.5);
+        let hit = PhysicsWorld::cast(
+            &mut world,
+            [2.0, 10.0, 0.0],
+            [0.0, -2.0, 0.0],
+            20.0,
+            0.0,
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(hit.entity, id);
+        let expected_y = 2.0 * angle.tan() + 0.5 / angle.cos();
+        assert!((hit.point[1] - f64::from(expected_y)).abs() < 0.001);
+        assert!((hit.normal[0] + f64::from(angle.sin())).abs() < 0.001);
+        assert!(
+            PhysicsWorld::cast(
+                &mut world,
+                [2.0, 10.0, 0.0],
+                [0.0, -1.0, 0.0],
+                20.0,
+                0.0,
+                &[id]
+            )
+            .unwrap()
+            .is_none()
+        );
+        let sphere = PhysicsWorld::cast(
+            &mut world,
+            [2.0, 10.0, 0.0],
+            [0.0, -1.0, 0.0],
+            20.0,
+            0.25,
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+        assert!((hit.distance - sphere.distance - 0.25 / f64::from(angle.cos())).abs() < 0.001);
+    }
+    #[test]
+    fn contact_events_are_paired_and_despawn_produces_exit() {
+        let mut world = SceneWorld::new();
+        let floor = floor(&mut world, 0.0, 0.5);
+        let id = cube(&mut world, Vec3::Y, false);
+        let mut physics = PhysicsWorld::default();
+        tick(&mut physics, &mut world, 1);
+        assert_eq!(physics.events.len(), 2);
+        assert!(physics.events.iter().all(|e| e.name == "CollisionEnter"));
+        assert!(
+            physics
+                .events
+                .iter()
+                .find(|e| e.entity == id)
+                .unwrap()
+                .normal
+                .y
+                > 0.99
+        );
+        tick(&mut physics, &mut world, 1);
+        assert!(physics.events.iter().all(|e| e.name == "CollisionStay"));
+        world
+            .apply_commands(&[WorldCommand::Despawn(floor)])
+            .unwrap();
+        tick(&mut physics, &mut world, 1);
+        assert!(
+            physics
+                .events
+                .iter()
+                .any(|e| e.entity == id && e.other == floor && e.name == "CollisionExit")
+        );
+        tick(&mut physics, &mut world, 1);
+        assert!(physics.events.is_empty());
+    }
+    #[test]
+    fn can_touch_controls_events_without_losing_ground_support() {
+        let mut world = SceneWorld::new();
+        floor(&mut world, 0.0, 0.5);
+        let id = cube(&mut world, Vec3::Y, false);
+        let mut attributes = world.part_attributes(id).unwrap();
+        attributes.can_touch = false;
+        world
+            .apply_commands(&[WorldCommand::SetPartAttributes {
+                entity: id,
+                value: attributes,
+            }])
+            .unwrap();
+        let mut physics = PhysicsWorld::default();
+        tick(&mut physics, &mut world, 2);
+        assert!(physics.events.is_empty());
+        assert_eq!(physics.ground(id, 45.0).unwrap()["walkable"], true);
     }
 
     #[test]
