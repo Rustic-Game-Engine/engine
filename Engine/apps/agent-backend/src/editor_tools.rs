@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 pub fn tools() -> Vec<Value> {
     let empty = json!({"type":"object","properties":{},"additionalProperties":false});
     let scene = json!({"type":"object","required":["path"],"properties":{"path":{"type":"string","description":"Relative to the configured scenes folder, e.g. levels/forest.scene"}},"additionalProperties":false});
-    let mut tools = Vec::new();
+    let mut tools = texture_tools();
     for (name, description, schema) in [
         (
             "editor_status",
@@ -103,4 +103,86 @@ pub fn tools() -> Vec<Value> {
 
 pub fn contains(name: &str) -> bool {
     tools().iter().any(|tool| tool["name"] == name)
+}
+
+fn texture_tools() -> Vec<Value> {
+    let slots = [
+        "BaseColor",
+        "Normal",
+        "Roughness",
+        "Metallic",
+        "AmbientOcclusion",
+        "Height",
+        "Emissive",
+        "Clearcoat",
+        "ClearcoatRoughness",
+        "ClearcoatNormal",
+        "Transmission",
+        "Thickness",
+        "SheenColor",
+        "SheenRoughness",
+        "Specular",
+        "SpecularColor",
+        "Anisotropy",
+    ];
+    let maps: serde_json::Map<String, Value> = slots
+        .into_iter()
+        .map(|slot| (slot.into(), json!({"type":["string","null"]})))
+        .collect();
+    let pair = json!({"type":"array","items":{"type":"number"},"minItems":2,"maxItems":2});
+    let edit = json!({"type":"object","required":["entity_id"],"additionalProperties":false,"properties":{
+        "entity_id":{"type":"string"},
+        "maps":{"type":"object","properties":maps,"additionalProperties":false,"description":"Partial slot update. Project-relative PNG/JPEG/TGA/HDR paths; null clears a slot. Unspecified slots remain."},
+        "clear_maps":{"type":"boolean","description":"Clear existing slots before applying maps; retains the texture component and controls."},
+        "uv_scale":pair,"uv_offset":pair,
+        "height_scale":{"type":"number","minimum":-100,"maximum":100},
+        "emissive_strength":{"type":"number","minimum":0,"maximum":10000}
+    }});
+    let mut child = edit.clone();
+    child["properties"]["name"] =
+        json!({"type":"string","description":"Optional child name; defaults to Texture."});
+    let color =
+        json!({"type":"array","items":{"type":"number","minimum":0},"minItems":3,"maxItems":3});
+    let vector = json!({"type":"array","items":{"type":"number"},"minItems":3,"maxItems":3});
+    let positive = json!({"type":"number","minimum":0});
+    vec![
+        json!({"name":"environment_update","description":"Patch the scene sky/atmosphere through editor undo. Use editor_status.environment for current settings. A project-relative 2:1 HDR panorama belongs in sky_image; empty restores solid sky. Validates and imports the image before editing. Save with scene_save.","inputSchema":{"type":"object","required":["settings"],"additionalProperties":false,"properties":{"settings":{"type":"object","additionalProperties":false,"properties":{
+            "enabled":{"type":"boolean"},"sky_image":{"type":"string"},"sky_color":color,"rotation_degrees":{"type":"number"},"exposure":{"type":"number","minimum":-20,"maximum":20},
+            "ambient_color":color,"ambient_intensity":positive,"sun_color":color,"sun_intensity":positive,"sun_direction":vector,"haze_color":color,"haze_density":positive,"haze_start":positive
+        }}}}}),
+        json!({"name":"texture_inspect","description":"Inspect direct texture maps, effective maps after Texture-child overrides, and immediate texture children for an object in the live editor.","inputSchema":{"type":"object","required":["entity_id"],"properties":{"entity_id":{"type":"string"}},"additionalProperties":false}}),
+        json!({"name":"texture_update","description":"Atomically edit optional HDR/PBR slots and UV/intensity controls on a mesh, primitive or existing Texture child through editor undo. Paths must be existing project-relative images. Validates all images before attaching; use null to clear slots. Save with scene_save.","inputSchema":edit}),
+        json!({"name":"texture_create_child","description":"Create a Texture child of the mesh/primitive identified by entity_id, optionally with maps and controls, as one undoable scene edit. Child maps apply only to the immediate parent. Save with scene_save.","inputSchema":child}),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn texture_schema_tracks_renderer_slots_and_exposes_partial_updates() {
+        let tools = tools();
+        let update = tools
+            .iter()
+            .find(|t| t["name"] == "texture_update")
+            .unwrap();
+        let properties = &update["inputSchema"]["properties"];
+        let maps = properties["maps"]["properties"].as_object().unwrap();
+        assert_eq!(maps.len(), engine_world::TextureMap::ALL.len());
+        for map in engine_world::TextureMap::ALL {
+            let name = serde_json::to_value(map).unwrap();
+            assert_eq!(
+                maps[name.as_str().unwrap()]["type"],
+                json!(["string", "null"])
+            );
+        }
+        assert_eq!(update["inputSchema"]["additionalProperties"], false);
+        for name in [
+            "texture_inspect",
+            "texture_create_child",
+            "environment_update",
+        ] {
+            assert!(contains(name));
+        }
+    }
 }

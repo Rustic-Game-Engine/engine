@@ -154,6 +154,8 @@ fn tools() -> Value {
         {"name":"docs_index","description":"List relevant Markdown documentation available in this project and its engine repository.","inputSchema":{"type":"object","properties":{}}}
     ]);
     tools.as_array_mut().expect("tools array").push(json!({"name":"authoring_guide","description":"Read the bundled, current Rustic game design, modeling, scene, scope and playtest guidance. Works with existing customized integrations.","inputSchema":{"type":"object","properties":{}}}));
+    tools.as_array_mut().expect("tools array").push(json!({"name":"texture_guide","description":"Read current HDR/PBR map, Texture child and sky guidance, including slot names, channel conventions, examples and renderer limits. Available even when installed skills were customized.","inputSchema":{"type":"object","properties":{},"additionalProperties":false}}));
+
     tools.as_array_mut().expect("tools array").push(json!({"name":"scene_explorer_guide","description":"Read the current rustic-scene-explorer skill: organize hierarchy folders, add objects, duplicate/delete subtrees, reparent safely, undo and save. Available with preserved custom instructions.","inputSchema":{"type":"object","properties":{}}}));
     tools
         .as_array_mut()
@@ -167,6 +169,8 @@ fn call_tool(root: &Path, name: &str, args: &Value) -> Result<Value, String> {
         return engine_scripting::call_editor(root, name, args);
     }
     match name {
+        "texture_guide" => Ok(json!({"content":engine_scripting::AGENT_TEXTURE_GUIDE})),
+
         "scene_explorer_guide" => {
             Ok(json!({"content":engine_scripting::AGENT_SCENE_EXPLORER_SKILL}))
         }
@@ -279,7 +283,7 @@ fn scene_summary(root: &Path, value: &str) -> Result<Value, String> {
     let entities: Vec<_> = load.document.entities.iter().map(|entity| json!({
         "id":entity.id.to_string(), "name":entity.name, "folder":entity.folder, "parent":entity.parent.map(|id| id.to_string()),
         "translation":entity.local_transform.translation.to_array(), "rotation":entity.local_transform.rotation.to_array(), "scale":entity.local_transform.scale.to_array(),
-        "components":{"camera":entity.camera.is_some(),"light":entity.light.is_some(),"mesh":entity.mesh.is_some(),"material":entity.material.is_some(),"primitive":entity.primitive.as_ref().map(|p| format!("{p:?}")),"scripts":entity.scripts.len()}
+        "components":{"camera":entity.camera.is_some(),"light":entity.light.is_some(),"mesh":entity.mesh.is_some(),"material":entity.material.is_some(),"textures":entity.textures,"primitive":entity.primitive.as_ref().map(|p| format!("{p:?}")),"scripts":entity.scripts.len()}
     })).collect();
     Ok(
         json!({"path":relative(root,&path),"name":load.document.name,"schema_version":load.schema_version,"read_only":load.read_only,"entities":entities,"diagnostics":load.diagnostics.iter().map(|d| d.message.clone()).collect::<Vec<_>>()}),
@@ -518,6 +522,15 @@ mod tests {
         )
         .unwrap();
         let root = project.root().canonicalize().unwrap();
+        let guide = call_tool(&root, "texture_guide", &json!({})).unwrap();
+        assert_eq!(guide["content"], engine_scripting::AGENT_TEXTURE_GUIDE);
+        assert!(
+            tools()
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|tool| tool["name"] == "texture_guide")
+        );
         let info = call_tool(&root, "workspace_info", &json!({})).unwrap();
         assert!(info["agent_directory"].as_str().is_some());
         call_tool(

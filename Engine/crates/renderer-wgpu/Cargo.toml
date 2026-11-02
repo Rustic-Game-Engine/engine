@@ -11,6 +11,7 @@ engine-assets = { path = "../engine-assets", version = "0.1.0" }
 engine-world = { path = "../engine-world", version = "0.1.0" }
 glam.workspace = true
 image.workspace = true
+half = "2.7.1"
 engine-rhi = { path = "../engine-rhi", version = "0.1.0" }
 naga.workspace = true
 pollster.workspace = true
@@ -23,3 +24,6 @@ winit.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

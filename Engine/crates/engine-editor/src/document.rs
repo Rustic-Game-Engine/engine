@@ -613,6 +613,54 @@ impl AuthoringDocument {
 
     /// # Errors
     /// Returns an error for read-only state or an absent entity.
+    pub fn set_textures(
+        &mut self,
+        entity: EntityId,
+        after: Option<engine_world::SurfaceTextures>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.surface_textures(entity)?;
+        if before != after {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::Textures {
+                    entity,
+                    before,
+                    after,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Creates an editable Texture child, attached to the selected renderable object.
+    ///
+    /// # Errors
+    /// Rejects read-only documents, missing parents and non-renderable parents.
+    pub fn add_texture_child(&mut self, parent: EntityId) -> Result<EntityId, AuthoringError> {
+        self.ensure_writable()?;
+        let owner = self.world.snapshot(parent)?;
+        if owner.mesh.is_none() && owner.primitive.is_none() {
+            return Err(WorldError::InvalidArgument(
+                "Select a mesh or primitive to add a Texture child".into(),
+            )
+            .into());
+        }
+        let snapshot = EntitySnapshot {
+            name: Some("Texture".into()),
+            parent: Some(parent),
+            textures: Some(engine_world::SurfaceTextures::default()),
+            ..EntitySnapshot::default()
+        };
+        let id = snapshot.id;
+        self.undo
+            .execute(&mut self.world, SceneEdit::Create { snapshot })?;
+        self.selected = Some(id);
+        Ok(id)
+    }
+
+    /// # Errors
+    /// Rejects read-only documents and missing entities.
     pub fn set_part_attributes(
         &mut self,
         entity: EntityId,
@@ -1789,5 +1837,38 @@ mod agent_authoring_tests {
         document.switch_scene("levels/forest.scene").unwrap();
         assert_eq!(document.scene_startup_scripts().len(), 1);
         assert!(document.world().contains(id));
+    }
+    #[test]
+    fn texture_child_authoring_saves_and_respects_undo_and_read_only() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("textures"),
+            "Textures",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        let owner = document
+            .add_primitive("Cube", Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+        let child = document.add_texture_child(owner).unwrap();
+        assert_eq!(document.selected(), Some(child));
+        let mut textures = engine_world::SurfaceTextures::default();
+        textures
+            .maps
+            .insert(engine_world::TextureMap::Normal, "assets/normal.png".into());
+        document
+            .set_textures(child, Some(textures.clone()))
+            .unwrap();
+        document.undo().unwrap();
+        assert!(document.world().resolved_textures(owner).maps.is_empty());
+        document.redo().unwrap();
+        document.save().unwrap();
+        let mut reopened = AuthoringDocument::open(project, true).unwrap();
+        assert_eq!(reopened.world().resolved_textures(owner), textures);
+        assert!(reopened.add_texture_child(owner).is_err());
+        assert!(reopened.set_textures(child, None).is_err());
+        let folder = document.add_folder(None).unwrap();
+        assert!(document.add_texture_child(folder).is_err());
     }
 }
