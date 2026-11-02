@@ -94,6 +94,11 @@ pub(super) fn export_website(
     fs::write(destination.join("player.js"), include_str!("player.js"))
         .map_err(|e| e.to_string())?;
     fs::write(
+        destination.join("readme.md"),
+        include_str!("website-readme.md"),
+    )
+    .map_err(|e| e.to_string())?;
+    fs::write(
         destination.join("game-files.json"),
         serde_json::to_vec(&files).map_err(|e| e.to_string())?,
     )
@@ -232,6 +237,9 @@ mod tests {
         assert!(!root.path().join("game/web").exists());
         assert!(output.join("index.html").is_file());
         assert!(output.join("rustic-browser.wasm").is_file());
+        let readme = fs::read_to_string(output.join("readme.md")).unwrap();
+        assert!(readme.contains("python -m http.server 8080"));
+        assert!(readme.contains("http://localhost:8080"));
         assert_eq!(
             PlaySnapshot::open(output.join("data"))
                 .unwrap()
