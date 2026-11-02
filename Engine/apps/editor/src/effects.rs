@@ -143,7 +143,9 @@ fn edit_value(
                 ui.horizontal(|ui| {
                     ui.label(label(name)).on_hover_text(field_hint(name));
                     let choices = enum_choices(name);
-                    if !choices.is_empty() {
+                    if choices.is_empty() {
+                        ui.text_edit_singleline(value).changed()
+                    } else {
                         let before = value.clone();
                         egui::ComboBox::from_id_salt("value")
                             .selected_text(label(value))
@@ -153,19 +155,6 @@ fn edit_value(
                                 }
                             });
                         before != *value
-                    } else {
-                        let mut changed = ui.text_edit_singleline(value).changed();
-                        if is_asset(name)
-                            && ui.button("Choose…").clicked()
-                            && let Some(path) =
-                                rfd::FileDialog::new().set_directory(root).pick_file()
-                            && let (Ok(root), Ok(path)) = (root.canonicalize(), path.canonicalize())
-                            && let Ok(relative) = path.strip_prefix(root)
-                        {
-                            *value = relative.to_string_lossy().replace('\\', "/");
-                            changed = true;
-                        }
-                        changed
                     }
                 })
                 .inner
@@ -278,15 +267,15 @@ fn edit_value(
                         values.push(value);
                         changed = true;
                     }
-                    if name != "meshes" && ui.button("Add key / item").clicked() {
-                        if let Some(value) = values
+                    if name != "meshes"
+                        && ui.button("Add key / item").clicked()
+                        && let Some(value) = values
                             .last()
                             .cloned()
                             .or_else(|| default_item(name, references))
-                        {
-                            values.push(value);
-                            changed = true;
-                        }
+                    {
+                        values.push(value);
+                        changed = true;
                     }
                     changed
                 })
@@ -392,7 +381,7 @@ fn enum_choices(name: &str) -> &'static [&'static str] {
             "MeshSurface",
         ],
         "quality" => &["Low", "Medium", "High"],
-        "blend" => &["Alpha", "Additive", "Multiply"],
+        "blend" | "blend_mode" => &["Alpha", "Additive", "Multiply"],
         "weather" => &["Rain", "Snow", "Hail", "Dust", "Sand", "Leaves"],
         "force_type" => &[
             "Directional",
@@ -404,7 +393,6 @@ fn enum_choices(name: &str) -> &'static [&'static str] {
         "collision_response" | "response" => &["Bounce", "Stick", "Kill"],
         "refresh" => &["Baked", "OnEnable", "Interval"],
         "simulation_space" => &["Local", "World"],
-        "blend_mode" => &["Alpha", "Additive", "Multiply"],
         _ => &[],
     }
 }
@@ -446,7 +434,7 @@ impl crate::EditorViewer<'_> {
             {
                 match load_effect_asset(self.project_root, &path) {
                     Ok(asset) if asset.effects.len() == 1 => {
-                        next = asset.effects.into_iter().next()
+                        next = asset.effects.into_iter().next();
                     }
                     Ok(_) => self.effect_error(
                         "Composite assets must be added through the preset / asset browser".into(),
@@ -664,7 +652,7 @@ pub(super) struct EffectPreview {
 impl Default for EffectPreview {
     fn default() -> Self {
         Self {
-            runtime: Default::default(),
+            runtime: PreviewRuntime::default(),
             playing: false,
             speed: 1.0,
             time: 0.0,
@@ -672,7 +660,7 @@ impl Default for EffectPreview {
             show_bounds: true,
             search: String::new(),
             category: "All".into(),
-            scene_path: Default::default(),
+            scene_path: std::path::PathBuf::new(),
             simulation_millis: 0.0,
         }
     }
@@ -1216,15 +1204,14 @@ fn update_shared_asset(
             let mapping = asset_instance_map(&asset, other, entity, document);
             let mut live_defaults = new_defaults.clone();
             live_defaults.remap_entities(&mapping);
-            let baseline = other
-                .baseline
-                .as_ref()
-                .map(|baseline| baseline.as_ref().clone().into_component())
-                .unwrap_or_else(|| {
+            let baseline = other.baseline.as_ref().map_or_else(
+                || {
                     let mut old = old_defaults.clone();
                     old.remap_entities(&mapping);
                     old
-                });
+                },
+                |baseline| baseline.as_ref().clone().into_component(),
+            );
             let mut merged = engine_world::effects::merge_instance_defaults(
                 &instance,
                 &baseline,
@@ -1440,9 +1427,10 @@ mod tests {
                 let effect = engine_world::effects::EffectComponent::new(kind);
                 let before = serde_json::to_value(&effect).unwrap();
                 let mut value = before.clone();
-                let _ = context.run_ui(egui::RawInput::default(), |ui| {
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
                     assert!(!properties(ui, &mut value, temporary.path(), &[]));
                 });
+                output.textures_delta.clear();
                 assert_eq!(
                     serde_json::from_value::<engine_world::effects::EffectComponent>(value)
                         .unwrap(),
@@ -1464,7 +1452,9 @@ mod tests {
         let mut document = engine_editor::AuthoringDocument::open(project, false).unwrap();
         let id = document
             .add_effect(
-                engine_world::effects::EffectKind::Particle(Default::default()),
+                engine_world::effects::EffectKind::Particle(
+                    engine_world::effects::ParticleEmitter::default(),
+                ),
                 None,
             )
             .unwrap();
@@ -1804,7 +1794,7 @@ mod curve_interaction_tests {
             egui::Pos2::ZERO,
             egui::vec2(640.0, 480.0),
         ));
-        let first = context.run_ui(
+        let mut first = context.run_ui(
             egui::RawInput {
                 screen_rect: screen,
                 ..Default::default()
@@ -1813,6 +1803,7 @@ mod curve_interaction_tests {
                 edit_key_graph(ui, &mut keys);
             },
         );
+        first.textures_delta.clear();
         let center = first
             .shapes
             .iter()
@@ -1840,7 +1831,7 @@ mod curve_interaction_tests {
                 modifiers: egui::Modifiers::NONE,
             }],
         ] {
-            let _ = context.run_ui(
+            let mut output = context.run_ui(
                 egui::RawInput {
                     screen_rect: screen,
                     events,
@@ -1850,6 +1841,7 @@ mod curve_interaction_tests {
                     edit_key_graph(ui, &mut keys);
                 },
             );
+            output.textures_delta.clear();
         }
         assert!(keys[0]["time"].as_f64().unwrap() > 0.05);
         assert!(keys[0]["value"].as_f64().unwrap() > 0.05);
@@ -1877,7 +1869,7 @@ mod preview_child_tests {
         let asset = EffectAsset::new(
             "Impact",
             vec![EffectComponent::new(EffectKind::Shockwave(
-                Default::default(),
+                RingEffect::default(),
             ))],
         );
         std::fs::write(&path, asset.to_bytes().unwrap()).unwrap();
@@ -2006,13 +1998,17 @@ fn prepare_mesh_emission(
         .meshes
         .iter()
         .flat_map(|mesh| {
-            mesh.indices.chunks_exact(3).filter_map(move |face| {
-                Some([
-                    *mesh.positions.get(usize::try_from(face[0]).ok()?)?,
-                    *mesh.positions.get(usize::try_from(face[1]).ok()?)?,
-                    *mesh.positions.get(usize::try_from(face[2]).ok()?)?,
-                ])
-            })
+            mesh.indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter_map(move |face| {
+                    Some([
+                        *mesh.positions.get(usize::try_from(face[0]).ok()?)?,
+                        *mesh.positions.get(usize::try_from(face[1]).ok()?)?,
+                        *mesh.positions.get(usize::try_from(face[2]).ok()?)?,
+                    ])
+                })
         })
         .take(100_000)
         .collect();

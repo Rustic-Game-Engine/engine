@@ -166,6 +166,8 @@ Use bounded particle/point/instance counts, shorter lifetimes and local volumes.
 
 World effect state is keyed by stable entity IDs. Destroying entities or unloading scenes must release their simulation state. Playback does not permanently overwrite the authored camera or light configuration; frame modifiers are applied during rendering. Reuse configured entities for repeated bursts when practical. Asset instantiation clones authored data; it is not a GPU resource duplication guarantee.
 
+Sub-emitter `max_generations` is compared with the current absolute generation at each emitter, so a child may use a different limit from its source; the entire chain is capped at eight generations, 128 child spawns per tick and 1,024 active temporary child effects.
+
 ## Showcase and troubleshooting
 
 From the engine's `Engine/` directory:

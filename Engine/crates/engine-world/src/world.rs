@@ -724,7 +724,8 @@ impl SceneWorld {
                 let camera = self.camera(entity).ok()??;
                 camera.active.then_some((camera.order, entity))
             })
-            .max().map(|(_, entity)| entity);
+            .max()
+            .map(|(_, entity)| entity);
         let camera = camera_entity
             .and_then(|entity| self.world_transform(entity).ok())
             .map_or(glam::Vec3::ZERO, |transform| transform.0.w_axis.truncate());
@@ -733,10 +734,20 @@ impl SceneWorld {
 
     /// Advances the shared simulation using an editor or custom viewport camera.
     /// A missing target previews camera effects independently of game-camera assignment.
-    pub fn update_effects_from_camera(&mut self, delta: f32, camera: glam::Vec3, camera_entity: Option<EntityId>) {
-        let transforms: BTreeMap<_, _> = self.entity_ids().filter_map(|entity| {
-            self.world_transform(entity).ok().map(|transform| (entity, transform.0))
-        }).collect();
+    pub fn update_effects_from_camera(
+        &mut self,
+        delta: f32,
+        camera: glam::Vec3,
+        camera_entity: Option<EntityId>,
+    ) {
+        let transforms: BTreeMap<_, _> = self
+            .entity_ids()
+            .filter_map(|entity| {
+                self.world_transform(entity)
+                    .ok()
+                    .map(|transform| (entity, transform.0))
+            })
+            .collect();
         let inputs: Vec<_> = self
             .entity_ids()
             .filter_map(|entity| {
@@ -748,7 +759,8 @@ impl SceneWorld {
             })
             .collect();
         self.effects_runtime.set_camera_target(camera_entity);
-        self.effects_runtime.update_with_targets(delta, &inputs, camera, &transforms);
+        self.effects_runtime
+            .update_with_targets(delta, &inputs, camera, &transforms);
         self.update_effect_children(delta);
         self.update_effect_group_events();
     }
@@ -756,20 +768,35 @@ impl SceneWorld {
     fn update_effect_group_events(&mut self) {
         let mut groups = BTreeSet::new();
         for event in &self.effects_runtime.frame().events {
-            if event.kind != crate::effects::EffectEventKind::Completed { continue; }
+            if event.kind != crate::effects::EffectEventKind::Completed {
+                continue;
+            }
             let mut ancestor = self.parent(event.entity).ok().flatten();
             while let Some(entity) = ancestor {
-                if self.ecs_entity(entity).is_ok_and(|entity| self.ecs.get::<Folder>(entity).is_some()) {
+                if self
+                    .ecs_entity(entity)
+                    .is_ok_and(|entity| self.ecs.get::<Folder>(entity).is_some())
+                {
                     groups.insert(entity);
                 }
                 ancestor = self.parent(entity).ok().flatten();
             }
         }
         for entity in groups {
-            if self.effect_state(entity).ok().flatten() == Some(crate::effects::PlaybackState::Completed)
-                && self.completed_effect_groups.insert(entity) {
-                let position = self.world_transform(entity).map_or(glam::Vec3::ZERO, |transform| transform.0.w_axis.truncate());
-                self.effects_runtime.emit_event(crate::effects::EffectEvent { entity, kind: crate::effects::EffectEventKind::Completed, position, child_effect: None });
+            if self.effect_state(entity).ok().flatten()
+                == Some(crate::effects::PlaybackState::Completed)
+                && self.completed_effect_groups.insert(entity)
+            {
+                let position = self
+                    .world_transform(entity)
+                    .map_or(glam::Vec3::ZERO, |transform| transform.0.w_axis.truncate());
+                self.effects_runtime
+                    .emit_event(crate::effects::EffectEvent {
+                        entity,
+                        kind: crate::effects::EffectEventKind::Completed,
+                        position,
+                        child_effect: None,
+                    });
             }
         }
     }
@@ -778,32 +805,64 @@ impl SceneWorld {
     ///
     /// # Errors
     /// Returns an error for an invalid asset or incompatible instance overrides.
-    pub fn register_effect_asset(&mut self, id: crate::AssetId, asset: crate::effects::EffectAsset) -> Result<(), WorldError> {
+    pub fn register_effect_asset(
+        &mut self,
+        id: crate::AssetId,
+        asset: crate::effects::EffectAsset,
+    ) -> Result<(), WorldError> {
         asset.validate().map_err(WorldError::InvalidArgument)?;
         let mut commands = Vec::new();
         for entity in self.entity_ids() {
-            let Some(instance) = self.effect(entity)? else { continue; };
-            let Some(source) = &instance.source else { continue; };
-            if source.asset != id { continue; }
-            let Some(new_default) = asset.effects.get(source.child as usize) else { continue; };
+            let Some(instance) = self.effect(entity)? else {
+                continue;
+            };
+            let Some(source) = &instance.source else {
+                continue;
+            };
+            if source.asset != id {
+                continue;
+            }
+            let Some(new_default) = asset.effects.get(source.child as usize) else {
+                continue;
+            };
             let mut new_default = new_default.clone();
             let parent = self.parent(entity)?;
-            let remap: BTreeMap<_, _> = self.entity_ids().filter_map(|sibling| {
-                if self.parent(sibling).ok()? != parent { return None; }
-                let source = self.effect(sibling).ok()??.source?;
-                if source.asset != id { return None; }
-                Some((*asset.entity_ids.get(source.child as usize)?, sibling))
-            }).collect();
+            let remap: BTreeMap<_, _> = self
+                .entity_ids()
+                .filter_map(|sibling| {
+                    if self.parent(sibling).ok()? != parent {
+                        return None;
+                    }
+                    let source = self.effect(sibling).ok()??.source?;
+                    if source.asset != id {
+                        return None;
+                    }
+                    Some((*asset.entity_ids.get(source.child as usize)?, sibling))
+                })
+                .collect();
             new_default.remap_entities(&remap);
-            let Some(baseline) = &source.baseline else { continue; };
+            let Some(baseline) = &source.baseline else {
+                continue;
+            };
             let old_default = baseline.as_ref().clone().into_component();
-            let mut merged = crate::effects::merge_instance_defaults(&instance, &old_default, &new_default).map_err(WorldError::InvalidArgument)?;
+            let mut merged =
+                crate::effects::merge_instance_defaults(&instance, &old_default, &new_default)
+                    .map_err(WorldError::InvalidArgument)?;
             if let Some(source) = &mut merged.source {
-                source.baseline = Some(Box::new(crate::effects::EffectDefaults::from_component(&new_default)));
+                source.baseline = Some(Box::new(crate::effects::EffectDefaults::from_component(
+                    &new_default,
+                )));
             }
-            if merged != instance { commands.push(WorldCommand::SetEffect { entity, value: Some(Box::new(merged)) }); }
+            if merged != instance {
+                commands.push(WorldCommand::SetEffect {
+                    entity,
+                    value: Some(Box::new(merged)),
+                });
+            }
         }
-        if !commands.is_empty() { self.apply_commands(&commands)?; }
+        if !commands.is_empty() {
+            self.apply_commands(&commands)?;
+        }
         self.effect_assets.insert(id, asset);
         Ok(())
     }
@@ -816,9 +875,22 @@ impl SceneWorld {
     ///
     /// # Errors
     /// Returns an error for a missing asset, invalid parent or invalid transform.
-    pub fn instantiate_effect_asset(&mut self, asset_id: crate::AssetId, parent: Option<EntityId>, transform: LocalTransform) -> Result<EntityId, WorldError> {
-        let asset = self.effect_assets.get(&asset_id).ok_or_else(|| WorldError::InvalidArgument(format!("effect asset {asset_id} is unavailable")))?;
-        let root = EntitySnapshot { name: Some(asset.name.clone()), folder: true, parent, local_transform: transform, ..Default::default() };
+    pub fn instantiate_effect_asset(
+        &mut self,
+        asset_id: crate::AssetId,
+        parent: Option<EntityId>,
+        transform: LocalTransform,
+    ) -> Result<EntityId, WorldError> {
+        let asset = self.effect_assets.get(&asset_id).ok_or_else(|| {
+            WorldError::InvalidArgument(format!("effect asset {asset_id} is unavailable"))
+        })?;
+        let root = EntitySnapshot {
+            name: Some(asset.name.clone()),
+            folder: true,
+            parent,
+            local_transform: transform,
+            ..Default::default()
+        };
         let root_id = root.id;
         let mut commands = vec![WorldCommand::Spawn(Box::new(root))];
         for mut snapshot in asset.instances_with_ids(Some(asset_id)) {
@@ -832,9 +904,16 @@ impl SceneWorld {
 
     /// Samples global and local wind using the same fields as particle simulation.
     pub fn sample_effect_wind(&self, position: glam::Vec3, time: f32, layers: u32) -> glam::Vec3 {
-        let inputs: Vec<_> = self.entity_ids().filter_map(|entity| Some(crate::effects::EffectInput {
-            entity, transform: self.world_transform(entity).ok()?.0, effect: self.effect(entity).ok()??,
-        })).collect();
+        let inputs: Vec<_> = self
+            .entity_ids()
+            .filter_map(|entity| {
+                Some(crate::effects::EffectInput {
+                    entity,
+                    transform: self.world_transform(entity).ok()?.0,
+                    effect: self.effect(entity).ok()??,
+                })
+            })
+            .collect();
         crate::effects::sample_wind(&inputs, position, time, layers)
     }
 
@@ -842,44 +921,94 @@ impl SceneWorld {
         // Cosmetic child effects cannot recursively grow without a hard bound.
         const MAX_CHILDREN: usize = 1024;
         const MAX_SPAWNS_PER_TICK: usize = 128;
+        // This fallback budget uses the same clock as simulation. Paused,
+        // disabled or zero-speed children retain their remaining authored time.
+        let clocks: BTreeMap<_, _> = self
+            .temporary_effects
+            .keys()
+            .filter_map(|entity| {
+                let mut effect = self.effect(*entity).ok()??;
+                effect.resolve_parameters();
+                Some((*entity, (effect.common.enabled, effect.common.time_scale)))
+            })
+            .collect();
+        let delta = if delta.is_finite() {
+            delta.clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
         let mut expired = Vec::new();
         for (entity, (_, remaining)) in &mut self.temporary_effects {
-            *remaining -= delta.max(0.0);
-            if *remaining <= 0.0 { expired.push(*entity); }
+            use crate::effects::PlaybackState;
+            let state = self.effects_runtime.state(*entity);
+            let Some((enabled, time_scale)) = clocks.get(entity) else {
+                expired.push(*entity);
+                continue;
+            };
+            if matches!(state, PlaybackState::Completed | PlaybackState::Disposed) {
+                expired.push(*entity);
+            } else if state == PlaybackState::Playing && *enabled {
+                *remaining -= delta * time_scale;
+                if *remaining <= 0.0 {
+                    expired.push(*entity);
+                }
+            }
         }
-        if !expired.is_empty() {
-            let commands: Vec<_> = expired.into_iter().map(WorldCommand::Despawn).collect();
-            let _ = self.apply_commands(&commands);
-        }
+        // Preserve this frame's death/collision triggers until their source
+        // identity and generation have been resolved, even when it completes.
         let events = self.effects_runtime.frame().events.clone();
         let mut commands = Vec::new();
         for event in events {
-            let Some(asset_id) = event.child_effect else { continue; };
-            let generation = self.temporary_effects.get(&event.entity).map_or(0, |(generation, _)| *generation);
-            let maximum = self.effect(event.entity).ok().flatten().map_or(0, |effect| match effect.kind {
-                crate::effects::EffectKind::Particle(p) | crate::effects::EffectKind::MeshParticle(p) => p.max_generations.min(8),
-                crate::effects::EffectKind::Weather(w) => w.emitter.max_generations.min(8),
-                crate::effects::EffectKind::CollisionVolume(_) => 3,
-                _ => 0,
-            });
-            if generation >= maximum { continue; }
-            let Some(asset) = self.effect_assets.get(&asset_id) else { continue; };
-            if commands.len() + asset.effects.len() > MAX_SPAWNS_PER_TICK || self.temporary_effects.len() + asset.effects.len() > MAX_CHILDREN { continue; }
+            let Some(asset_id) = event.child_effect else {
+                continue;
+            };
+            let generation = self
+                .temporary_effects
+                .get(&event.entity)
+                .map_or(0, |(generation, _)| *generation);
+            let maximum = self
+                .effect(event.entity)
+                .ok()
+                .flatten()
+                .map_or(0, |effect| match effect.kind {
+                    crate::effects::EffectKind::Particle(p)
+                    | crate::effects::EffectKind::MeshParticle(p) => p.max_generations.min(8),
+                    crate::effects::EffectKind::Weather(w) => w.emitter.max_generations.min(8),
+                    crate::effects::EffectKind::CollisionVolume(_) => 3,
+                    _ => 0,
+                });
+            if generation >= maximum {
+                continue;
+            }
+            let Some(asset) = self.effect_assets.get(&asset_id) else {
+                continue;
+            };
+            if commands.len() + asset.effects.len() > MAX_SPAWNS_PER_TICK
+                || self.temporary_effects.len() + asset.effects.len() > MAX_CHILDREN
+            {
+                continue;
+            }
             for mut snapshot in asset.instances_with_ids(Some(asset_id)) {
-                let Some(effect) = &mut snapshot.effect else { continue; };
+                let Some(effect) = &mut snapshot.effect else {
+                    continue;
+                };
                 effect.common.looping = false;
                 let tail = match &effect.kind {
-                    crate::effects::EffectKind::Particle(p) | crate::effects::EffectKind::MeshParticle(p) => p.lifetime[1],
+                    crate::effects::EffectKind::Particle(p)
+                    | crate::effects::EffectKind::MeshParticle(p) => p.lifetime[1],
+                    crate::effects::EffectKind::Weather(w) => w.emitter.lifetime[1],
                     crate::effects::EffectKind::Trail(t) => t.lifetime,
                     _ => 0.0,
                 };
                 let lifetime = effect.common.delay + effect.common.duration + tail;
                 snapshot.name = Some(format!("{} (sub-emitter)", asset.name));
                 snapshot.local_transform.translation += event.position;
-                self.temporary_effects.insert(snapshot.id, (generation + 1, lifetime));
+                self.temporary_effects
+                    .insert(snapshot.id, (generation + 1, lifetime));
                 commands.push(WorldCommand::Spawn(Box::new(snapshot)));
             }
         }
+        commands.extend(expired.into_iter().map(WorldCommand::Despawn));
         if !commands.is_empty() {
             let _ = self.apply_commands(&commands);
             self.propagate_transforms();
@@ -904,16 +1033,31 @@ impl SceneWorld {
         targets.insert(0, id);
         let mut found = false;
         for entity in targets {
-            if matches!(command, crate::effects::PlaybackCommand::Play | crate::effects::PlaybackCommand::Restart | crate::effects::PlaybackCommand::Reset) {
+            if matches!(
+                command,
+                crate::effects::PlaybackCommand::Play
+                    | crate::effects::PlaybackCommand::Restart
+                    | crate::effects::PlaybackCommand::Reset
+            ) {
                 self.completed_effect_groups.remove(&entity);
             }
-            let Some(effect) = self.effect(entity)? else { continue; };
+            let Some(effect) = self.effect(entity)? else {
+                continue;
+            };
             found = true;
             let transform = self.world_transform(entity)?.0;
-            self.effects_runtime.ensure(&crate::effects::EffectInput { entity, transform, effect });
+            self.effects_runtime.ensure(&crate::effects::EffectInput {
+                entity,
+                transform,
+                effect,
+            });
             self.effects_runtime.control(entity, command);
         }
-        if !found { return Err(WorldError::InvalidArgument("entity subtree has no scene effect".into())); }
+        if !found {
+            return Err(WorldError::InvalidArgument(
+                "entity subtree has no scene effect".into(),
+            ));
+        }
         Ok(())
     }
 
@@ -926,13 +1070,31 @@ impl SceneWorld {
         id: EntityId,
     ) -> Result<Option<crate::effects::PlaybackState>, WorldError> {
         use crate::effects::PlaybackState;
-        if self.effect(id)?.is_some() { return Ok(Some(self.effects_runtime.state(id))); }
-        let states: Vec<_> = self.descendants(id)?.into_iter().filter(|entity| self.effect(*entity).ok().flatten().is_some()).map(|entity| self.effects_runtime.state(entity)).collect();
-        Ok(if states.is_empty() { None } else if states.contains(&PlaybackState::Playing) { Some(PlaybackState::Playing) }
-            else if states.contains(&PlaybackState::Paused) { Some(PlaybackState::Paused) }
-            else if states.iter().all(|state| *state == PlaybackState::Completed) { Some(PlaybackState::Completed) }
-            else if states.iter().all(|state| *state == PlaybackState::Disposed) { Some(PlaybackState::Disposed) }
-            else { Some(PlaybackState::Stopped) })
+        if self.effect(id)?.is_some() {
+            return Ok(Some(self.effects_runtime.state(id)));
+        }
+        let states: Vec<_> = self
+            .descendants(id)?
+            .into_iter()
+            .filter(|entity| self.effect(*entity).ok().flatten().is_some())
+            .map(|entity| self.effects_runtime.state(entity))
+            .collect();
+        Ok(if states.is_empty() {
+            None
+        } else if states.contains(&PlaybackState::Playing) {
+            Some(PlaybackState::Playing)
+        } else if states.contains(&PlaybackState::Paused) {
+            Some(PlaybackState::Paused)
+        } else if states
+            .iter()
+            .all(|state| *state == PlaybackState::Completed)
+        {
+            Some(PlaybackState::Completed)
+        } else if states.iter().all(|state| *state == PlaybackState::Disposed) {
+            Some(PlaybackState::Disposed)
+        } else {
+            Some(PlaybackState::Stopped)
+        })
     }
 
     /// Returns the optional surface texture component.

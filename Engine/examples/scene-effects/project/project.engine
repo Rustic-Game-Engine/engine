@@ -1,13 +1,13 @@
 (
     format_version: 1,
-    project_id: "4da33382-6263-4aa3-b31c-5ff3c13250bc",
+    project_id: "bfd5c24b-cadc-4ad1-b61a-fec0ca91ef4f",
     template: blank,
     metadata: (
         name: "Scene Effects Showcase",
         description: Some("A blank project with only the standard directory layout."),
         tags: [],
-        created_unix_seconds: 1793598472,
-        updated_unix_seconds: 1793598472,
+        created_unix_seconds: 1793599932,
+        updated_unix_seconds: 1793599932,
     ),
     directories: (
         assets: "assets",

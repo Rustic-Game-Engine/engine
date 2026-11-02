@@ -2022,8 +2022,8 @@ mod effect_authoring_tests {
         let asset = EffectAsset::new(
             "Composite",
             vec![
-                EffectComponent::new(EffectKind::Particle(Default::default())),
-                EffectComponent::new(EffectKind::Beam(Default::default())),
+                EffectComponent::new(EffectKind::Particle(ParticleEmitter::default())),
+                EffectComponent::new(EffectKind::Beam(BeamRenderer::default())),
             ],
         );
         let group = document.add_effect_asset(&asset, None).unwrap();
@@ -2107,8 +2107,8 @@ mod shared_effect_source_tests {
         std::fs::write(&path, asset.to_bytes().unwrap()).unwrap();
         let reopened = AuthoringDocument::open(project.clone(), false).unwrap();
         let instance = reopened.world().effect(id).unwrap().unwrap();
-        assert_eq!(instance.common.duration, 7.0);
-        assert_eq!(instance.common.render_distance, 200.0);
+        assert!((instance.common.duration - 7.0).abs() < f32::EPSILON);
+        assert!((instance.common.render_distance - 200.0).abs() < f32::EPSILON);
         assert!(reopened.scene_diagnostics().is_empty());
         std::fs::remove_file(path).unwrap();
         let missing = AuthoringDocument::open(project, false).unwrap();

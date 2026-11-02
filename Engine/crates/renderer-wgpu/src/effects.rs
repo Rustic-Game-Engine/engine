@@ -26,13 +26,15 @@ struct Camera { view_projection:mat4x4<f32> };
 struct Input { @location(0) position:vec3<f32>,@location(1) uv:vec2<f32>,@location(2) color:vec4<f32>,@location(3) sprite:f32 };
 struct Output { @builtin(position) position:vec4<f32>,@location(0) uv:vec2<f32>,@location(1) color:vec4<f32>,@location(2) sprite:f32 };
 @vertex fn vs_main(i:Input)->Output {var o:Output;o.position=camera.view_projection*vec4<f32>(i.position,1.);o.uv=i.uv;o.color=i.color;o.sprite=i.sprite;return o;}
-@fragment fn fs_main(i:Output)->@location(0) vec4<f32> {
+fn shade(i:Output)->vec4<f32> {
     let radius=length(i.uv*2.-vec2<f32>(1.));
     let softness=select(1.,pow(max(1.-radius*radius,0.),2.),i.sprite>0.5 && i.sprite<1.5);
     var color=vec4<f32>(i.color.rgb,i.color.a*softness);
     if i.sprite>1.5 {color*=textureSampleLevel(sprites,sprite_sampler,i.uv,i32(i.sprite-2.),0.);}
     return color;
 }
+@fragment fn fs_main(i:Output)->@location(0) vec4<f32> {return shade(i);}
+@fragment fn fs_multiply(i:Output)->@location(0) vec4<f32> {let color=shade(i);return vec4<f32>(color.rgb*color.a,color.a);}
 ";
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Vertex {
@@ -109,6 +111,7 @@ impl EffectsRenderer {
             immediate_size: 0,
         });
         let pipelines = std::array::from_fn(|blend| {
+            let multiply = blend == 2;
             let blend = match blend {
                 1 => wgpu::BlendState {
                     color: wgpu::BlendComponent {
@@ -179,7 +182,7 @@ impl EffectsRenderer {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &module,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some(if multiply { "fs_multiply" } else { "fs_main" }),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: wgpu::TextureFormat::Rgba8Unorm,
@@ -500,6 +503,27 @@ mod gpu_tests {
         let center = (32 * 64 + 32) * 4;
         assert!(particles.rgba8[center] > 200);
         assert_eq!(base.rgba8[center], 0);
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("assets")).unwrap();
+        let image_path = project.path().join("assets/green.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([0, 255, 0, 255]))
+            .save(&image_path)
+            .unwrap();
+        let meta = engine_assets::AssetMeta::new("rustic.image", 1);
+        engine_assets::save_meta(&engine_assets::sidecar_path(&image_path), &meta).unwrap();
+        let mut textured = frame.clone();
+        textured.particles[0].texture = Some(meta.asset_id);
+        textured.particles[0].color = [1.; 4];
+        renderer.set_environment_root(project.path());
+        renderer.set_effect_frame(&textured).unwrap();
+        let sprite = renderer.render(64, 64, &scene).unwrap().unwrap();
+        assert!(sprite.rgba8[center + 1] > 200 && sprite.rgba8[center] < 10);
+        let mut multiply = frame.clone();
+        multiply.particles[0].blend = BlendMode::Multiply;
+        multiply.particles[0].color = [0.5; 4];
+        renderer.set_effect_frame(&multiply).unwrap();
+        let darkened = renderer.render(64, 64, &scene).unwrap().unwrap();
+        assert!(darkened.rgba8[center + 2] < base.rgba8[center + 2] - 5);
         frame.post.distortion = 0.15;
         frame.post.time = 1.2;
         renderer.set_effect_frame(&frame).unwrap();

@@ -2811,6 +2811,73 @@ rustic_run(['on_start'=>function(){global $rustic;Input::onClick($rustic->entity
     }
 
     #[test]
+    fn bundled_effects_showcase_runs_real_scripts_and_replays_without_saving_runtime_state() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/scene-effects/project");
+        let path = root.join("scene/showcase.scene");
+        let bytes = std::fs::read(&path).unwrap();
+        let scene = load_scene(&bytes).unwrap().document;
+        assert_eq!(
+            scene
+                .entities
+                .iter()
+                .filter_map(|e| e.effect.as_ref().map(|e| e.kind.name()))
+                .collect::<BTreeSet<_>>()
+                .len(),
+            26
+        );
+        let flash = scene
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.effect.as_ref().is_some_and(|e| {
+                    matches!(e.kind, engine_world::effects::EffectKind::ScreenFlash(_))
+                })
+            })
+            .unwrap();
+        let config = flash.effect.as_ref().unwrap();
+        assert!(
+            !config.common.looping,
+            "showcase needs an observable one-shot to verify replay"
+        );
+        let mut runtime = RuntimeScripts::load(&root, &bytes).unwrap();
+        for _ in 0..90 {
+            runtime.fixed_update(1.0 / 60.0);
+            runtime.frame_update(1.0 / 60.0);
+        }
+        {
+            let world = runtime.active.world.lock().unwrap();
+            assert!(!world.effect_frame().particles.is_empty());
+            assert_eq!(
+                world.effect_state(flash.id).unwrap(),
+                Some(engine_world::effects::PlaybackState::Completed)
+            );
+        }
+        runtime.set_input_keys(vec!["ArrowUp".into()]);
+        runtime.fixed_update(1.0 / 60.0);
+        runtime.frame_update(1.0 / 60.0);
+        assert_eq!(
+            runtime
+                .active
+                .world
+                .lock()
+                .unwrap()
+                .effect_state(flash.id)
+                .unwrap(),
+            Some(engine_world::effects::PlaybackState::Playing)
+        );
+        runtime.set_input_keys(Vec::new());
+        runtime.stop();
+        let errors = runtime
+            .drain_logs()
+            .into_iter()
+            .filter(|(level, _)| level == "error")
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "showcase runtime errors: {errors:?}");
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
     fn effect_runtime_configuration_is_visible_to_live_editor_inspection() {
         let temp = tempfile::tempdir().unwrap();
         let entity = EntitySnapshot {

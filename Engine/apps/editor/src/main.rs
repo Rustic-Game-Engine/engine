@@ -459,12 +459,7 @@ impl EditorApp {
                 self.refresh_preview();
             }
         }
-        if self.play.is_none() && self.effect_preview.playing {
-            context.request_repaint_after(Duration::from_millis(33));
-            if self.effect_preview.last_tick.elapsed() >= Duration::from_millis(33) {
-                self.preview_dirty = true;
-            }
-        }
+        self.poll_effect_preview(context);
         if self.preview_dirty && self.play.is_none() {
             self.refresh_preview();
         }
@@ -505,6 +500,15 @@ impl EditorApp {
                     "Runtime exited; authoring document is intact",
                 );
                 self.play = None;
+            }
+        }
+    }
+
+    fn poll_effect_preview(&mut self, context: &egui::Context) {
+        if self.play.is_none() && self.effect_preview.playing {
+            context.request_repaint_after(Duration::from_millis(33));
+            if self.effect_preview.last_tick.elapsed() >= Duration::from_millis(33) {
+                self.preview_dirty = true;
             }
         }
     }
@@ -1939,7 +1943,7 @@ impl EditorViewer<'_> {
                     Ok(_) => self.request_preview = true,
                     Err(error) => {
                         self.console
-                            .push(simple_console(Severity::Error, "effects.asset", error))
+                            .push(simple_console(Severity::Error, "effects.asset", error));
                     }
                 }
             } else if path.extension().is_some_and(|extension| {

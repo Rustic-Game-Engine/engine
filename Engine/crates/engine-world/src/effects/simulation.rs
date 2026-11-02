@@ -384,7 +384,10 @@ impl EffectRuntime {
         self.camera_target = target;
     }
     pub fn remove(&mut self, entity: EntityId) {
-        self.instances.remove(&entity);
+        let completed = self
+            .instances
+            .remove(&entity)
+            .is_some_and(|instance| instance.state == PlaybackState::Completed);
         self.frame.geometry.retain(|v| v.entity != entity);
         self.frame.particles.retain(|v| v.entity != entity);
         self.frame.events.retain(|v| v.entity != entity);
@@ -392,6 +395,11 @@ impl EffectRuntime {
         self.frame.probes.retain(|v| v.entity != entity);
         self.frame.decals.retain(|v| v.entity != entity);
         self.frame.water.retain(|v| v.entity != entity);
+        // Completed sources contributed no aggregate modifiers during the latest
+        // extraction. Preserve adjustments still owned by other active effects.
+        if completed {
+            return;
+        }
         // Aggregated camera and material adjustments are regenerated on update.
         self.frame.lights.clear();
         self.frame.surfaces.clear();
