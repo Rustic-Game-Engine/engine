@@ -500,7 +500,11 @@ fn install_api(lua: &Lua, host: Arc<Mutex<Box<dyn GameplayHost>>>) -> mlua::Resu
             let result = lock_host(&h)?
                 .gameplay_query(query)
                 .map_err(MluaError::RuntimeError)?;
-            lua.to_value(&result)
+            if result.is_null() {
+                Ok(Value::Nil)
+            } else {
+                lua.to_value(&result)
+            }
         })?,
     )?;
     let h = Arc::clone(&host);

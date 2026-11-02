@@ -78,6 +78,13 @@ pub struct PartAttributes {
     pub can_touch: bool,
     pub can_collide: bool,
     pub anchored: bool,
+    /// Coulomb friction coefficient, combined geometrically at contacts.
+    #[serde(default = "default_friction")]
+    pub friction: f32,
+}
+
+fn default_friction() -> f32 {
+    0.5
 }
 
 impl Default for PartAttributes {
@@ -87,6 +94,7 @@ impl Default for PartAttributes {
             can_touch: true,
             can_collide: true,
             anchored: false,
+            friction: default_friction(),
         }
     }
 }
@@ -266,5 +274,47 @@ impl Light {
             && self.spot_outer_angle_radians.is_finite()
             && self.spot_outer_angle_radians > 0.0
             && self.spot_outer_angle_radians < std::f32::consts::PI
+    }
+}
+
+#[cfg(test)]
+mod physics_attribute_tests {
+    use super::*;
+    #[test]
+    fn legacy_attributes_default_to_friction_and_new_values_round_trip() {
+        let legacy = ron::ser::to_string(&PartAttributes::default())
+            .unwrap()
+            .replace(",friction:0.5", "");
+        assert!(!legacy.contains("friction"));
+        let mut attributes: PartAttributes = ron::from_str(&legacy).unwrap();
+        assert!((attributes.friction - 0.5).abs() < f32::EPSILON);
+        attributes.friction = 0.8;
+        let encoded = ron::ser::to_string(&attributes).unwrap();
+        assert_eq!(
+            ron::from_str::<PartAttributes>(&encoded).unwrap(),
+            attributes
+        );
+    }
+    #[test]
+    fn invalid_friction_is_rejected_before_world_mutation() {
+        let mut world = crate::SceneWorld::new();
+        let entity = crate::EntitySnapshot::default();
+        let id = entity.id;
+        world
+            .apply_commands(&[crate::WorldCommand::Spawn(Box::new(entity))])
+            .unwrap();
+        for value in [f32::NAN, f32::INFINITY, -1.0, 10.1] {
+            let mut attributes = world.part_attributes(id).unwrap();
+            attributes.friction = value;
+            assert!(
+                world
+                    .apply_commands(&[crate::WorldCommand::SetPartAttributes {
+                        entity: id,
+                        value: attributes
+                    }])
+                    .is_err()
+            );
+            assert!((world.part_attributes(id).unwrap().friction - 0.5).abs() < f32::EPSILON);
+        }
     }
 }

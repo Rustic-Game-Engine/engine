@@ -371,6 +371,7 @@ impl JavaScriptBehavior {
                 "CanTouch",
                 "CanCollide",
                 "Anchored",
+                "Friction",
                 "Parent",
             ]
             .into_iter()

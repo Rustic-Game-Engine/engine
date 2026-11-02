@@ -86,6 +86,10 @@ class Rustic {
         static Events.Connection onTouchCancel(java.util.function.Consumer<Object[]> fn){return Events.on("TouchCancel",fn);}
     }
     static class Physics{
+        static Object ground(String e,double maxAngle){return query(args("physics_ground","entity",Gameplay.entity(e),"max_angle",maxAngle));}
+        static Events.Connection onCollisionEnter(String e,java.util.function.Consumer<Object[]> fn){return Events.connect(e,"CollisionEnter",fn);}
+        static Events.Connection onCollisionStay(String e,java.util.function.Consumer<Object[]> fn){return Events.connect(e,"CollisionStay",fn);}
+        static Events.Connection onCollisionExit(String e,java.util.function.Consumer<Object[]> fn){return Events.connect(e,"CollisionExit",fn);}
         static Object raycast(double[] origin,double[] direction,double distance){return query(args("physics_raycast","origin",origin,"direction",direction,"distance",distance));}
         static Object sphereCast(double[] origin,double[] direction,double distance,double radius){return query(args("physics_sphere_cast","origin",origin,"direction",direction,"distance",distance,"radius",radius));}
         static Object overlap(double[] center,double radius){return query(args("physics_overlap","center",center,"radius",radius));}

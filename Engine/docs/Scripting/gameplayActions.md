@@ -394,7 +394,7 @@ end }
 `sphereCast` adds a radius and uses rounded sphere/box contacts; `overlap(center,
 radius, ignore?)` returns entity IDs. Hits contain entity, point, normal and distance.
 Direction is normalized by the engine. Queries use the simulation's authored
-primitive colliders represented by world AABBs, including parent transforms.
+primitive colliders represented by oriented boxes, including parent transforms. Overlaps and explosion candidate searches use conservative world AABBs.
 
 `force(object, vector, delta?)` applies force for the interval, `impulse` / `knockback`
 add velocity, and `launch` sets velocity. The current simulation uses unit mass.

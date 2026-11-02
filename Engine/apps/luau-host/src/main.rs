@@ -72,6 +72,9 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             if let Some(error) = response.get("error").and_then(serde_json::Value::as_str) {
                 return Err(mlua::Error::external(error.to_owned()));
             }
+            if response["result"].is_null() {
+                return Ok(Value::Nil);
+            }
             lua.to_value_with(
                 &response["result"],
                 mlua::SerializeOptions::new().serialize_none_to_null(false),

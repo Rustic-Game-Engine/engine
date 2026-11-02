@@ -71,6 +71,10 @@ static class Rustic {
         public static Events.Connection onTouchCancel(Action<object[]> fn)=>Events.on("TouchCancel",fn);
     }
     public static class Physics{
+        public static JsonElement ground(string? e,double maxAngle=45)=>Query(new{op="physics_ground",entity=Gameplay.Entity(e),max_angle=maxAngle});
+        public static Events.Connection onCollisionEnter(string e,Action<object[]> fn)=>Events.connect(e,"CollisionEnter",fn);
+        public static Events.Connection onCollisionStay(string e,Action<object[]> fn)=>Events.connect(e,"CollisionStay",fn);
+        public static Events.Connection onCollisionExit(string e,Action<object[]> fn)=>Events.connect(e,"CollisionExit",fn);
         public sealed record Hit(string entity,double[] point,double[] normal,double distance);
         public static Hit? raycast(double[] origin,double[] direction,double distance)=>JsonSerializer.Deserialize<Hit>(Query(new{op="physics_raycast",origin,direction,distance}).GetRawText());
         public static Hit? sphereCast(double[] origin,double[] direction,double distance,double radius)=>JsonSerializer.Deserialize<Hit>(Query(new{op="physics_sphere_cast",origin,direction,distance,radius}).GetRawText());
