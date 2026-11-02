@@ -68,6 +68,10 @@ pub enum WorldCommand {
         entity: EntityId,
         value: Option<Mesh>,
     },
+    SetTextures {
+        entity: EntityId,
+        value: Option<crate::SurfaceTextures>,
+    },
     SetMaterial {
         entity: EntityId,
         value: Option<Material>,
@@ -442,12 +446,19 @@ impl SceneWorld {
         }
 
         for command in commands {
+            if let WorldCommand::SetTextures {
+                value: Some(value), ..
+            } = command
+            {
+                value.validate().map_err(WorldError::InvalidArgument)?;
+            }
             let referenced = match command {
                 WorldCommand::Spawn(_) | WorldCommand::SetEnvironment(_) => None,
                 WorldCommand::Despawn(entity)
                 | WorldCommand::SetLocalTransform { entity, .. }
                 | WorldCommand::SetName { entity, .. }
                 | WorldCommand::SetMesh { entity, .. }
+                | WorldCommand::SetTextures { entity, .. }
                 | WorldCommand::SetMaterial { entity, .. }
                 | WorldCommand::SetCamera { entity, .. }
                 | WorldCommand::SetLight { entity, .. }
@@ -496,6 +507,9 @@ impl SceneWorld {
                     self.insert_or_remove(*entity, value.clone().map(Name));
                 }
                 WorldCommand::SetMesh { entity, value } => self.insert_or_remove(*entity, *value),
+                WorldCommand::SetTextures { entity, value } => {
+                    self.insert_or_remove(*entity, value.clone());
+                }
                 WorldCommand::SetMaterial { entity, value } => {
                     self.insert_or_remove(*entity, *value);
                 }
@@ -637,6 +651,7 @@ impl SceneWorld {
             parent: self.ecs.get::<Parent>(entity).map(|value| value.0),
             mesh: self.ecs.get::<Mesh>(entity).copied(),
             material: self.ecs.get::<Material>(entity).copied(),
+            textures: self.ecs.get::<crate::SurfaceTextures>(entity).cloned(),
             camera: self.ecs.get::<Camera>(entity).copied(),
             light: self.ecs.get::<Light>(entity).copied(),
             primitive: self.ecs.get::<Primitive>(entity).cloned(),
@@ -663,11 +678,49 @@ impl SceneWorld {
         Ok(self.ecs.get::<Mesh>(entity).copied())
     }
 
-    /// Returns the optional material component.
+    /// Returns the optional surface texture component.
     ///
     /// # Errors
     ///
     /// Returns [`WorldError::EntityNotFound`] when the entity is absent.
+    pub fn surface_textures(
+        &self,
+        id: EntityId,
+    ) -> Result<Option<crate::SurfaceTextures>, WorldError> {
+        let entity = self.ecs_entity(id)?;
+        Ok(self.ecs.get::<crate::SurfaceTextures>(entity).cloned())
+    }
+
+    /// Resolves direct maps followed by immediate Texture children in stable ID order.
+    /// Children override only slots they supply; maps never leak to siblings or descendants.
+    pub fn resolved_textures(&self, id: EntityId) -> crate::SurfaceTextures {
+        let mut result = self.surface_textures(id).ok().flatten().unwrap_or_default();
+        if let Ok(children) = self.children(id) {
+            for child in children {
+                if self.primitive(*child).ok().flatten().is_some()
+                    || self.mesh(*child).ok().flatten().is_some()
+                {
+                    continue;
+                }
+                if let Ok(Some(value)) = self.surface_textures(*child) {
+                    if value.maps.is_empty() {
+                        continue;
+                    }
+                    result.maps.extend(value.maps);
+                    result.uv_scale = value.uv_scale;
+                    result.uv_offset = value.uv_offset;
+                    result.height_scale = value.height_scale;
+                    result.emissive_strength = value.emissive_strength;
+                }
+            }
+        }
+        result
+    }
+
+    /// Returns the optional material asset component.
+    ///
+    /// # Errors
+    /// Returns an error if the entity does not exist.
     pub fn material(&self, id: EntityId) -> Result<Option<Material>, WorldError> {
         let entity = self.ecs_entity(id)?;
         Ok(self.ecs.get::<Material>(entity).copied())
@@ -823,6 +876,9 @@ impl SceneWorld {
         }
         if let Some(mesh) = snapshot.mesh {
             entity.insert(mesh);
+        }
+        if let Some(textures) = snapshot.textures {
+            entity.insert(textures);
         }
         if let Some(material) = snapshot.material {
             entity.insert(material);

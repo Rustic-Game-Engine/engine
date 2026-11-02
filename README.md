@@ -53,13 +53,13 @@ This table updates automatically through GitHub Actions.
 <!-- supported-versions:start -->
 | Version | Supported | Download |
 | ------- | --------- | -------- |
-| v3.8-Pre-Alpha | ✅ Latest | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.8-Pre-Alpha) |
+| v4.0-Pre-Alpha | ✅ Latest | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.0-Pre-Alpha) |
+| v3.9-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.9-Pre-Alpha) |
+| v3.8-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.8-Pre-Alpha) |
 | v3.7-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.7-Pre-Alpha) |
 | v3.6-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.6-Pre-Alpha) |
 | v3.5-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.5-Pre-Alpha) |
 | v3.4-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.4-Pre-Alpha) |
-| v3.3-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.3-Pre-Alpha) |
-| v3.2-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v3.2-Pre-Alpha) |
 <!-- supported-versions:end -->
 
 Download links open the release pages containing installers and source

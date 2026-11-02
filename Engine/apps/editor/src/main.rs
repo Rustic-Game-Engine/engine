@@ -5,6 +5,7 @@ mod pointer_input;
 mod project_build;
 mod scene_graph;
 mod script_links;
+mod textures;
 mod transform_widget;
 mod ui_designer;
 mod ui_theme;
@@ -1893,6 +1894,8 @@ impl EditorViewer<'_> {
                         error.to_string(),
                     )),
                 }
+            } else if !is_2d && textures::is_texture(path) {
+                self.drop_viewport_textures(ui, &response, std::slice::from_ref(path));
             } else if is_model_asset(path) {
                 if is_2d || self.playing {
                     self.console.push(simple_console(
@@ -1971,6 +1974,42 @@ impl EditorViewer<'_> {
                 ));
             }
         }
+        if !is_2d && !self.playing && !self.document.is_read_only() {
+            if let Some(ViewportDrop::Entries(paths)) = dropped.as_deref()
+                && paths.iter().all(|p| textures::is_texture(p))
+            {
+                self.drop_viewport_textures(ui, &response, paths);
+            }
+            if response.contains_pointer() {
+                let files = ui
+                    .ctx()
+                    .input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+                let paths: Vec<_> = files.into_iter().map(|f| f.path().to_path_buf()).collect();
+                if !paths.is_empty() {
+                    self.drop_viewport_textures(ui, &response, &paths);
+                }
+            }
+            if let Some(payload) = response.dnd_release_payload::<SceneTreeDrag>()
+                && self
+                    .document
+                    .world()
+                    .surface_textures(payload.entity)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                && let Some(target) = self.texture_drop_target(ui, &response)
+                && target != payload.entity
+            {
+                match self.document.reparent(payload.entity, Some(target)) {
+                    Ok(()) => self.request_preview = true,
+                    Err(error) => self.console.push(simple_console(
+                        Severity::Error,
+                        "textures",
+                        error.to_string(),
+                    )),
+                }
+            }
+        }
         // Directories organize project assets and have no viewport representation.
         if matches!(dropped.as_deref(), Some(ViewportDrop::Directory(_))) {
             self.console.push(simple_console(
@@ -1979,7 +2018,8 @@ impl EditorViewer<'_> {
                 "Folders can only be moved inside the Explorer",
             ));
         }
-        if matches!(dropped.as_deref(), Some(ViewportDrop::Entries(_))) {
+        if matches!(dropped.as_deref(), Some(ViewportDrop::Entries(paths)) if !paths.iter().all(|p| textures::is_texture(p)))
+        {
             self.console.push(simple_console(
                 Severity::Info,
                 "explorer",
@@ -2288,6 +2328,32 @@ impl EditorViewer<'_> {
                         }
                         ui.close();
                     }
+                    if ui
+                        .add_enabled(
+                            !self.document.is_read_only()
+                                && !self.playing
+                                && self.document.selected().is_some_and(|id| {
+                                    self.document
+                                        .world()
+                                        .snapshot(id)
+                                        .is_ok_and(|s| s.mesh.is_some() || s.primitive.is_some())
+                                }),
+                            egui::Button::new("Texture (child of selected object)"),
+                        )
+                        .clicked()
+                    {
+                        if let Some(parent) = self.document.selected() {
+                            match self.document.add_texture_child(parent) {
+                                Ok(_) => self.request_preview = true,
+                                Err(error) => self.console.push(simple_console(
+                                    Severity::Error,
+                                    "textures",
+                                    error.to_string(),
+                                )),
+                            }
+                        }
+                        ui.close();
+                    }
                     ui.separator();
                     for (label, is_camera) in [("Camera", true), ("Light", false)] {
                         if ui.button(label).clicked() {
@@ -2409,6 +2475,10 @@ impl EditorViewer<'_> {
         }
         let clipboard_id = egui::Id::new("scene-clipboard");
         let result = match action {
+            SceneTreeAction::TextureFiles(entity, paths) => {
+                self.assign_texture_files(entity, &paths);
+                return;
+            }
             SceneTreeAction::Rename(entity, name) => self.document.set_name(entity, name),
             SceneTreeAction::Delete(entity) => self.document.delete_tree(entity),
             action @ (SceneTreeAction::Copy(_) | SceneTreeAction::Cut(_)) => {
@@ -2875,7 +2945,7 @@ impl EditorViewer<'_> {
                 self.request_preview = true;
             }
         }
-        if let Some(mut primitive) = snapshot.primitive {
+        if let Some(mut primitive) = snapshot.primitive.clone() {
             ui.separator();
             ui_theme::section(ui, "Geometry", "Parametric primitive");
             if ui_theme::property_grid(ui, |ui| edit_primitive(ui, &mut primitive)).inner
@@ -2896,6 +2966,7 @@ impl EditorViewer<'_> {
                     .color(ui.visuals().weak_text_color()),
             );
         }
+        self.texture_inspector(ui, &snapshot);
         self.script_inspector(ui, entity, snapshot.scripts);
     }
 
@@ -3374,6 +3445,7 @@ fn viewport_scene(
             .iter()
             .enumerate()
             .map(|(index, position)| ViewportVertex {
+                uv: generated.tex_coords.get(index).copied().unwrap_or([0.0; 2]),
                 position: *position,
                 normal: generated
                     .normals
@@ -3383,6 +3455,7 @@ fn viewport_scene(
             })
             .collect();
         meshes.push(ViewportMesh {
+            textures: document.world().resolved_textures(entity),
             instance_key,
             mesh_key,
             vertices,
@@ -3406,6 +3479,7 @@ fn viewport_scene(
                 .iter()
                 .enumerate()
                 .map(|(index, position)| ViewportVertex {
+                    uv: imported.texcoords.get(index).copied().unwrap_or([0.0; 2]),
                     position: *position,
                     normal: imported
                         .normals
@@ -3414,11 +3488,24 @@ fn viewport_scene(
                         .unwrap_or([0.0, 1.0, 0.0]),
                 })
                 .collect();
-            let color = model
-                .materials
-                .get(mesh_index)
-                .map_or([0.55, 0.62, 0.72, 1.0], |material| material.base_color);
+            let textures = document.world().resolved_textures(extracted.entity);
+            let color = if textures
+                .maps
+                .contains_key(&engine_world::TextureMap::BaseColor)
+            {
+                document
+                    .world()
+                    .part_attributes(extracted.entity)
+                    .unwrap_or_default()
+                    .color
+            } else {
+                model
+                    .materials
+                    .get(imported.material_index.unwrap_or(0))
+                    .map_or([0.55, 0.62, 0.72, 1.0], |material| material.base_color)
+            };
             meshes.push(ViewportMesh {
+                textures,
                 instance_key: hash_value(&(extracted.entity.to_string(), mesh_index)),
                 mesh_key: hash_value(&(extracted.mesh, mesh_index)),
                 vertices,
@@ -4051,6 +4138,7 @@ struct SceneTreeDrag {
 #[derive(Debug)]
 enum SceneTreeAction {
     Rename(EntityId, String),
+    TextureFiles(EntityId, Vec<PathBuf>),
     Copy(EntityId),
     Cut(EntityId),
     Paste(Option<EntityId>),
@@ -4181,6 +4269,23 @@ fn scene_entry_row(
         .interact(egui::Sense::click_and_drag());
     if can_edit && response.drag_started_by(egui::PointerButton::Primary) {
         response.dnd_set_drag_payload(SceneTreeDrag { entity });
+    }
+    if can_edit {
+        if let Some(payload) = response.dnd_release_payload::<ViewportDrop>() {
+            let paths = payload.project_paths();
+            if paths.iter().all(|p| textures::is_texture(p)) {
+                result.action = Some(SceneTreeAction::TextureFiles(entity, paths));
+            }
+        }
+        if response.contains_pointer() {
+            let files = ui
+                .ctx()
+                .input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            let paths: Vec<_> = files.into_iter().map(|f| f.path().to_path_buf()).collect();
+            if !paths.is_empty() {
+                result.action = Some(SceneTreeAction::TextureFiles(entity, paths));
+            }
+        }
     }
     if response.clicked() {
         result.clicked = Some(entity);
