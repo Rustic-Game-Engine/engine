@@ -66,7 +66,7 @@ to select a level dynamically.
 Lower-case `get_attribute`/`edit_attribute` are equivalent. Set `Color`, `Position`,
 and `Size` with three-number arrays, and `Parent` with an entity ID string or `null`.
 Supported built-ins are
-`Name`, `Position`, `Size`, `Color`, `CanTouch`, `CanCollide`, `Anchored`, and
+`Name`, `Position`, `Size`, `Color`, `CanTouch`, `CanCollide`, `Anchored`, `Friction`, and
 `Parent`. Properties must already be declared and writes must preserve their type.
 Mutations are queued and applied in issue order after the callback.
 

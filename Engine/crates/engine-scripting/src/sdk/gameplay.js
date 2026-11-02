@@ -93,6 +93,10 @@
     onTouchCancel:fn=>Events.on('TouchCancel',fn)
   };
   const Physics={
+    ground:(o,maxAngle=45)=>rustic.query({op:'physics_ground',entity:entity(o),max_angle:maxAngle}),
+    onCollisionEnter:(o,fn)=>Events.connect(o,'CollisionEnter',fn),
+    onCollisionStay:(o,fn)=>Events.connect(o,'CollisionStay',fn),
+    onCollisionExit:(o,fn)=>Events.connect(o,'CollisionExit',fn),
     raycast:(origin,direction,distance,ignore=[])=>rustic.query({op:'physics_raycast',origin,direction,distance,ignore}),
     sphereCast:(origin,direction,distance,radius,ignore=[])=>rustic.query({op:'physics_sphere_cast',origin,direction,distance,radius,ignore}),
     overlap:(center,radius,ignore=[])=>rustic.query({op:'physics_overlap',center,radius,ignore}),

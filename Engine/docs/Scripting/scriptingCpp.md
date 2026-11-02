@@ -100,7 +100,7 @@ object names. The optional parent is an ID. These mutations are queued and appli
 after the callback, in call order, so creation does not return a new ID.
 
 Built-in attributes are `Name`, `Position`, `Size`, `Color`, `CanTouch`,
-`CanCollide`, `Anchored`, and `Parent`. Property/attribute writes must retain the
+`CanCollide`, `Anchored`, `Friction`, and `Parent`. Property/attribute writes must retain the
 existing engine type. A rejected command fails and disables only this behavior.
 
 ## Lifetime, safety, and compatibility

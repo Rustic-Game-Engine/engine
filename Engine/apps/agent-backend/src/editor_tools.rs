@@ -17,7 +17,7 @@ pub fn tools() -> Vec<Value> {
         ),
         (
             "scene_create",
-            "Create an empty persisted scene; does not switch or overwrite. Path is relative to the scenes folder.",
+            "Create an empty persisted scene for an independent screen/map or lifetime boundary; read authoring_guide for menu/loading/map decisions. Inspect scene_list first. Does not switch or overwrite. Path is relative to the scenes folder, e.g. maps/map1.scene.",
             json!({"type":"object","required":["path","name"],"properties":{"path":{"type":"string"},"name":{"type":"string"}}}),
         ),
         (
@@ -42,7 +42,7 @@ pub fn tools() -> Vec<Value> {
         ),
         (
             "object_create",
-            "Create an authored folder, empty object, camera or light, optionally inside parent (null means scene root). Folders organize the scene explorer. For finished meshes use model_create; primitives are for deliberate blockouts/colliders.",
+            "Create an authored folder, empty object, camera or light, optionally inside parent (null means scene root). Use folders and nested subfolders to organize growing scenes by purpose/area; parent is the immediate live UUID, not a path. Folders do not create separate scenes or transform children. For finished meshes use model_create; primitives are for deliberate blockouts/colliders.",
             json!({"type":"object","required":["name"],"properties":{"name":{"type":"string"},"kind":{"type":"string","enum":["empty","folder","camera","light","blockout"]},"parent":{"type":["string","null"],"description":"Existing destination object/folder UUID, or null for scene root; defaults to root."}}}),
         ),
         (

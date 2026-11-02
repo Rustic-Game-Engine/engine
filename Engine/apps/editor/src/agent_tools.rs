@@ -204,7 +204,7 @@ impl EditorApp {
                             {
                                 if !matches!(
                                     k.as_str(),
-                                    "color" | "anchored" | "can_touch" | "can_collide"
+                                    "color" | "anchored" | "can_touch" | "can_collide" | "friction"
                                 ) {
                                     return Err(format!("unknown part attribute: {k}"));
                                 }

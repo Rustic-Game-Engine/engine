@@ -14,6 +14,8 @@ use thiserror::Error;
 /// Errors from world mutation, reference validation, or schedule execution.
 #[derive(Clone, Debug, Error, PartialEq)]
 pub enum WorldError {
+    #[error("invalid friction for {0}: expected a finite coefficient between 0 and 10")]
+    InvalidFriction(EntityId),
     #[error("invalid argument: {0}")]
     InvalidArgument(String),
     #[error("invalid scene environment settings")]
@@ -419,6 +421,11 @@ impl SceneWorld {
                 }
                 WorldCommand::SetParent { child, parent } => {
                     parents.insert(*child, *parent);
+                }
+                WorldCommand::SetPartAttributes { entity, value } => {
+                    if !value.friction.is_finite() || !(0.0..=10.0).contains(&value.friction) {
+                        return Err(WorldError::InvalidFriction(*entity));
+                    }
                 }
                 WorldCommand::SetLocalTransform { entity, value } => {
                     if !value.is_finite() {
@@ -1212,6 +1219,7 @@ mod tests {
             can_touch: false,
             can_collide: true,
             anchored: true,
+            friction: 0.5,
         };
         world
             .apply_commands(&[WorldCommand::SetPartAttributes {

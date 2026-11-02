@@ -288,6 +288,7 @@ impl ExternalBehavior {
             "CanTouch",
             "CanCollide",
             "Anchored",
+            "Friction",
             "Parent",
         ]
         .into_iter()
