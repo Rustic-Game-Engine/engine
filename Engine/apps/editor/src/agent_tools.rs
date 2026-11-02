@@ -555,6 +555,7 @@ impl EditorApp {
             .iter()
             .enumerate()
             .map(|(i, m)| ViewportMesh {
+                textures: engine_world::SurfaceTextures::default(),
                 instance_key: i as u64,
                 mesh_key: i as u64,
                 vertices: m
@@ -562,6 +563,7 @@ impl EditorApp {
                     .iter()
                     .enumerate()
                     .map(|(j, p)| ViewportVertex {
+                        uv: m.texcoords.get(j).copied().unwrap_or([0.0; 2]),
                         position: *p,
                         normal: m.normals.get(j).copied().unwrap_or([0.0, 1.0, 0.0]),
                     })

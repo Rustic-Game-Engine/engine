@@ -21,6 +21,11 @@ pub enum SceneEdit {
         before: Option<crate::Light>,
         after: Option<crate::Light>,
     },
+    Textures {
+        entity: EntityId,
+        before: Option<crate::SurfaceTextures>,
+        after: Option<crate::SurfaceTextures>,
+    },
     Name {
         entity: EntityId,
         before: Option<String>,
@@ -82,6 +87,7 @@ impl SceneEdit {
             Self::Environment { .. } => "Scene environment",
             Self::Camera { .. } => "Camera",
             Self::Light { .. } => "Light",
+            Self::Textures { .. } => "Surface textures",
             Self::Name { .. } => "Name",
             Self::Transform { .. } => "Transform",
             Self::Primitive { .. } => "Primitive dimensions",
@@ -106,6 +112,10 @@ impl SceneEdit {
             Self::Light { entity, after, .. } => output.push(WorldCommand::SetLight {
                 entity: *entity,
                 value: *after,
+            }),
+            Self::Textures { entity, after, .. } => output.push(WorldCommand::SetTextures {
+                entity: *entity,
+                value: after.clone(),
             }),
             Self::Name { entity, after, .. } => output.push(WorldCommand::SetName {
                 entity: *entity,
@@ -157,6 +167,10 @@ impl SceneEdit {
             Self::Light { entity, before, .. } => output.push(WorldCommand::SetLight {
                 entity: *entity,
                 value: *before,
+            }),
+            Self::Textures { entity, before, .. } => output.push(WorldCommand::SetTextures {
+                entity: *entity,
+                value: before.clone(),
             }),
             Self::Name { entity, before, .. } => output.push(WorldCommand::SetName {
                 entity: *entity,

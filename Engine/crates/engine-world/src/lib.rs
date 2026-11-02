@@ -11,6 +11,8 @@ mod primitive;
 mod render;
 mod scene;
 mod scene_manager;
+mod texture;
+pub use texture::{SurfaceTextures, TextureMap};
 mod undo;
 mod world;
 

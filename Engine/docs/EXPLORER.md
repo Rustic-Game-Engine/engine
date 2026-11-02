@@ -52,3 +52,7 @@ Right-click an object (or two-finger click on a trackpad) for **Copy**, **Cut**,
 
 World/Local space changes the active gizmo's axes without modifying the stored transform. Copied scripts and other components keep their existing asset references; embedded entity IDs in arbitrary component data are not rewritten. There is no Delete-key shortcut. Creating a folder does not create a filesystem directory, and moving a scene object does not move its source asset.
 
+
+## Surface textures
+
+See [Surface textures and PBR maps](SURFACE_TEXTURES.md) for map browsing, HDR/PBR file drops, and Texture child objects.
