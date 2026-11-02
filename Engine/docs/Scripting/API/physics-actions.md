@@ -41,9 +41,11 @@ globalThis.behavior = {
 ## Behavior and limitations
 
 - Attach to an unanchored collidable Part above an anchored collidable floor. The query reports the nearest hit; launch replaces the Part velocity with an upward velocity.
-- Queries use primitive world AABBs including parent transforms. SphereCast uses rounded sphere/box contacts; model meshes do not automatically acquire primitive colliders.
+- Raycasts and sphere casts use oriented primitive bounds including parent transforms; sphere casts retain rounded sphere/box contacts. Overlap and explosion candidate searches use conservative world AABBs. Sheared transforms use enclosing AABBs. Imported models require primitive collision proxies.
 - The current simulator uses unit mass. Impulse/knockback adds velocity; launch sets it; force integrates over its interval. Clock scaling affects physics.
 - Direct force, impulse or launch on an anchored or nonphysical object fails. Explosion uses linear radial falloff and skips anchored bodies.
 - See [Basic physics](/docs/guides/physics) for collider setup, gravity and collision limits.
 - Check script attachment, enabled state and the Console when an operation fails. Asynchronous errors also appear in operation state. Callback exceptions disable the owner and clean up its actions.
 - Owner destruction, disable, successful reload or Stop cleans up owned actions and subscriptions. Failed reload retains the previous behavior's operations. See [Operation handles](/docs/api/operation-handles) for controls and lifetime details.
+
+See [Collision callbacks and slope queries](/docs/api/physics-actions/contacts) for contact subscriptions, friction and ground support.

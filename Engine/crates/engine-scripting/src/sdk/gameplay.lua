@@ -217,6 +217,10 @@ function Input.onTouchEnd(fn) return Events.on('TouchEnd',fn) end
 function Input.onTouchCancel(fn) return Events.on('TouchCancel',fn) end
 
 Physics={}
+function Physics.ground(o,maxAngle) return rustic.query({op='physics_ground',entity=entity(o),max_angle=maxAngle or 45}) end
+function Physics.onCollisionEnter(o,fn) return Events.connect(o,'CollisionEnter',fn) end
+function Physics.onCollisionStay(o,fn) return Events.connect(o,'CollisionStay',fn) end
+function Physics.onCollisionExit(o,fn) return Events.connect(o,'CollisionExit',fn) end
 function Physics.raycast(origin,direction,distance,ignore) return rustic.query({op='physics_raycast',origin=origin,direction=direction,distance=distance,ignore=ignore or {}}) end
 function Physics.sphereCast(origin,direction,distance,radius,ignore) return rustic.query({op='physics_sphere_cast',origin=origin,direction=direction,distance=distance,radius=radius,ignore=ignore or {}}) end
 function Physics.overlap(center,radius,ignore) return rustic.query({op='physics_overlap',center=center,radius=radius,ignore=ignore or {}}) end

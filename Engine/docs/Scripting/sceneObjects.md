@@ -116,8 +116,9 @@ See [APIs in every language](/docs/guides/api-languages) for native signatures.
 | `Position` | three finite numbers | Local translation relative to parent |
 | `Size` | three finite numbers | Local transform scale |
 | `Color` | three finite numbers | RGB; preserves existing alpha |
-| `CanTouch` | boolean | Enables object clicks/taps; does not affect solid response |
+| `CanTouch` | boolean | Enables clicks/taps and collision subscriptions when both bodies allow touch; does not affect solid response |
 | `CanCollide` | boolean | Enables solid box collisions with other collidable primitives in Play |
+| `Friction` | number, 0..10 | Contact friction coefficient; defaults to 0.5 |
 | `Anchored` | boolean | Prevents physics movement; unchecked primitives fall under gravity |
 | `Parent` | stable entity ID or null | Reparents the target; changes future path |
 
@@ -127,8 +128,7 @@ path string. Material and Enabled are not supported attributes; `set_enabled`
 still affects the script owner.
 
 Physics runs after fixed-update callbacks. Imported meshes do not yet simulate;
-curved and rotated primitives use enclosing boxes. Physics does not dispatch
-collision callbacks. See the **Basic physics** guide for setup and limitations.
+curved primitives use oriented enclosing boxes. Rotated planes and boxes support slopes. Register collision callbacks through `Physics.onCollisionEnter/Stay/Exit`; see [Contacts and slopes](/docs/api/physics-actions/contacts). See the **Basic physics** guide for setup and limitations.
 
 ## Diagnose failures
 

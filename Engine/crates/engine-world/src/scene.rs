@@ -78,6 +78,11 @@ impl Default for EntitySnapshot {
 
 impl EntitySnapshot {
     pub(crate) fn validate(&self) -> Result<(), WorldError> {
+        if !self.part_attributes.friction.is_finite()
+            || !(0.0..=10.0).contains(&self.part_attributes.friction)
+        {
+            return Err(WorldError::InvalidFriction(self.id));
+        }
         if !self.local_transform.is_finite() {
             return Err(WorldError::InvalidTransform(self.id));
         }

@@ -511,7 +511,29 @@ impl SceneRuntime {
                     context
                         .physics
                         .step(&mut world, scaled)
-                        .map_err(|e| e.to_string())
+                        .map_err(|e| e.to_string())?;
+                    let events = std::mem::take(&mut context.physics.events);
+                    for event in events {
+                        if !world.contains(event.entity) {
+                            continue;
+                        }
+                        context.runtime.signals.emit(
+                            &engine_core::gameplay::signals::Signal {
+                                name: event.name.into(),
+                                source: Some(event.entity),
+                            },
+                            vec![
+                                engine_core::gameplay::signals::Payload::String(
+                                    event.other.to_string(),
+                                ),
+                                engine_core::gameplay::Value::Vector(
+                                    event.normal.as_dvec3().to_array(),
+                                )
+                                .into(),
+                            ],
+                        )?;
+                    }
+                    Ok(())
                 })
         {
             push_log(
@@ -1608,9 +1630,8 @@ impl GameplayHost for RuntimeHost {
         let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
         match op {
             "physics_raycast" | "physics_sphere_cast" => {
-                let colliders = crate::physics::PhysicsWorld::colliders(&mut world)?;
-                serde_json::to_value(engine_core::gameplay::physics::cast(
-                    &colliders,
+                serde_json::to_value(crate::physics::PhysicsWorld::cast(
+                    &mut world,
                     args.origin,
                     args.direction,
                     args.distance,
@@ -1622,6 +1643,18 @@ impl GameplayHost for RuntimeHost {
                     &args.ignore,
                 )?)
                 .map_err(|e| e.to_string())
+            }
+            "physics_ground" => {
+                let id = args.entity.unwrap_or(self.entity);
+                if !world.contains(id) {
+                    return Err("ground entity does not exist".into());
+                }
+                context.physics.ground(
+                    id,
+                    query.get("max_angle").map_or(Ok(45.0), |v| {
+                        v.as_f64().ok_or("maximum slope must be numeric")
+                    })?,
+                )
             }
             "physics_overlap" => {
                 let c = crate::physics::PhysicsWorld::colliders(&mut world)?;
@@ -1705,6 +1738,14 @@ impl GameplayHost for RuntimeHost {
             )
         {
             return Err("input event names are reserved for the engine".into());
+        }
+        if let Request::Emit { signal, .. } = &request
+            && matches!(
+                signal.name.as_str(),
+                "CollisionEnter" | "CollisionStay" | "CollisionExit"
+            )
+        {
+            return Err("collision event names are reserved for the engine".into());
         }
         let mut context = self.gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
         let owner = Owner {
@@ -2034,6 +2075,7 @@ impl GameplayHost for RuntimeHost {
             "cantouch" => EngineValue::Boolean(snapshot.part_attributes.can_touch),
             "cancollide" => EngineValue::Boolean(snapshot.part_attributes.can_collide),
             "anchored" => EngineValue::Boolean(snapshot.part_attributes.anchored),
+            "friction" => EngineValue::Number(f64::from(snapshot.part_attributes.friction)),
             "parent" => EngineValue::Entity(snapshot.parent),
             _ => return Ok(None),
         };
@@ -2076,7 +2118,7 @@ impl GameplayHost for RuntimeHost {
                     parent,
                 }])
             }
-            (property @ ("color" | "cantouch" | "cancollide" | "anchored"), value) => {
+            (property @ ("color" | "cantouch" | "cancollide" | "anchored" | "friction"), value) => {
                 let mut attributes = world
                     .part_attributes(self.entity)
                     .map_err(|error| error.to_string())?;
@@ -2088,6 +2130,26 @@ impl GameplayHost for RuntimeHost {
                     ("cantouch", EngineValue::Boolean(value)) => attributes.can_touch = value,
                     ("cancollide", EngineValue::Boolean(value)) => attributes.can_collide = value,
                     ("anchored", EngineValue::Boolean(value)) => attributes.anchored = value,
+                    ("friction", EngineValue::Number(value))
+                        if value.is_finite() && (0.0..=10.0).contains(&value) =>
+                    {
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            reason = "coefficient is bounded to 0..10"
+                        )]
+                        {
+                            attributes.friction = value as f32;
+                        }
+                    }
+                    ("friction", EngineValue::Integer(value)) if (0..=10).contains(&value) => {
+                        #[allow(
+                            clippy::cast_precision_loss,
+                            reason = "coefficient is bounded to 0..10"
+                        )]
+                        {
+                            attributes.friction = value as f32;
+                        }
+                    }
                     _ => return Err(format!("attribute `{name}` type mismatch")),
                 }
                 world.apply_commands(&[WorldCommand::SetPartAttributes {
@@ -3395,6 +3457,146 @@ rustic_run(["on_start"=>"on_start"]);"#),
                 .states_for_entities()
                 .is_empty()
         );
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercise the shared physics API through every available SDK"
+    )]
+    fn physics_contacts_and_ground_work_through_available_sdks() {
+        let lua = br"return {Start=function()
+            rustic.EditAttribute('Friction',0.75)
+            assert(Physics.ground(rustic.entity_id(),45)==nil)
+            Physics.onCollisionEnter(rustic.entity_id(),function(other,n) assert(n[2]>0.99);rustic.log('info','enter') end)
+            Physics.onCollisionStay(rustic.entity_id(),function() rustic.log('info','stay') end)
+            Physics.onCollisionExit(rustic.entity_id(),function() rustic.log('info','exit') end)
+        end,Update=function() local g=Physics.ground(rustic.entity_id(),45);if g then assert(g.walkable);rustic.log('info','ground') end end}";
+        let js = br"globalThis.behavior={Start(){
+            rustic.EditAttribute('Friction',0.75);
+            if(Physics.ground(rustic.entity_id(),45)!==null)throw Error('startup ground');
+            Physics.onCollisionEnter(rustic.entity_id(),(other,n)=>{if(n[1]<0.99)throw Error('normal');rustic.log('info','enter');});
+            Physics.onCollisionStay(rustic.entity_id(),()=>rustic.log('info','stay'));
+            Physics.onCollisionExit(rustic.entity_id(),()=>rustic.log('info','exit'));
+        },Update(){const g=Physics.ground(rustic.entity_id(),45);if(g){if(!g.walkable)throw Error('slope');rustic.log('info','ground');}}};";
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54,"contacts.lua",lua),
+            (ScriptLanguage::Luau,"contacts.luau",lua),
+            (ScriptLanguage::JavaScript,"contacts.js",js),
+            (ScriptLanguage::Web,"contacts.html",br"<!doctype html><html><body><script>globalThis.behavior={Start(){rustic.EditAttribute('Friction',0.75);Physics.onCollisionEnter(rustic.entity_id(),()=>rustic.log('info','enter'));Physics.onCollisionStay(rustic.entity_id(),()=>rustic.log('info','stay'));Physics.onCollisionExit(rustic.entity_id(),()=>rustic.log('info','exit'));},Update(){if(Physics.ground(rustic.entity_id(),45))rustic.log('info','ground');}};</script></body></html>"),
+            (ScriptLanguage::Python,"contacts.py",br"from rustic import *
+def start():
+    rustic.EditAttribute('Friction',0.75)
+    assert Physics.ground(rustic.entity_id(),45) is None
+    Physics.onCollisionEnter(rustic.entity_id(),lambda other,n: rustic.log('info','enter'))
+    Physics.onCollisionStay(rustic.entity_id(),lambda other,n: rustic.log('info','stay'))
+    Physics.onCollisionExit(rustic.entity_id(),lambda other,n: rustic.log('info','exit'))
+def update(dt):
+    if Physics.ground(rustic.entity_id(),45): rustic.log('info','ground')
+run({'on_start':start,'update':update})"),
+            (ScriptLanguage::C,"contacts.c",br#"#include "rustic.h"
+void enter(const RusticValue*a,size_t n){if(n!=2||a[1].vector[1]<0.99)r_fail("normal");rustic.log("info","enter");}
+void stay(const RusticValue*a,size_t n){(void)a;(void)n;rustic.log("info","stay");}
+void leave(const RusticValue*a,size_t n){(void)a;(void)n;rustic.log("info","exit");}
+void start(void){rustic.edit_attribute("Friction",(RusticValue){.type=RUSTIC_NUMBER,.number=0.75});Physics.onCollisionEnter(rustic.entity_id(),enter);Physics.onCollisionStay(rustic.entity_id(),stay);Physics.onCollisionExit(rustic.entity_id(),leave);}
+void update(double dt){(void)dt;RusticGround g=Physics.ground(rustic.entity_id(),45);if(g.found){if(!g.walkable)r_fail("slope");rustic.log("info","ground");}}
+int main(void){return rustic_run((RusticBehavior){.on_start=start,.update=update});}"#),
+            (ScriptLanguage::Cpp,"contacts.cpp",br#"#include "rustic.hpp"
+int main(){RusticBehavior b;b.on_start=[](){rustic.EditAttribute("Friction",0.75);Physics::onCollisionEnter(rustic.entity_id(),[](const RusticValue::Array&){rustic.log("info","enter");});Physics::onCollisionStay(rustic.entity_id(),[](const RusticValue::Array&){rustic.log("info","stay");});Physics::onCollisionExit(rustic.entity_id(),[](const RusticValue::Array&){rustic.log("info","exit");});};b.update=[](double){if(!Physics::ground(rustic.entity_id(),45).is_null())rustic.log("info","ground");};return rustic_run(b);}"#),
+            (ScriptLanguage::CSharp,"contacts.cs",br#"using static Rustic;
+Run((callback,dt)=>{if(callback=="on_start"){rustic.EditAttribute("Friction",0.75);Physics.onCollisionEnter(rustic.entity_id(),a=>rustic.log("info","enter"));Physics.onCollisionStay(rustic.entity_id(),a=>rustic.log("info","stay"));Physics.onCollisionExit(rustic.entity_id(),a=>rustic.log("info","exit"));}if(callback=="update"&&Physics.ground(rustic.entity_id(),45).ValueKind!=System.Text.Json.JsonValueKind.Null)rustic.log("info","ground");});"#),
+            (ScriptLanguage::Java,"RusticBehavior.java",br#"class RusticBehavior extends Rustic {public static void main(String[]a)throws Exception{run((callback,dt)->{if(callback.equals("on_start")){rustic.EditAttribute("Friction",0.75);Physics.onCollisionEnter(rustic.entity_id(),v->rustic.log("info","enter"));Physics.onCollisionStay(rustic.entity_id(),v->rustic.log("info","stay"));Physics.onCollisionExit(rustic.entity_id(),v->rustic.log("info","exit"));}if(callback.equals("update")&&Physics.ground(rustic.entity_id(),45)!=null)rustic.log("info","ground");});}}"#),
+            (ScriptLanguage::Php,"contacts.php",br#"<?php
+require __DIR__."/rustic.php";
+rustic_run(['on_start'=>function(){global $rustic;$rustic->EditAttribute("Friction",0.75);Physics::onCollisionEnter($rustic->entity_id(),fn($o,$n)=>$rustic->log("info","enter"));Physics::onCollisionStay($rustic->entity_id(),fn($o,$n)=>$rustic->log("info","stay"));Physics::onCollisionExit($rustic->entity_id(),fn($o,$n)=>$rustic->log("info","exit"));},'update'=>function($dt){global $rustic;if(Physics::ground($rustic->entity_id(),45)!==null)$rustic->log("info","ground");}]);"#),
+        ];
+        for &(language, name, source) in fixtures {
+            if !matches!(language, ScriptLanguage::Lua54 | ScriptLanguage::JavaScript)
+                && !engine_scripting::probe_language_toolchain(language).available
+            {
+                continue;
+            }
+            eprintln!("Physics SDK: {}", language.display_name());
+            let name = if matches!(language, ScriptLanguage::Web | ScriptLanguage::Php) {
+                format!("ui/{name}")
+            } else {
+                format!("scripts/{name}")
+            };
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(temp.path().join("config")).unwrap();
+            let script = ScriptId::new();
+            std::fs::create_dir_all(temp.path().join(&name).parent().unwrap()).unwrap();
+            std::fs::write(temp.path().join(&name), source).unwrap();
+            save_manifest_atomic(
+                &temp.path().join("config/scripts.ron"),
+                &ScriptManifest {
+                    format_version: 2,
+                    scripts: vec![ScriptManifestEntry {
+                        id: script,
+                        language,
+                        relative_path: name.into(),
+                        api_version: ScriptApiVersion::CURRENT,
+                        public_properties: Vec::new(),
+                    }],
+                },
+            )
+            .unwrap();
+            let mut floor = EntitySnapshot::default();
+            floor.primitive = Some(engine_world::Primitive::RectangularPrism {
+                size: [20.0, 1.0, 20.0],
+            });
+            floor.part_attributes.anchored = true;
+            let mut body = EntitySnapshot::default();
+            body.primitive = Some(engine_world::Primitive::Cube { size: 1.0 });
+            body.local_transform.translation.y = 1.0;
+            body.scripts.push(ScriptComponent::new(script));
+            let id = body.id;
+            let mut scene = SceneDocument::new("Physics");
+            scene.entities = vec![floor, body];
+            let mut runtime =
+                RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+            for _ in 0..2 {
+                runtime.fixed_update(1.0 / 60.0);
+                runtime.frame_update(1.0 / 60.0);
+            }
+            assert_eq!(
+                runtime
+                    .live_entity(id)
+                    .unwrap()
+                    .unwrap()
+                    .part_attributes
+                    .friction,
+                0.75,
+                "{}",
+                language.display_name()
+            );
+            {
+                let mut world = runtime.active.world.lock().unwrap();
+                let mut transform = world.local_transform(id).unwrap();
+                transform.translation.y = 20.0;
+                world
+                    .apply_commands(&[WorldCommand::SetLocalTransform {
+                        entity: id,
+                        value: transform,
+                    }])
+                    .unwrap();
+            }
+            runtime.fixed_update(1.0 / 60.0);
+            runtime.frame_update(1.0 / 60.0);
+            let logs = runtime.drain_logs();
+            assert!(
+                !logs.iter().any(|(level, _)| level == "error"),
+                "{}: {logs:?}",
+                language.display_name()
+            );
+            for expected in ["enter", "stay", "exit", "ground"] {
+                assert!(
+                    logs.iter().any(|(_, s)| s == expected),
+                    "{} missing {expected}: {logs:?}",
+                    language.display_name()
+                );
+            }
+        }
     }
 
     #[test]

@@ -87,7 +87,7 @@ needed.
 
 `get_attribute`/`GetAttribute` and `edit_attribute`/`EditAttribute` are aliases.
 Built-in attributes are `Name`, `Position`, `Size`, `Color`, `CanTouch`,
-`CanCollide`, `Anchored`, and `Parent`. Attribute and property writes must match the
+`CanCollide`, `Anchored`, `Friction`, and `Parent`. Attribute and property writes must match the
 existing value's type. Attribute setters accept scalar values, exactly three finite
 numbers in a table for `Position`, `Size`, and RGB `Color`, and a stable entity ID
 string or `nil` for `Parent`. Public-property setters retain their existing scalar

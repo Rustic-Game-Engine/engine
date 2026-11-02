@@ -2839,7 +2839,7 @@ impl EditorViewer<'_> {
             attributes.color = color;
             attributes_changed |= ui
                 .checkbox(&mut attributes.can_touch, "Can touch")
-                .on_hover_text("Reserved for touch events. Does not affect solid collisions.")
+                .on_hover_text("Enables clicks, taps and collision event subscriptions. Does not affect solid response.")
                 .changed();
             attributes_changed |= ui
                 .checkbox(&mut attributes.can_collide, "Can collide")
@@ -2849,6 +2849,14 @@ impl EditorViewer<'_> {
                 .checkbox(&mut attributes.anchored, "Anchored")
                 .on_hover_text(
                     "Prevents gravity and collision response from moving this primitive in Play.",
+                )
+                .changed();
+            attributes_changed |= ui
+                .add(
+                    egui::DragValue::new(&mut attributes.friction)
+                        .range(0.0..=10.0)
+                        .speed(0.01)
+                        .prefix("Friction: "),
                 )
                 .changed();
             ui.label(format!(
