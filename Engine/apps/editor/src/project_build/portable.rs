@@ -32,7 +32,7 @@ pub(super) fn validate_scripts(root: &Path) -> Result<(), String> {
             ScriptLanguage::Lua54 | ScriptLanguage::JavaScript | ScriptLanguage::Web
         ) {
             return Err(format!(
-                "{} uses {}. Direct website/Android exports currently support Lua 5.4, JavaScript and HTML/CSS behaviors; external desktop toolchains cannot run on these targets.",
+                "{} uses {}. Static website/Android exports support Lua 5.4, JavaScript and HTML/CSS behaviors; external desktop toolchains cannot run on these targets. Choose Hosted runtime for website builds.",
                 entry.relative_path.display(),
                 entry.language.display_name()
             ));
