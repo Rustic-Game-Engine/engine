@@ -85,6 +85,7 @@ impl EditorApp {
             tool,
             "editor_status"
                 | "scene_list"
+                | "texture_inspect"
                 | "viewport_capture"
                 | "model_preview"
                 | "playtest_control"
@@ -101,14 +102,29 @@ impl EditorApp {
                     "entity_id":s.id,"name":s.name,"parent":s.parent,"translation":s.local_transform.translation.to_array(),
                     "rotation":s.local_transform.rotation.to_array(),"scale":s.local_transform.scale.to_array(),
                     "part_attributes":s.part_attributes,"camera":s.camera,"light":s.light,"scripts":s.scripts,
-                    "mesh_asset":s.mesh.map(|m| m.asset),"material_asset":s.material.map(|m| m.asset),"primitive":s.primitive
+                    "mesh_asset":s.mesh.map(|m| m.asset),"material_asset":s.material.map(|m| m.asset),"primitive":s.primitive,
+                    "textures":s.textures,"resolved_textures":self.document.world().resolved_textures(s.id)
                 })).collect::<Vec<_>>();
                 Ok(
-                    json!({"scene":self.document.scene_path(),"modified":self.document.is_modified(),"objects":objects,
+                    json!({"scene":self.document.scene_path(),"environment":self.document.world().environment(),"modified":self.document.is_modified(),"objects":objects,
                     "global_scripts":self.game_settings.global_scripts,"scene_scripts":self.document.scene_startup_scripts(),
                     "playtest":self.play.as_ref().map(|p| format!("{:?}", p.state())),"runtime_review_pending":self.pending_runtime_changes.is_some(),
                     "logs":self.console.entries().iter().rev().take(30).map(|e| json!({"severity":format!("{:?}",e.severity),"message":e.message})).collect::<Vec<_>>() }),
                 )
+            }
+            "environment_update" => {
+                let result = edit_environment(&mut self.document, args)?;
+                self.refresh_preview();
+                self.agent_frame = None;
+                Ok(result)
+            }
+            "texture_inspect" => texture_inspect(&self.document, entity_id(args)?),
+            "texture_update" | "texture_create_child" => {
+                let result =
+                    edit_textures(&mut self.document, args, tool == "texture_create_child")?;
+                self.refresh_preview();
+                self.agent_frame = None;
+                Ok(result)
             }
             "scene_list" => {
                 let scenes = self
@@ -891,6 +907,356 @@ mod authoring_flow_tests {
                 .start_scene_path()
                 .unwrap()
                 .ends_with("levels/second.scene")
+        );
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextureRequest {
+    entity_id: EntityId,
+    #[serde(default)]
+    maps: BTreeMap<engine_world::TextureMap, Option<String>>,
+    #[serde(default)]
+    clear_maps: bool,
+    uv_scale: Option<[f32; 2]>,
+    uv_offset: Option<[f32; 2]>,
+    height_scale: Option<f32>,
+    emissive_strength: Option<f32>,
+    name: Option<String>,
+}
+fn texture_inspect(document: &AuthoringDocument, id: EntityId) -> Result<Value, String> {
+    let world = document.world();
+    let direct = world.surface_textures(id).map_err(|e| e.to_string())?;
+    let children: Vec<_> = world
+        .children(id)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .filter_map(|child| {
+            let snapshot = world.snapshot(*child).ok()?;
+            (snapshot.textures.is_some() && snapshot.mesh.is_none() && snapshot.primitive.is_none())
+                .then(
+                    || json!({"entity_id":child,"name":snapshot.name,"textures":snapshot.textures}),
+                )
+        })
+        .collect();
+    Ok(
+        json!({"entity_id":id,"textures":direct,"resolved_textures":world.resolved_textures(id),"texture_children":children}),
+    )
+}
+fn edit_textures(
+    document: &mut AuthoringDocument,
+    args: &Value,
+    child: bool,
+) -> Result<Value, String> {
+    if document.is_read_only() {
+        return Err("document is read-only".into());
+    }
+    let request: TextureRequest = decode(args)?;
+    if !child && request.name.is_some() {
+        return Err("name is only supported by texture_create_child".into());
+    }
+    let before = document
+        .world()
+        .snapshot(request.entity_id)
+        .map_err(|e| e.to_string())?;
+    let renderable = before.mesh.is_some() || before.primitive.is_some();
+    if !renderable && (child || before.textures.is_none()) {
+        return Err("Choose a mesh or primitive, or update an existing Texture child".into());
+    }
+    let mut textures = if child {
+        engine_world::SurfaceTextures::default()
+    } else {
+        before.textures.clone().unwrap_or_default()
+    };
+    if request.clear_maps {
+        textures.maps.clear();
+    }
+    if let Some(v) = request.uv_scale {
+        textures.uv_scale = v;
+    }
+    if let Some(v) = request.uv_offset {
+        textures.uv_offset = v;
+    }
+    if let Some(v) = request.height_scale {
+        textures.height_scale = v;
+    }
+    if let Some(v) = request.emissive_strength {
+        textures.emissive_strength = v;
+    }
+    // Reject unsafe paths and controls before importing any assets or committing edits.
+    for (kind, path) in &request.maps {
+        if let Some(path) = path {
+            textures.maps.insert(*kind, path.clone());
+        } else {
+            textures.maps.remove(kind);
+        }
+    }
+    textures.validate()?;
+    let root = document.project().root().to_path_buf();
+    for path in textures.maps.values() {
+        agent_path(&root, Path::new(path), false)?;
+    }
+    for (kind, path) in request.maps {
+        if let Some(path) = path {
+            let source = agent_path(&root, Path::new(&path), false)?;
+            textures
+                .maps
+                .insert(kind, super::textures::import_texture(&root, &source)?);
+        }
+    }
+    let id = if child {
+        let snapshot = engine_world::EntitySnapshot {
+            parent: Some(request.entity_id),
+            name: Some(request.name.unwrap_or_else(|| "Texture".into())),
+            textures: Some(textures.clone()),
+            ..Default::default()
+        };
+        let id = snapshot.id;
+        document
+            .edit_transaction(
+                "Agent create Texture child",
+                vec![engine_world::SceneEdit::Create { snapshot }],
+            )
+            .map_err(|e| e.to_string())?;
+        document.select(Some(id));
+        id
+    } else {
+        document
+            .set_textures(request.entity_id, Some(textures.clone()))
+            .map_err(|e| e.to_string())?;
+        request.entity_id
+    };
+    Ok(json!({"entity_id":id,"textures":textures,"saved":false}))
+}
+
+fn edit_environment(document: &mut AuthoringDocument, args: &Value) -> Result<Value, String> {
+    if document.is_read_only() {
+        return Err("document is read-only".into());
+    }
+    let object = args.as_object().ok_or("arguments must be an object")?;
+    if object.len() != 1 || !object.contains_key("settings") {
+        return Err("provide only settings".into());
+    }
+    let settings = args["settings"]
+        .as_object()
+        .ok_or("settings must be an object")?;
+    let before = document.world().environment().clone();
+    let mut merged = serde_json::to_value(&before).map_err(|e| e.to_string())?;
+    for (key, value) in settings {
+        if merged.get(key).is_none() {
+            return Err(format!("unknown environment field: {key}"));
+        }
+        merged[key] = value.clone();
+    }
+    let mut after: engine_world::SceneEnvironment = decode(&merged)?;
+    if !after.is_valid() {
+        return Err("invalid environment settings".into());
+    }
+    if settings.contains_key("sky_image") && !after.sky_image.is_empty() {
+        let root = document.project().root();
+        let source = agent_path(root, Path::new(&after.sky_image), false)?;
+        let (width, height) = image::image_dimensions(&source).map_err(|e| e.to_string())?;
+        if width != height.saturating_mul(2) {
+            return Err("sky image must be a 2:1 equirectangular panorama".into());
+        }
+        after.sky_image = super::textures::import_texture(root, &source)?;
+    }
+    document
+        .set_environment(after.clone())
+        .map_err(|e| e.to_string())?;
+    Ok(json!({"environment":after,"saved":false}))
+}
+
+#[cfg(test)]
+mod texture_flow_tests {
+    use super::*;
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercise live texture tools, failure atomicity, persistence and edit guards together"
+    )]
+    fn live_texture_tools_validate_patch_create_undo_save_and_inspect() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = engine_project::Project::create(
+            temp.path().join("game"),
+            "Texture tools",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let root = project.root().to_path_buf();
+        std::fs::create_dir_all(root.join("assets")).unwrap();
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([128u8, 128, 255, 255]))
+            .save(root.join("assets/normal.png"))
+            .unwrap();
+        image::codecs::hdr::HdrEncoder::new(
+            std::fs::File::create(root.join("assets/sky.hdr")).unwrap(),
+        )
+        .encode(&[image::Rgb([4.0, 1.0, 0.0]); 2], 2, 1)
+        .unwrap();
+        std::fs::write(root.join("assets/broken.png"), b"not an image").unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::new(project.clone(), &context).unwrap();
+        let created = app
+            .agent_tool(
+                "object_create",
+                &json!({"name":"Mesh","kind":"blockout"}),
+                &context,
+            )
+            .unwrap();
+        let id = created["entity_id"].clone();
+        app.agent_tool("texture_update",&json!({"entity_id":id,"maps":{"Normal":"assets/normal.png","Emissive":"assets/sky.hdr"}}),&context).unwrap();
+        app.agent_tool(
+            "texture_update",
+            &json!({"entity_id":id,"maps":{"Normal":null},"uv_scale":[2,3]}),
+            &context,
+        )
+        .unwrap();
+        let before = app
+            .agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
+            .unwrap();
+        assert!(before["textures"]["maps"].get("Normal").is_none());
+        assert_eq!(before["textures"]["maps"]["Emissive"], "assets/sky.hdr");
+        assert_eq!(before["textures"]["uv_scale"], json!([2.0, 3.0]));
+        // Mixed valid/invalid requests must leave all scene properties unchanged.
+        for bad in [
+            json!({"maps":{"BaseColor":"assets/normal.png","Normal":"assets/broken.png"}}),
+            json!({"maps":{"BaseColor":"../outside.png"}}),
+            json!({"maps":{"Unknown":"assets/normal.png"}}),
+            json!({"emissive_strength":-1}),
+            json!({"uv_scale":[1,2,3]}),
+            json!({"unexpected":true}),
+        ] {
+            let mut args = bad;
+            args["entity_id"] = id.clone();
+            assert!(app.agent_tool("texture_update", &args, &context).is_err());
+            assert_eq!(
+                app.agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
+                    .unwrap(),
+                before
+            );
+        }
+        let child = app
+            .agent_tool(
+                "texture_create_child",
+                &json!({"entity_id":id,"name":"Coating","maps":{"Normal":"assets/normal.png"}}),
+                &context,
+            )
+            .unwrap();
+        let child_id: EntityId = decode(&child["entity_id"]).unwrap();
+        app.agent_tool("editor_undo", &json!({}), &context).unwrap();
+        assert!(!app.document.world().contains(child_id));
+        app.agent_tool("editor_redo", &json!({}), &context).unwrap();
+        let inspected = app
+            .agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
+            .unwrap();
+        assert_eq!(
+            inspected["texture_children"][0]["entity_id"],
+            child["entity_id"]
+        );
+        assert_eq!(
+            inspected["resolved_textures"]["maps"]["Normal"],
+            "assets/normal.png"
+        );
+        app.agent_tool(
+            "texture_update",
+            &json!({"entity_id":child_id,"clear_maps":true}),
+            &context,
+        )
+        .unwrap();
+        assert!(
+            app.document
+                .world()
+                .surface_textures(child_id)
+                .unwrap()
+                .unwrap()
+                .maps
+                .is_empty()
+        );
+        let status = app
+            .agent_tool("editor_status", &json!({}), &context)
+            .unwrap();
+        assert!(
+            status["objects"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|o| o["entity_id"] == id && o["textures"].is_object())
+        );
+        app.agent_tool(
+            "environment_update",
+            &json!({"settings":{"enabled":true,"sky_image":"assets/sky.hdr","exposure":1}}),
+            &context,
+        )
+        .unwrap();
+        assert_eq!(
+            app.document.world().environment().sky_image,
+            "assets/sky.hdr"
+        );
+        let environment = app.document.world().environment().clone();
+        assert!(
+            app.agent_tool(
+                "environment_update",
+                &json!({"settings":{"sky_image":"assets/broken.png","exposure":2}}),
+                &context
+            )
+            .is_err()
+        );
+        assert_eq!(app.document.world().environment(), &environment);
+        assert!(
+            app.agent_tool(
+                "environment_update",
+                &json!({"settings":{"sky_image":"assets/normal.png"}}),
+                &context
+            )
+            .is_err()
+        );
+        assert_eq!(app.document.world().environment(), &environment);
+        app.agent_tool("editor_undo", &json!({}), &context).unwrap();
+        assert_eq!(
+            app.document.world().environment(),
+            &engine_world::SceneEnvironment::default()
+        );
+        app.agent_tool("editor_redo", &json!({}), &context).unwrap();
+        app.agent_tool("scene_save", &json!({}), &context).unwrap();
+        let loaded =
+            engine_world::load_scene(&std::fs::read(app.document.scene_path()).unwrap()).unwrap();
+        assert_eq!(loaded.document.environment, environment);
+        assert!(
+            loaded
+                .document
+                .entities
+                .iter()
+                .any(|e| e.id == child_id && e.textures.is_some())
+        );
+        app.pending_runtime_changes = Some(engine_play::RuntimeChangeSet::new("test", Vec::new()));
+        assert!(
+            app.agent_tool(
+                "texture_update",
+                &json!({"entity_id":id,"clear_maps":true}),
+                &context
+            )
+            .is_err()
+        );
+        assert!(
+            app.agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
+                .is_ok()
+        );
+        app.pending_runtime_changes = None;
+        app.document = AuthoringDocument::open(project, true).unwrap();
+        for tool in [
+            "texture_update",
+            "texture_create_child",
+            "environment_update",
+        ] {
+            assert!(
+                app.agent_tool(tool, &json!({"entity_id":id,"settings":{}}), &context)
+                    .is_err()
+            );
+        }
+        assert!(
+            app.agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
+                .is_ok()
         );
     }
 }

@@ -281,6 +281,7 @@ Use `workspace_info` to confirm the project root, then `read_agent_file` with pa
     let claude_skill_file = claude_skill.join("SKILL.md");
     write_agent_default(files, &codex_skill_file, skill.as_bytes())?;
     write_agent_default(files, &claude_skill_file, skill.as_bytes())?;
+    write_texture_skills(files, storage, &codex_plugin)?;
     let mcp_file = storage.join(".mcp.json");
     write_agent_default(files, &mcp_file, &mcp)?;
     let plugin_mcp = codex_plugin.join(".mcp.json");
@@ -427,6 +428,7 @@ Use the `rustic-workspace` MCP tools first to identify the active project root, 
         &plugin.join("skills/rustic-workspace/SKILL.md"),
         skill.as_bytes(),
     )?;
+    write_texture_skills(files, storage, &plugin)?;
     let openai_yaml = "interface:\n  display_name: \"Rustic Workspace\"\n  short_description: \"Inspect and edit the active Rustic project\"\n  default_prompt: \"Use Rustic Workspace to inspect the current project and complete my request.\"\n";
     fs::create_dir_all(codex_skill.join("agents")).map_err(|source| WorkspaceError::Io {
         path: codex_skill.join("agents"),
@@ -482,12 +484,49 @@ Use the `rustic-workspace` MCP tools first to identify the active project root, 
             AtomicWriteOptions { keep_backup: false },
         )?;
     }
+    write_texture_discovery(files, home)?;
     files.write_with_options(&home.join(".claude/commands/rustic-workspace.md"), b"Rustic app-data discovery entry: use workspace_info, then read_agent_file with scope user and path .claude/commands/rustic-workspace.md; follow the stored instructions.\n", AtomicWriteOptions { keep_backup: false })?;
     update_personal_marketplace(
         &home.join(".agents/plugins/marketplace.json"),
         &plugin,
         files,
     )?;
+    Ok(())
+}
+
+fn write_texture_skills(
+    files: &AtomicFileService,
+    storage: &Path,
+    plugin: &Path,
+) -> Result<(), WorkspaceError> {
+    for directory in [
+        storage.join(".agents/skills/rustic-textures"),
+        storage.join(".claude/skills/rustic-textures"),
+        plugin.join("skills/rustic-textures"),
+    ] {
+        fs::create_dir_all(&directory).map_err(|source| WorkspaceError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+        write_agent_default(
+            files,
+            &directory.join("SKILL.md"),
+            crate::AGENT_TEXTURE_GUIDE.as_bytes(),
+        )?;
+    }
+    Ok(())
+}
+fn write_texture_discovery(files: &AtomicFileService, home: &Path) -> Result<(), WorkspaceError> {
+    for directory in [
+        home.join(".agents/skills/rustic-textures"),
+        home.join(".claude/skills/rustic-textures"),
+    ] {
+        fs::create_dir_all(&directory).map_err(|source| WorkspaceError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+        files.write_with_options(&directory.join("SKILL.md"), b"---\nname: rustic-textures\ndescription: Author or troubleshoot Rustic HDR/PBR maps, Texture children, UV controls and HDR sky panoramas.\n---\n\nCall workspace_info, read project instructions, then call texture_guide for the current full Rustic texture skill. Inspect maps with texture_inspect and use texture_update or texture_create_child; use environment_update for an HDR sky. Read/edit the stored skill with read_agent_file/write_agent_file, scope user, path .agents/skills/rustic-textures/SKILL.md (Codex) or .claude/skills/rustic-textures/SKILL.md (Claude).\n", AtomicWriteOptions { keep_backup: false })?;
+    }
     Ok(())
 }
 
@@ -848,6 +887,29 @@ mod tests {
         let stub =
             fs::read_to_string(home.join(".claude/skills/rustic-workspace/SKILL.md")).unwrap();
         assert!(stub.contains("Rustic app-data discovery entry"));
+        for relative in [
+            ".agents/skills/rustic-textures/SKILL.md",
+            ".claude/skills/rustic-textures/SKILL.md",
+            ".agents/plugins/plugins/rustic-workspace/skills/rustic-textures/SKILL.md",
+        ] {
+            let path = storage.join(relative);
+            assert_eq!(
+                fs::read_to_string(&path).unwrap(),
+                crate::AGENT_TEXTURE_GUIDE
+            );
+        }
+        assert!(
+            fs::read_to_string(home.join(".agents/skills/rustic-textures/SKILL.md"))
+                .unwrap()
+                .contains("texture_guide")
+        );
+        let texture_skill = storage.join(".claude/skills/rustic-textures/SKILL.md");
+        write_agent_information(&texture_skill, "custom texture skill").unwrap();
+        install_user_agent_integrations_in(&home, &storage, backend, &files).unwrap();
+        assert_eq!(
+            fs::read_to_string(texture_skill).unwrap(),
+            "custom texture skill"
+        );
         let marketplace: serde_json::Value = serde_json::from_str(
             &fs::read_to_string(home.join(".agents/plugins/marketplace.json")).unwrap(),
         )

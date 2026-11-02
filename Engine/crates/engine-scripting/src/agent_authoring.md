@@ -34,6 +34,10 @@ Call `editor_status` for live object IDs and properties, including unsaved chang
 
 Use `scene_list` to discover active/start scenes and nested paths. Scene-management tool paths are relative to the configured scenes directory, e.g. `levels/forest.scene`; file/model/script paths are relative to the project root. `scene_create` creates an empty scene without overwriting or switching. `scene_switch` saves current edits before opening an existing scene. `scene_set_start` controls the launch scene independently of the editor's active scene. Stop play and resolve any pending runtime-change review before switching/editing. Re-read live IDs after switching; do not reuse assumptions from the previous scene. Save each scene, and test both its individual flow and the game's launch/transition flow. Use the engine scene-lifecycle documentation for runtime load/switch/unload and additive scene behavior; do not invent APIs from another engine.
 
+## Author HDR/PBR surfaces
+
+Call `texture_guide` and use the `rustic-textures` skill before assigning surface maps. `texture_inspect` reads direct and resolved maps; `texture_update` patches named slots and UV/intensity controls; `texture_create_child` attaches a Texture child as one undoable edit. Existing project-relative images are decoded before assignment. All 17 slots are optional. Do not invent a runtime material scripting API or treat a sky panorama as a complete PBR material. Inspect `viewport_capture`, save with `scene_save`, and verify the material in Play.
+
 ## Attach scripts at the correct scope
 
 Write the gameplay source to the project, then call `script_attach` with its relative `path` and `scope`. The tool registers the source's stable script asset ID; never hand-invent registry IDs. Scope belongs to an attachment, so one source may be attached in several places. Adding a new scope does not remove another attachment: detach the old one explicitly to move behavior and avoid duplicate execution.

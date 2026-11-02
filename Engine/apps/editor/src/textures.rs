@@ -13,7 +13,7 @@ pub(super) fn is_texture(path: &Path) -> bool {
 }
 
 /// Import external images into the project so saved scenes and builds remain portable.
-fn import_texture(root: &Path, source: &Path) -> Result<String, String> {
+pub(super) fn import_texture(root: &Path, source: &Path) -> Result<String, String> {
     let source = if source.is_absolute() {
         source.to_path_buf()
     } else {

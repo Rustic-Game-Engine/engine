@@ -58,3 +58,7 @@ Color maps (albedo, emissive, sheen color, specular color) in PNG/JPEG/TGA decod
 - If a map is missing, inspect the Inspector path and texture/preview diagnostic. Restore the file in the project or browse a replacement. Decode errors are reported before a new map is attached; renderer load failures appear in the preview diagnostic.
 - If colors appear tinted, set the object's color to white. If normals look inverted, export an OpenGL/+Y normal map. For a featureless image, check the mesh's UVs and use a subdivided mesh for height maps.
 - This workflow authors scene texture components. It does not add a scripting `Material.set_texture()` API, a material graph, or automatic extraction of embedded imported-model texture images.
+
+## Agent tools
+
+Agents can use `texture_inspect`, `texture_update` and `texture_create_child` for maps, or `environment_update` for an HDR sky. Invoke `rustic-textures` or call `texture_guide` for current instructions. See [Author HDR/PBR textures](AGENT_TEXTURES.md) for setup and complete examples.
