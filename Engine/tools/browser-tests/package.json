@@ -2,6 +2,6 @@
   "name": "rustic-browser-export-tests",
   "private": true,
   "type": "module",
-  "scripts": { "test": "node test.mjs" },
+  "scripts": { "test": "npm run test:player && node test.mjs", "test:player": "node --test player.test.mjs" },
   "devDependencies": { "playwright": "1.64.0" }
 }

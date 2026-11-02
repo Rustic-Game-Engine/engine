@@ -2,7 +2,6 @@
 "use strict";
 const canvas = document.getElementById("game");
 const status = document.getElementById("status");
-const start = document.getElementById("start");
 fetch("game-info.json").then(response => response.json()).then(info => { document.title = info.name; }).catch(() => {});
 const keys = new Set();
 const pointers = [];
@@ -12,6 +11,15 @@ let previous = 0;
 let context;
 let audio;
 let nextAudioTime = 0;
+function enableAudio() {
+  try {
+    audio ??= new AudioContext();
+    if (audio.state === "suspended") audio.resume().catch(() => {});
+  } catch { /* Graphics and gameplay remain available without an audio device. */ }
+}
+// Browsers require a player gesture for sound, but gameplay starts immediately.
+canvas.addEventListener("pointerdown", enableAudio);
+canvas.addEventListener("keydown", enableAudio);
 function playAudio(bytes) {
   if (!audio || audio.state !== "running" || bytes.length < 8) return;
   if (nextAudioTime > audio.currentTime + 0.3) return;
@@ -35,6 +43,7 @@ function exists(path) {
 function fail(error) {
   running = false;
   status.textContent = `Game could not run: ${error?.message || String(error)}`;
+  status.hidden = false;
   console.error(error);
 }
 function clearInput() { keys.clear(); heldPointers.clear(); pointers.length = 0; reset = true; }
@@ -123,20 +132,20 @@ var Module = {
     // main() loads and verifies the snapshot after runtime initialization callbacks.
     setTimeout(() => {
       if (exists("/error.txt")) { fail(new Error(Module.FS.readFile("/error.txt", { encoding: "utf8" }))); return; }
-      status.textContent = "";
+      if (status.textContent) return; // An earlier initialization failure remains visible.
       running = true;
       canvas.focus();
       requestAnimationFrame(frame);
     }, 0);
   },
 };
-start.addEventListener("click", () => {
-  start.hidden = true;
-  status.textContent = "Loading game…";
+function startGame() {
   context = canvas.getContext("2d");
-  try { audio = new AudioContext(); audio.resume().catch(() => {}); } catch { /* Graphics and gameplay remain available without an audio device. */ }
+  if (!context) { fail(new Error("Canvas rendering is unavailable")); return; }
+  canvas.focus();
   const script = document.createElement("script");
   script.src = "rustic-browser.js";
   script.onerror = () => fail(new Error("Browser runtime is missing"));
   document.body.appendChild(script);
-}, { once: true });
+}
+startGame();

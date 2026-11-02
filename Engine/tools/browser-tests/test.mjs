@@ -36,9 +36,11 @@ try {
   page.on("console", message => logs.push(message.text()));
   page.on("pageerror", error => logs.push(`PAGE ERROR: ${error.message}`));
   await page.goto(origin);
-  await page.getByRole("button", { name: "Play game" }).click();
   await page.waitForFunction(() => document.getElementById("game").dataset.frame || document.getElementById("status").textContent.startsWith("Game could"), null, { timeout: 60000 });
   assert.equal(await page.locator("#status").textContent(), "", logs.join("\n"));
+  assert.equal(await page.locator("#status").isVisible(), false);
+  assert.equal(await page.getByRole("button").count(), 0, "Export added a player UI");
+  assert.match(await readFile(join(site, "readme.md"), "utf8"), /python -m http\.server 8080/);
   assert.ok(logs.some(line => line.includes("lua-started")), "Lua startup did not execute");
   assert.ok(logs.some(line => line.includes("javascript-started")), "JavaScript startup did not execute");
   const center = await page.locator("#game").evaluate(canvas => [...canvas.getContext("2d").getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data]);
@@ -49,6 +51,7 @@ try {
   ]);
   assert.ok(logs.some(line => line.includes("touch-started")), logs.join("\n"));
   assert.ok(logs.some(line => line.includes("object-clicked")), logs.join("\n"));
+  assert.equal(await page.evaluate(() => audio?.state), "running", "Game interaction did not enable audio");
   const before = await page.locator("#game").evaluate(canvas => canvas.toDataURL());
   await Promise.all([
     page.waitForEvent("console", { predicate: message => message.text().includes("key-moved"), timeout: 15000 }),
@@ -66,9 +69,9 @@ try {
   await writeFile(source, "corrupted game script");
   const corrupt = await context.newPage();
   await corrupt.goto(origin);
-  await corrupt.getByRole("button", { name: "Play game" }).click();
   await corrupt.waitForFunction(() => document.getElementById("status").textContent.startsWith("Game could"), null, { timeout: 60000 });
   assert.match(await corrupt.locator("#status").textContent(), /integrity/i);
+  assert.equal(await corrupt.locator("#status").isVisible(), true);
   await writeFile(source, original);
   console.log("PASS: direct WASM game rendering, Lua/JS, keyboard, touch/object clicks, and snapshot integrity");
 } finally {

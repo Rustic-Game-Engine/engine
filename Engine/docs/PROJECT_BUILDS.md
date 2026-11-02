@@ -23,13 +23,13 @@ The game opens its own window and isolated simulation, forwards keyboard, primar
 
 Select **Website (playable game)** and click **Build Project**. The editor exports the current game automatically: its scene snapshot, registered scripts, assets, HTML/CSS game UI, browser player and compiled WebAssembly runtime. **Do not create a `web/` folder or prepare a separate website.** No game server is required.
 
-The output's `website/` directory contains `index.html`, `player.js`, `rustic-browser.js`, `rustic-browser.wasm`, the game file manifest, and `data/`. Publish the complete directory to any static web host, including a subdirectory. For a local preview:
+The output's `website/` directory contains `index.html`, `player.js`, `rustic-browser.js`, `rustic-browser.wasm`, the game file manifest, `data/`, and a `readme.md` with local preview and publishing instructions. Publish the complete directory to any static web host, including a subdirectory. For a local preview:
 
 ```sh
 python -m http.server 8080 --directory <output>/website
 ```
 
-Open `http://localhost:8080` and choose **Play game**. The browser runs the shared Rustic game simulation, physics, scene loading, renderer, Lua/JavaScript behaviors and audio locally. Keyboard input goes to the focused game canvas; mouse and touch input are mapped to the letterboxed game image. The Play button also enables browser audio. Opening `index.html` directly through `file://` does not work because browsers restrict file fetches.
+Open `http://localhost:8080`. The game starts automatically with no engine-added menu, Play button, or loading overlay; only startup failures display an error. The browser runs the shared Rustic game simulation, physics, scene loading, renderer, Lua/JavaScript behaviors and audio locally. Keyboard input goes to the focused game canvas; mouse and touch input are mapped to the letterboxed game image. Click, tap, or press a key in the game to enable audio; browsers require a player interaction before sound can start. Opening `index.html` directly through `file://` does not work because browsers restrict file fetches.
 
 Use a recent browser with WebAssembly exception handling and WebGL 2. The generated player reports missing/corrupted files, unsupported graphics and runtime initialization failures. Game files are verified before scripts execute. Browser file writes use the runtime's in-memory filesystem and disappear on reload. Native microphone capture and native audio-device selection are unavailable; ordinary game audio uses Web Audio.
 
