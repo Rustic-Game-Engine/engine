@@ -814,12 +814,12 @@ fn export_custom_installer(root: &Path, output: &Path, settings: &Settings) -> R
         directory.join("server.py"),
         include_str!("../../../scripts/install/server.py"),
     )
-        .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?;
     fs::write(
         directory.join("index.html"),
         include_str!("../../../scripts/install/index.html"),
     )
-        .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?;
     let config = serde_json::json!({
         "title": settings.name.trim(), "payload": "../../game",
         "location": format!("~/{}", settings.name.trim()), "allowLocationChange": true,
@@ -835,7 +835,7 @@ fn export_custom_installer(root: &Path, output: &Path, settings: &Settings) -> R
         directory.join("installer.json"),
         serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?,
     )
-        .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?;
     let hooks = root.join("scripts/install/hooks");
     if hooks.is_dir() {
         copy_tree(&hooks, &directory.join("hooks"), &[])?;
@@ -945,6 +945,38 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn custom_installer_export_preserves_design_and_hook_files() {
+        let project = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        export_custom_installer(project.path(), output.path(), &Settings::default()).unwrap();
+        let bundle = output.path().join("scripts/install");
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read(bundle.join("installer.json")).unwrap()).unwrap();
+        assert_eq!(config["payload"], "../../game");
+        assert!(bundle.join("server.py").is_file());
+        assert!(bundle.join("index.html").is_file());
+
+        let custom = project.path().join("scripts/install");
+        fs::create_dir_all(custom.join("hooks/nested")).unwrap();
+        fs::write(custom.join("hooks/nested/setup.py"), "print('setup')").unwrap();
+        fs::write(custom.join("installer.json"), r#"{"title":"Custom"}"#).unwrap();
+        fs::write(custom.join("index.html"), "<h1>Custom</h1>").unwrap();
+        export_custom_installer(project.path(), output.path(), &Settings::default()).unwrap();
+        assert_eq!(
+            fs::read(custom.join("installer.json")).unwrap(),
+            fs::read(bundle.join("installer.json")).unwrap()
+        );
+        assert_eq!(
+            fs::read(custom.join("index.html")).unwrap(),
+            fs::read(bundle.join("index.html")).unwrap()
+        );
+        assert_eq!(
+            fs::read(custom.join("hooks/nested/setup.py")).unwrap(),
+            fs::read(bundle.join("hooks/nested/setup.py")).unwrap()
+        );
+    }
+
     #[test]
     fn installer_includes_designed_pages_and_per_user_installation() {
         let settings = Settings {
