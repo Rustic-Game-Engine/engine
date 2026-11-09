@@ -2,7 +2,8 @@
 
 Web assets are `.html`, `.htm`, or `.css` files under `ui/`. The directory rule is
 enforced: they are not accepted as gameplay assets elsewhere. Rustic structurally
-validates the document and executes inline `<script>` content in the same bundled,
+validates HTML documents and executes inline `<script>` content or standalone
+`ui/*.js` / `ui/*.mjs` behaviors in the same bundled,
 sandboxed JavaScript behavior runtime used by `.js` scripts. It does **not** embed a
 browser renderer and does not replace the editor shell.
 
@@ -197,3 +198,61 @@ from an HTML file under `ui/`. If Save reports an external change, keep the docu
 open to retain your edits, or discard and reopen to load the disk version; Save
 will not overwrite that external version. Files must be UTF-8 and at most 1 MiB;
 paths and symlinks that leave `ui/` are rejected. Open failures appear in Terminal.
+
+
+## JavaScript in `ui/`
+
+Files ending in `.js` or `.mjs` under the project's top-level `ui/` folder,
+including subfolders, automatically use the Web/UI category. For example,
+`ui/hud.js` is UI code; `scripts/player.js` is gameplay JavaScript. Existing
+registrations adopt this category on load while preserving their asset IDs and
+attachments. Moving a registered script into or out of `ui/` updates its category.
+
+The folder selects the category, not when the script runs. In the Project Files
+panel, right-click `ui/hud.js`, choose **Set As**, then **Scene Startup Script**
+for a scene HUD. Save the scene and press Play. Use **Object Component Script**
+for object-owned UI behavior or **Global Startup Script** for session services.
+A helper included with `<script src="hud.js"></script>` in an attached HTML
+entry runs within that entry; attach it separately only if you want another instance.
+
+UI scripts keep the same sandboxed JavaScript APIs as gameplay scripts. They can
+read scene state exposed by gameplay objects and receive or emit `Events` signals.
+Each behavior has its own JavaScript globals; another script's private variables
+are not directly accessible. Publish the values needed by the UI through signals
+or engine-owned object state.
+
+For example, create `scripts/player.js` and attach it to an object named `Player`:
+
+```javascript
+globalThis.behavior = {
+  FixedUpdate() {
+    rustic.set_translation(3, 0, 0);
+    Events.emit("ScoreChanged", [7]);
+  }
+};
+```
+
+Create `ui/hud.js` and attach it as a scene startup script:
+
+```javascript
+globalThis.behavior = {
+  Start() {
+    Events.on("ScoreChanged", score => {
+      const position = rustic.get_object_attribute("Player", "Position");
+      rustic.log("info", `HUD score: ${score}; player x: ${position[0]}`);
+    });
+  }
+};
+```
+
+Play logs show `HUD score: 7; player x: 3`. Signals deliver during frame updates;
+a listener must be connected before emission, so publish current state after
+subscribing or read engine-owned state to initialize a HUD. If nothing runs,
+check the attachment, enabled state, active scene and script diagnostics. The
+folder alone does not start a script. Use the exact top-level `ui/` name;
+`scripts/ui/` remains gameplay code.
+
+UI JavaScript still uses the bundled behavior runtime: `document`, DOM updates,
+browser globals, Node APIs and ES module imports are unavailable. `.mjs` uses
+the same behavior format as `.js`. Use the supported engine APIs to consume
+state; this classification does not add a rendered HTML HUD.
