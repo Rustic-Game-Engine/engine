@@ -5,6 +5,8 @@ import json
 from pathlib import Path
 import secrets
 import shutil
+import subprocess
+import time
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -66,8 +68,69 @@ class Installer:
             self.state['status'] = 'installing'
             threading.Thread(target=self.run, daemon=True).start()
 
+    def run_task(self, task, completed, total):
+        command = task.get('command')
+        if not isinstance(command, list) or not command or any(not isinstance(v, str) for v in command):
+            raise ValueError('Task command must be a nonempty argument array')
+        timeout = float(task.get('timeoutSeconds', 300))
+        if not 0 < timeout <= 86400:
+            raise ValueError('Task timeout must be between 0 and 86400 seconds')
+        with self.lock:
+            self.state['currentTask'] = task['id']
+            context = dict(location=self.state['location'], options=self.state['options'],
+                           bundle=str(self.bundle), payload=str(self.payload), task=task['id'])
+        def read_output(pipe):
+            for raw in iter(lambda: pipe.readline(8192), b''):
+                line = raw.decode('utf-8', errors='replace').rstrip()
+                with self.lock:
+                    try:
+                        event = json.loads(line)
+                        if not isinstance(event, dict):
+                            raise ValueError('Expected event object')
+                        if isinstance(event.get('percentage'), (int, float)):
+                            fraction = max(0, min(100, event['percentage'])) / 100
+                            progress = round((completed + fraction) * 100 / total, 2)
+                            self.state['percentage'] = max(self.state['percentage'], progress)
+                        message = str(event.get('log', line))
+                    except (ValueError, TypeError):
+                        message = line
+                    self.state['logs'].append(message[:8192])
+                    self.state['logs'] = self.state['logs'][-1000:]
+        with subprocess.Popen(command, cwd=self.bundle, stdin=subprocess.PIPE,
+                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT) as process:
+            reader = threading.Thread(target=read_output, args=(process.stdout,), daemon=True)
+            reader.start()
+            try:
+                try:
+                    process.stdin.write((json.dumps(context) + '\n').encode())
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass  # A task may intentionally ignore its context input.
+                deadline = time.monotonic() + timeout
+                while process.poll() is None:
+                    if self.cancel.wait(.05):
+                        raise InterruptedError('Installation cancelled')
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError(f"Task timed out: {task['id']}")
+                reader.join(timeout=1)
+                if process.returncode:
+                    raise ValueError(f"Task {task['id']} exited with code {process.returncode}")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def run(self):
         try:
+            tasks = self.config.get('tasks', [])
+            if not isinstance(tasks, list):
+                raise ValueError('Tasks must be an array')
+            for task in tasks:
+                if not isinstance(task, dict) or not isinstance(task.get('id'), str) or task.get('phase', 'afterCopy') not in ('beforeCopy', 'afterCopy'):
+                    raise ValueError('Tasks require an id and a beforeCopy/afterCopy phase')
+                if 'option' in task and task['option'] not in self.state['options']:
+                    raise ValueError('Task references an unknown option')
+            tasks = [t for t in tasks if 'option' not in t or self.state['options'][t['option']]]
             destination = Path(self.state['location'])
             entries = sorted(self.payload.rglob('*'))
             if any(p.is_symlink() for p in entries):
@@ -81,8 +144,18 @@ class Installer:
                         raise ValueError('Option pathPrefix must be relative to payload')
                     if not self.state['options'][option['id']]:
                         files = [p for p in files if not p.relative_to(self.payload).is_relative_to(prefix_path)]
+            total = max(1, len(files) + len(tasks))
+            completed = 0
             destination.mkdir(parents=True, exist_ok=True)
-            for index, source in enumerate(files):
+            for task in tasks:
+                if task.get('phase', 'afterCopy') == 'beforeCopy':
+                    if self.cancel.is_set():
+                        raise InterruptedError('Installation cancelled')
+                    self.run_task(task, completed, total)
+                    completed += 1
+                    with self.lock:
+                        self.state['percentage'] = round(completed * 100 / total, 2)
+            for source in files:
                 if self.cancel.is_set():
                     with self.lock:
                         self.state.update(status='cancelled', currentTask=None)
@@ -101,11 +174,23 @@ class Installer:
                 with source.open('rb') as src, target.open('xb') as dst:
                     shutil.copyfileobj(src, dst)
                 with self.lock:
-                    self.state['percentage'] = round((index + 1) * 100 / max(1, len(files)), 2)
+                    completed += 1
+                    self.state['percentage'] = round(completed * 100 / total, 2)
                     self.state['logs'].append(f'Installed {relative}')
                     self.state['logs'] = self.state['logs'][-1000:]
+            for task in tasks:
+                if task.get('phase', 'afterCopy') == 'afterCopy':
+                    if self.cancel.is_set():
+                        raise InterruptedError('Installation cancelled')
+                    self.run_task(task, completed, total)
+                    completed += 1
+                    with self.lock:
+                        self.state['percentage'] = round(completed * 100 / total, 2)
             with self.lock:
                 self.state.update(status='completed', percentage=100, currentTask=None)
+        except InterruptedError:
+            with self.lock:
+                self.state.update(status='cancelled', currentTask=None)
         except Exception as error:
             with self.lock:
                 self.state.update(status='failed', error=str(error), currentTask=None)

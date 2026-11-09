@@ -836,6 +836,10 @@ fn export_custom_installer(root: &Path, output: &Path, settings: &Settings) -> R
         serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?,
     )
         .map_err(|e| e.to_string())?;
+    let hooks = root.join("scripts/install/hooks");
+    if hooks.is_dir() {
+        copy_tree(&hooks, &directory.join("hooks"), &[])?;
+    }
     for name in ["installer.json", "index.html"] {
         let custom = root.join("scripts/install").join(name);
         if custom.is_file() {
