@@ -1,9 +1,14 @@
+#[path = "cpu_geometry.rs"]
+mod cpu_geometry;
 use super::{
     CollisionResponse, EffectAppearance, EffectComponent, EffectEvent, EffectEventKind,
-    EffectFrame, EffectGeometry, EffectInput, EffectKind, ForceField, ForceType, ParticleEmitter,
-    ParticleInstance, PlaybackCommand, PlaybackState, PostProcessSettings, QualityLevel,
-    RenderWaterDisturbance, RippleWaterSurface, SimulationSpace, SpawnShape, VolumeShape,
-    WaterDisturbance, WeatherType, water_surface_mesh,
+    EffectFrame, EffectGeometry, EffectInput, EffectKind, ForceField, ForceType,
+    GpuParticleCollider, GpuParticleEmitterFrame, GpuParticleSpawn, GpuParticleState,
+    ParticleBackend, ParticleBackendStatus, ParticleCollisionQuality, ParticleEmitter,
+    ParticleInstance, ParticleOffscreenBehavior, ParticleSimulationMode, ParticleTrigger,
+    PlaybackCommand, PlaybackState, PostProcessSettings, QualityLevel, RenderWaterDisturbance,
+    RippleWaterSurface, SimulationSpace, SpawnShape, VolumeShape, WaterDisturbance, WeatherType,
+    water_surface_mesh,
 };
 use crate::{EntityId, PrimitiveMesh};
 use glam::{Mat4, Vec3, Vec3Swizzles};
@@ -12,6 +17,12 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::f32::consts::TAU;
 
 const MAX_EVENTS: usize = 8192;
+const MAX_PENDING_GPU_STEPS: usize = 120;
+static NEXT_GPU_EPOCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+static NEXT_GPU_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+fn gpu_epoch() -> u64 {
+    NEXT_GPU_EPOCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
 
 /// Builds a camera-facing ribbon or a parallel-transport tube without creating
 /// one draw call for every segment. Input points and output positions use the
@@ -108,7 +119,16 @@ pub fn smooth_path(points: &[Vec3], subdivisions: u16) -> Vec<Vec3> {
         return points.to_vec();
     }
     let subdivisions = subdivisions.clamp(1, 32) as usize;
-    let count = points.len().min(2048);
+    let sampled;
+    let points = if points.len() > 2048 {
+        sampled = (0..2048)
+            .map(|i| points[i * (points.len() - 1) / 2047])
+            .collect::<Vec<_>>();
+        &sampled
+    } else {
+        points
+    };
+    let count = points.len();
     let mut result = Vec::with_capacity((count - 1) * subdivisions + 1);
     for segment in 0..count - 1 {
         let a = points[segment.saturating_sub(1)];
@@ -294,15 +314,34 @@ impl Random {
 
 #[derive(Clone, Debug)]
 struct Particle {
+    color_random: f32,
     position: Vec3,
     velocity: Vec3,
     age: f32,
     lifetime: f32,
     size: f32,
     rotation: f32,
+    rotation3: Vec3,
+    angular_velocity3: Vec3,
+    scale: Vec3,
+    mesh: Option<crate::AssetId>,
+    material: Option<crate::AssetId>,
+    gpu_slot: u32,
     stuck: bool,
 }
 
+#[derive(Clone, Debug)]
+struct WeatherDeposit {
+    position: Vec3,
+    normal: Vec3,
+    age: f32,
+    size: f32,
+}
+
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent lifecycle and backend state flags"
+)]
 #[derive(Clone, Debug)]
 struct Instance {
     state: PlaybackState,
@@ -311,6 +350,7 @@ struct Instance {
     rng: Random,
     seed: u64,
     particles: Vec<Particle>,
+    deposits: Vec<WeatherDeposit>,
     points: VecDeque<(Vec3, f32)>,
     previous: Option<Vec3>,
     began: bool,
@@ -318,6 +358,15 @@ struct Instance {
     delay: f32,
     kind: std::mem::Discriminant<EffectKind>,
     prewarmed: bool,
+    backend: ParticleBackend,
+    gpu_epoch: u64,
+    gpu_sequence: u64,
+    gpu_pending: VecDeque<GpuParticleEmitterFrame>,
+    gpu_free_slots: Vec<u32>,
+    gpu_next_slot: u32,
+    gpu_capacity: u32,
+    gpu_overflow: bool,
+    gpu_last_frame: Option<GpuParticleEmitterFrame>,
 }
 
 impl Instance {
@@ -333,6 +382,7 @@ impl Instance {
             rng: Random::new(effect.common.random_seed),
             seed: effect.common.random_seed,
             particles: Vec::new(),
+            deposits: Vec::new(),
             points: VecDeque::new(),
             previous: None,
             began: false,
@@ -340,6 +390,15 @@ impl Instance {
             delay: effect.common.delay,
             kind: std::mem::discriminant(&effect.kind),
             prewarmed: false,
+            backend: ParticleBackend::Cpu,
+            gpu_epoch: gpu_epoch(),
+            gpu_sequence: 0,
+            gpu_pending: VecDeque::new(),
+            gpu_free_slots: Vec::new(),
+            gpu_next_slot: 0,
+            gpu_capacity: 0,
+            gpu_overflow: false,
+            gpu_last_frame: None,
         }
     }
     fn reset(&mut self) {
@@ -347,23 +406,67 @@ impl Instance {
         self.emission = 0.0;
         self.rng = Random::new(self.seed);
         self.particles.clear();
+        self.deposits.clear();
         self.points.clear();
         self.previous = None;
         self.began = false;
         self.completed_event = false;
         self.prewarmed = false;
+        self.gpu_epoch = gpu_epoch();
+        self.gpu_sequence = 0;
+        self.gpu_pending.clear();
+        self.gpu_free_slots.clear();
+        self.gpu_next_slot = 0;
+        self.gpu_overflow = false;
+        self.gpu_last_frame = None;
     }
+}
+
+/// Retain at most 64 empty buffers and 100,000 particle slots per scene.
+fn recycle_particle_buffer(pool: &mut Vec<Vec<Particle>>, mut particles: Vec<Particle>) {
+    let capacity = particles.capacity();
+    if capacity == 0
+        || pool.len() >= 64
+        || pool
+            .iter()
+            .map(Vec::capacity)
+            .sum::<usize>()
+            .saturating_add(capacity)
+            > 100_000
+    {
+        return;
+    }
+    particles.clear();
+    pool.push(particles);
 }
 
 /// Retained CPU simulation state for one scene. Cosmetic collisions never modify
 /// authoritative gameplay physics. Destroying an entity removes all its state on
 /// the next update; `clear` releases it immediately at scene unload.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct EffectRuntime {
     instances: BTreeMap<EntityId, Instance>,
+    particle_pool: Vec<Vec<Particle>>,
     frame: EffectFrame,
     time: f32,
     camera_target: Option<EntityId>,
+    visibility_layers: u32,
+    gpu_context: Option<u64>,
+    parent_transforms: BTreeMap<EntityId, Mat4>,
+}
+impl Default for EffectRuntime {
+    fn default() -> Self {
+        Self {
+            instances: BTreeMap::new(),
+            particle_pool: Vec::new(),
+            frame: EffectFrame::default(),
+            time: 0.0,
+            camera_target: None,
+            visibility_layers: u32::MAX,
+            gpu_context: None,
+            parent_transforms: BTreeMap::new(),
+        }
+    }
 }
 
 impl EffectRuntime {
@@ -379,25 +482,75 @@ impl EffectRuntime {
     pub fn frame(&self) -> &EffectFrame {
         &self.frame
     }
+    /// Supplies the current parent reference frames used by local trail history.
+    pub fn set_parent_transforms(&mut self, transforms: &BTreeMap<EntityId, Mat4>) {
+        self.parent_transforms.clone_from(transforms);
+    }
     /// Selects camera-specific impulses and overlays. `None` previews all effects.
     pub fn set_camera_target(&mut self, target: Option<EntityId>) {
         self.camera_target = target;
     }
+    /// Changes render visibility only; cosmetic forces and emission keep running.
+    pub fn set_visibility_layers(&mut self, layers: u32) {
+        self.visibility_layers = layers;
+    }
+    /// Capability selection restarts GPU-owned instances when the renderer changes.
+    pub fn set_gpu_particle_context(&mut self, context: Option<u64>) {
+        if self.gpu_context != context {
+            for instance in self.instances.values_mut() {
+                if instance.backend == ParticleBackend::Gpu {
+                    instance.reset();
+                    instance.backend = ParticleBackend::Cpu;
+                }
+            }
+        }
+        self.gpu_context = context;
+    }
+    pub fn set_gpu_particle_support(&mut self, supported: bool) {
+        self.set_gpu_particle_context(supported.then_some(1));
+    }
+    /// Releases queued fixed steps only after the renderer confirms dispatch.
+    pub fn acknowledge_gpu_particles(&mut self, acknowledgements: &[(EntityId, u64)]) {
+        for (entity, sequence) in acknowledgements {
+            if let Some(instance) = self.instances.get_mut(entity) {
+                while instance
+                    .gpu_pending
+                    .front()
+                    .is_some_and(|command| command.sequence <= *sequence)
+                {
+                    instance.gpu_pending.pop_front();
+                }
+            }
+        }
+    }
     pub fn remove(&mut self, entity: EntityId) {
-        let completed = self
-            .instances
-            .remove(&entity)
-            .is_some_and(|instance| instance.state == PlaybackState::Completed);
+        let removed = self.instances.remove(&entity);
+        let contributed = removed.as_ref().is_some_and(|instance| {
+            matches!(
+                instance.state,
+                PlaybackState::Playing | PlaybackState::Paused
+            )
+        });
+        if let Some(instance) = removed {
+            recycle_particle_buffer(&mut self.particle_pool, instance.particles);
+        }
         self.frame.geometry.retain(|v| v.entity != entity);
         self.frame.particles.retain(|v| v.entity != entity);
+        self.frame.gpu_emitters.retain(|v| v.entity != entity);
+        self.frame.particle_backends.retain(|v| v.entity != entity);
         self.frame.events.retain(|v| v.entity != entity);
         self.frame.fog.retain(|v| v.entity != entity);
         self.frame.probes.retain(|v| v.entity != entity);
         self.frame.decals.retain(|v| v.entity != entity);
         self.frame.water.retain(|v| v.entity != entity);
-        // Completed sources contributed no aggregate modifiers during the latest
-        // extraction. Preserve adjustments still owned by other active effects.
-        if completed {
+        self.frame.distortions.retain(|v| v.entity != entity);
+        self.frame.overlays.retain(|v| v.entity != entity);
+        self.frame.effect_layers.remove(&entity);
+        self.frame.effect_render_distances.remove(&entity);
+        self.frame.wind_zones.retain(|v| v.entity != entity);
+        // Inactive sources and composite roots contributed no aggregate modifiers.
+        // Preserve adjustments still owned by other active effects.
+        if !contributed {
             return;
         }
         // Aggregated camera and material adjustments are regenerated on update.
@@ -412,19 +565,27 @@ impl EffectRuntime {
     }
     /// Registers an authored component before a first-frame scripting command.
     pub fn ensure(&mut self, input: &EffectInput) {
-        let current = self
-            .instances
-            .entry(input.entity)
-            .or_insert_with(|| Instance::new(&input.effect));
+        let pool = &mut self.particle_pool;
+        let current = self.instances.entry(input.entity).or_insert_with(|| {
+            let mut instance = Instance::new(&input.effect);
+            if let Some(particles) = pool.pop() {
+                instance.particles = particles;
+            }
+            instance
+        });
         if current.seed != input.effect.common.random_seed
             || current.kind != std::mem::discriminant(&input.effect.kind)
         {
+            let mut particles = std::mem::take(&mut current.particles);
+            particles.clear();
             *current = Instance::new(&input.effect);
+            current.particles = particles;
         }
         current.delay = input.effect.common.delay;
     }
     pub fn clear(&mut self) {
         self.instances.clear();
+        self.particle_pool.clear();
         self.frame = EffectFrame::default();
         self.time = 0.0;
     }
@@ -512,8 +673,29 @@ impl EffectRuntime {
             0.0
         };
         self.time += dt;
+        self.frame.effect_layers = inputs
+            .iter()
+            .map(|input| (input.entity, input.effect.common.visibility_layers))
+            .collect();
         self.frame.geometry.clear();
         self.frame.particles.clear();
+        self.frame.gpu_emitters.clear();
+        self.frame.particle_backends.clear();
+        self.frame.effect_render_distances = inputs
+            .iter()
+            .map(|input| {
+                (
+                    input.entity,
+                    (
+                        input.transform.transform_point3(Vec3::ZERO),
+                        0.0,
+                        input.effect.common.render_distance,
+                    ),
+                )
+            })
+            .collect();
+        self.frame.particle_budget_exhausted = false;
+        self.frame.camera_visibility_layers = Some(self.visibility_layers);
         self.frame.events.clear();
         self.frame.lights.clear();
         self.frame.surfaces.clear();
@@ -524,11 +706,22 @@ impl EffectRuntime {
         self.frame.outlines.clear();
         self.frame.flares.clear();
         self.frame.water.clear();
+        self.frame.wind_zones.clear();
+        self.frame.distortions.clear();
+        self.frame.overlays.clear();
         self.frame.post = PostProcessSettings::default();
         self.frame.camera_offset = Vec3::ZERO;
         self.frame.camera_rotation = Vec3::ZERO;
         let alive: BTreeSet<_> = inputs.iter().map(|i| i.entity).collect();
-        self.instances.retain(|id, _| alive.contains(id));
+        let pool = &mut self.particle_pool;
+        self.instances.retain(|id, instance| {
+            if alive.contains(id) {
+                true
+            } else {
+                recycle_particle_buffer(pool, std::mem::take(&mut instance.particles));
+                false
+            }
+        });
         for input in inputs {
             self.ensure(input);
         }
@@ -550,14 +743,92 @@ impl EffectRuntime {
             })
             .map(|input| input.entity)
             .collect();
+        let mut global_particle_budget = 100_000usize.saturating_sub(
+            self.instances
+                .values()
+                .map(|instance| instance.particles.len())
+                .sum::<usize>(),
+        );
+        let mut gpu_budget = GpuParticleEmitterFrame::MAX_TOTAL_PARTICLES;
         for input in inputs {
             let instance = self
                 .instances
                 .entry(input.entity)
                 .or_insert_with(|| Instance::new(&input.effect));
             let common = &input.effect.common;
-            if !common.enabled || instance.state == PlaybackState::Disposed {
+            if instance.state == PlaybackState::Disposed {
                 continue;
+            }
+            if !common.enabled {
+                if instance.backend == ParticleBackend::Gpu {
+                    gpu_budget = gpu_budget.saturating_sub(instance.gpu_capacity);
+                    append_gpu_commands(instance, &mut self.frame, false);
+                }
+                continue;
+            }
+            let mut gpu_selected = false;
+            if let Some(emitter) = match &input.effect.kind {
+                EffectKind::Particle(p) | EffectKind::MeshParticle(p) => Some(p),
+                EffectKind::Weather(w) => Some(&w.emitter),
+                _ => None,
+            } {
+                let capacity = match common.quality {
+                    QualityLevel::Low => (emitter.max_particles / 2).max(1),
+                    _ => emitter.max_particles,
+                }
+                .min(GpuParticleEmitterFrame::MAX_PARTICLES);
+                let queue_overflow = instance.gpu_pending.len() >= MAX_PENDING_GPU_STEPS
+                    || instance
+                        .gpu_pending
+                        .iter()
+                        .map(|command| command.spawns.len())
+                        .sum::<usize>()
+                        >= 100_000;
+                let mut reason = if instance.gpu_overflow || queue_overflow {
+                    Some("GPU renderer did not acknowledge the bounded command queue; restart to retry GPU simulation".into())
+                } else if capacity == 0 {
+                    Some("GPU particles require positive capacity".into())
+                } else {
+                    gpu_fallback_reason(emitter, input, inputs, &active_fields, self.gpu_context)
+                };
+                if capacity > gpu_budget {
+                    reason =
+                        Some("GPU scene particle budget exceeded; using CPU simulation".into());
+                }
+                let target = if emitter.simulation_mode != ParticleSimulationMode::Cpu
+                    && reason.is_none()
+                    && matches!(
+                        instance.state,
+                        PlaybackState::Playing | PlaybackState::Paused
+                    ) {
+                    ParticleBackend::Gpu
+                } else {
+                    ParticleBackend::Cpu
+                };
+                if instance.backend != target
+                    || (target == ParticleBackend::Gpu && instance.gpu_capacity != capacity)
+                {
+                    instance.reset();
+                    instance.backend = target;
+                    instance.gpu_capacity = capacity;
+                    if queue_overflow {
+                        instance.gpu_overflow = true;
+                    }
+                }
+                gpu_selected = target == ParticleBackend::Gpu;
+                if gpu_selected {
+                    gpu_budget = gpu_budget.saturating_sub(capacity);
+                }
+                self.frame.particle_backends.push(ParticleBackendStatus {
+                    entity: input.entity,
+                    requested: emitter.simulation_mode,
+                    active: target,
+                    reason: if emitter.simulation_mode == ParticleSimulationMode::Cpu {
+                        None
+                    } else {
+                        reason
+                    },
+                });
             }
             let transform = common
                 .attachment_target
@@ -577,10 +848,66 @@ impl EffectRuntime {
                         .length();
                     (center, radius)
                 });
-            let render_visible = common.visible
-                && render_center.distance(camera) - render_radius <= common.render_distance;
-
-            let active_dt = if instance.state == PlaybackState::Playing {
+            self.frame.effect_render_distances.insert(
+                input.entity,
+                (render_center, render_radius, common.render_distance),
+            );
+            let in_render_distance = render_center.distance(camera) - render_radius
+                <= common.render_distance
+                || inputs.iter().any(|probe_input| {
+                    let EffectKind::ReflectionProbe(probe) = &probe_input.effect.kind else {
+                        return false;
+                    };
+                    if !active_fields.contains(&probe_input.entity)
+                        || !probe_input.effect.common.visible
+                        || probe.visibility_layers & common.visibility_layers == 0
+                    {
+                        return false;
+                    }
+                    let capture = probe_input
+                        .transform
+                        .transform_point3(Vec3::from(probe.capture_position));
+                    render_center.distance(capture) - render_radius
+                        <= common
+                            .render_distance
+                            .min(probe_input.effect.common.render_distance)
+                });
+            let render_visible = common.visible && in_render_distance;
+            let offscreen_behavior = match &input.effect.kind {
+                EffectKind::Particle(p) | EffectKind::MeshParticle(p) => p.offscreen_behavior,
+                EffectKind::Weather(w) => w.emitter.offscreen_behavior,
+                _ => ParticleOffscreenBehavior::Simulate,
+            };
+            let has_visible_view = (common.visibility_layers & self.visibility_layers != 0
+                && render_center.distance(camera) - render_radius <= common.render_distance)
+                || inputs.iter().any(|probe_input| {
+                    if let EffectKind::ReflectionProbe(probe) = &probe_input.effect.kind {
+                        active_fields.contains(&probe_input.entity)
+                            && probe.visibility_layers & common.visibility_layers != 0
+                            && render_center.distance(
+                                probe_input
+                                    .transform
+                                    .transform_point3(Vec3::from(probe.capture_position)),
+                            ) - render_radius
+                                <= common
+                                    .render_distance
+                                    .min(probe_input.effect.common.render_distance)
+                    } else {
+                        false
+                    }
+                });
+            let offscreen_paused =
+                !has_visible_view && offscreen_behavior == ParticleOffscreenBehavior::Pause;
+            let offscreen_clear =
+                !has_visible_view && offscreen_behavior == ParticleOffscreenBehavior::Clear;
+            if offscreen_clear {
+                instance.deposits.clear();
+                global_particle_budget = global_particle_budget
+                    .saturating_add(instance.particles.len())
+                    .min(100_000);
+                instance.particles.clear();
+            }
+            let active_dt = if instance.state == PlaybackState::Playing && !offscreen_paused {
                 dt * common.time_scale
             } else {
                 0.0
@@ -599,7 +926,7 @@ impl EffectRuntime {
             let mut emitting = instance.state == PlaybackState::Playing
                 && instance.time >= 0.0
                 && (common.looping || previous_time < common.duration);
-            if instance.time < 0.0 {
+            if instance.time < 0.0 || offscreen_paused || offscreen_clear {
                 emitting = false;
             }
             let mesh_emitter = match &input.effect.kind {
@@ -607,6 +934,14 @@ impl EffectRuntime {
                 EffectKind::Weather(w) => {
                     let mut p = w.emitter.clone();
                     p.rate *= w.intensity.max(0.0);
+                    if let Some(asset) = w.splash_effect {
+                        p.sub_emitters.push(super::ParticleSubEmitter {
+                            effect: asset,
+                            trigger: ParticleTrigger::Collision,
+                            probability: 1.0,
+                            inherit_velocity: 0.0,
+                        });
+                    }
                     match w.weather {
                         WeatherType::Snow => {
                             if p.speed == [8.0, 10.0] {
@@ -660,6 +995,14 @@ impl EffectRuntime {
                 } else {
                     position
                 };
+                let mut gpu_spawns = Vec::new();
+                if offscreen_clear && gpu_selected {
+                    instance.gpu_epoch = gpu_epoch();
+                    instance.gpu_pending.clear();
+                    instance.gpu_free_slots.clear();
+                    instance.gpu_next_slot = 0;
+                    instance.gpu_last_frame = None;
+                }
                 if !instance.prewarmed && emitter.prewarm && common.looping && emitting {
                     let saved = instance.time;
                     let events = self.frame.events.len();
@@ -679,6 +1022,9 @@ impl EffectRuntime {
                             1.0 / 60.0,
                             old,
                             true,
+                            false,
+                            &mut gpu_spawns,
+                            &mut global_particle_budget,
                             &mut self.frame,
                         );
                     }
@@ -697,9 +1043,80 @@ impl EffectRuntime {
                     emission_dt,
                     previous_time,
                     emitting,
+                    gpu_selected,
+                    &mut gpu_spawns,
+                    &mut global_particle_budget,
                     &mut self.frame,
                 );
-                if render_visible {
+                if gpu_selected
+                    && instance
+                        .gpu_pending
+                        .iter()
+                        .map(|command| command.spawns.len())
+                        .sum::<usize>()
+                        + gpu_spawns.len()
+                        > 100_000
+                {
+                    instance.reset();
+                    instance.backend = ParticleBackend::Cpu;
+                    instance.gpu_overflow = true;
+                    gpu_selected = false;
+                    if let Some(status) = self.frame.particle_backends.last_mut() {
+                        status.active = ParticleBackend::Cpu;
+                        status.reason = Some(
+                            "unacknowledged GPU birth budget exceeded; CPU simulation restarted"
+                                .into(),
+                        );
+                    }
+                }
+                if gpu_selected {
+                    let mut command = GpuParticleEmitterFrame {
+                        entity: input.entity,
+                        epoch: instance.gpu_epoch,
+                        sequence: instance.gpu_sequence,
+                        capacity: instance.gpu_capacity,
+                        live_count: u32::try_from(instance.particles.len()).unwrap_or(u32::MAX),
+                        delta: emission_dt,
+                        visible: render_visible,
+                        visibility_layers: common.visibility_layers,
+                        render_bounds: (render_center, render_radius, common.render_distance),
+                        transform,
+                        simulation_space: common.simulation_space,
+                        gravity: emitter.gravity,
+                        force: emitter.force,
+                        drag: emitter.drag,
+                        velocity_limit: emitter.velocity_limit,
+                        angular_velocity: emitter.angular_velocity,
+                        stretch: emitter.stretch,
+                        appearance: emitter.appearance.clone(),
+                        flipbook: emitter.flipbook,
+                        flipbook_fps: emitter.flipbook_fps,
+                        spawns: gpu_spawns,
+                        colliders: gpu_colliders(emitter, inputs, &active_fields),
+                    };
+                    let render_changed = instance.gpu_last_frame.as_ref().is_some_and(|last| {
+                        last.transform != command.transform
+                            || last.visibility_layers != command.visibility_layers
+                            || last.render_bounds != command.render_bounds
+                            || last.appearance != command.appearance
+                            || last.stretch.to_bits() != command.stretch.to_bits()
+                    });
+                    if emission_dt > 0.0
+                        || !command.spawns.is_empty()
+                        || instance.gpu_last_frame.is_none()
+                        || render_changed
+                    {
+                        // Acknowledgements can arrive after restart/seed edits. Never
+                        // reuse a sequence even when the instance or epoch is replaced.
+                        instance.gpu_sequence =
+                            NEXT_GPU_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        command.sequence = instance.gpu_sequence;
+                        instance.gpu_last_frame = Some(command.clone());
+                        instance.gpu_pending.push_back(command);
+                    }
+                    append_gpu_commands(instance, &mut self.frame, render_visible);
+                }
+                if render_visible && !gpu_selected {
                     let mut generated_mesh = make_geometry(
                         input.entity,
                         PrimitiveMesh::default(),
@@ -707,9 +1124,12 @@ impl EffectRuntime {
                         0.0,
                         self.time,
                     );
+                    generated_mesh.pbr = matches!(input.effect.kind, EffectKind::MeshParticle(_));
+                    generated_mesh.cast_shadows = emitter.cast_shadows;
+                    generated_mesh.receive_shadows = emitter.receive_shadows;
                     for p in &instance.particles {
                         let normalized = (p.age / p.lifetime).clamp(0.0, 1.0);
-                        let mut color = emitter.appearance.color.sample(normalized);
+                        let mut color = emitter.appearance.sample_color(normalized, p.color_random);
                         color[3] *= emitter
                             .appearance
                             .opacity
@@ -723,13 +1143,15 @@ impl EffectRuntime {
                         };
                         let size = p.size * emitter.appearance.size.sample(normalized).max(0.0);
                         if matches!(input.effect.kind, EffectKind::MeshParticle(_))
-                            && emitter.mesh.is_none()
+                            && p.mesh.is_none()
                         {
                             append_cube(
                                 &mut generated_mesh,
                                 particle_position,
                                 size,
-                                p.rotation,
+                                p.rotation3
+                                    + Vec3::Z * emitter.rotation_over_lifetime.sample(normalized),
+                                p.scale,
                                 color,
                             );
                             continue;
@@ -738,21 +1160,67 @@ impl EffectRuntime {
                             entity: input.entity,
                             position: particle_position,
                             velocity: if common.simulation_space == SimulationSpace::Local {
-                                transform.transform_vector3(p.velocity)
+                                transform.transform_vector3(movement_velocity(p, emitter))
                             } else {
-                                p.velocity
+                                movement_velocity(p, emitter)
                             },
                             stretch: emitter.stretch.max(0.0),
                             uv_rect: flipbook_rect(emitter.flipbook, emitter.flipbook_fps, p.age),
-                            rotation: p.rotation,
+                            rotation: p.rotation
+                                + emitter.rotation_over_lifetime.sample(normalized),
+                            rotation3: p.rotation3
+                                + Vec3::Z * emitter.rotation_over_lifetime.sample(normalized),
+                            scale: p.scale,
                             size: p.size * emitter.appearance.size.sample(normalized).max(0.0),
                             color,
-                            mesh: emitter.mesh,
-                            material: emitter.appearance.material,
+                            mesh: p.mesh,
+                            material: p.material.or(emitter.appearance.material),
                             texture: emitter.appearance.texture,
                             emission: emitter.appearance.emission,
                             blend: emitter.appearance.blend,
+                            soft_particle_distance: emitter.soft_particle_distance,
+                            cast_shadows: emitter.cast_shadows,
+                            receive_shadows: emitter.receive_shadows,
+                            wind: Vec3::ZERO,
+                            sort_mode: emitter.sorting,
+                            sort_key: p.age,
                         });
+                    }
+                    if let EffectKind::Weather(weather) = &input.effect.kind {
+                        for deposit in &instance.deposits {
+                            let progress =
+                                (deposit.age / weather.accumulation_lifetime).clamp(0.0, 1.0);
+                            let mut color = emitter
+                                .appearance
+                                .sample_color(progress, appearance_random(input.entity));
+                            color[3] *= (1.0 - progress) * weather.accumulation;
+                            let rotation = glam::Quat::from_rotation_arc(Vec3::Y, deposit.normal);
+                            let tangent = rotation * Vec3::X * deposit.size;
+                            let bitangent = rotation * Vec3::Z * deposit.size;
+                            let base = generated_mesh.mesh.positions.len() as u32;
+                            for offset in [
+                                -tangent - bitangent,
+                                tangent - bitangent,
+                                tangent + bitangent,
+                                -tangent + bitangent,
+                            ] {
+                                generated_mesh
+                                    .mesh
+                                    .positions
+                                    .push((deposit.position + offset).to_array());
+                                generated_mesh.mesh.normals.push(deposit.normal.to_array());
+                                generated_mesh.mesh.tex_coords.push([0.0, 0.0]);
+                                generated_mesh.colors.push(color);
+                            }
+                            generated_mesh.mesh.indices.extend([
+                                base,
+                                base + 2,
+                                base + 1,
+                                base,
+                                base + 3,
+                                base + 2,
+                            ]);
+                        }
                     }
                     if !generated_mesh.mesh.positions.is_empty() {
                         self.frame.geometry.push(generated_mesh);
@@ -775,53 +1243,43 @@ impl EffectRuntime {
                         {
                             instance.points.pop_front();
                         }
+                        let parent = if common.simulation_space == SimulationSpace::Local {
+                            self.parent_transforms
+                                .get(&input.entity)
+                                .copied()
+                                .unwrap_or(Mat4::IDENTITY)
+                        } else {
+                            Mat4::IDENTITY
+                        };
+                        let local_position = parent.inverse().transform_point3(position);
                         if emitting && trail.emitting {
-                            if instance.points.back().is_some_and(|(p, _)| {
-                                p.distance(position) > trail.teleport_distance
+                            if instance.points.back().is_some_and(|(point, _)| {
+                                parent.transform_point3(*point).distance(position)
+                                    > trail.teleport_distance
                             }) {
                                 instance.points.clear();
                             }
-                            if instance.points.back().is_none_or(|(p, _)| {
-                                p.distance(position) >= trail.min_vertex_distance.max(0.001)
+                            if instance.points.back().is_none_or(|(point, _)| {
+                                parent.transform_point3(*point).distance(position)
+                                    >= trail.min_vertex_distance.max(0.001)
                             }) {
-                                instance.points.push_back((position, 0.0));
+                                instance.points.push_back((local_position, 0.0));
                             }
                             while instance.points.len() > trail.max_points.min(65536) as usize {
                                 instance.points.pop_front();
                             }
                         }
-                        if render_visible {
-                            let points: Vec<_> = instance.points.iter().map(|(p, _)| *p).collect();
-                            let widths: Vec<_> = instance
-                                .points
-                                .iter()
-                                .map(|(_, age)| {
-                                    trail.width
-                                        * trail.appearance.size.sample(*age / trail.lifetime)
-                                })
-                                .collect();
-                            let mesh = ribbon_mesh(
-                                &points,
-                                &widths,
-                                0,
-                                if trail.camera_facing {
-                                    camera
-                                } else {
-                                    position + transform.transform_vector3(Vec3::Z) * 1000.0
-                                },
-                            );
-                            let mut geometry =
-                                make_geometry(input.entity, mesh, &trail.appearance, t, self.time);
-                            geometry.colors = instance
-                                .points
-                                .iter()
-                                .flat_map(|(_, age)| {
-                                    let fraction = (*age / trail.lifetime).clamp(0.0, 1.0);
-                                    let mut c = trail.appearance.color.sample(fraction);
-                                    c[3] *= trail.appearance.opacity.sample(fraction);
-                                    [c, c]
-                                })
-                                .collect();
+                        if render_visible
+                            && let Some(geometry) = cpu_geometry::trail_geometry(
+                                input.entity,
+                                &instance.points,
+                                trail,
+                                parent,
+                                transform,
+                                camera,
+                                self.time,
+                            )
+                        {
                             self.frame.geometry.push(geometry);
                         }
                     }
@@ -830,86 +1288,61 @@ impl EffectRuntime {
                             target
                                 .and_then(|id| {
                                     targets.get(&id).copied().or_else(|| {
-                                        inputs.iter().find(|i| i.entity == id).map(|i| i.transform)
+                                        inputs
+                                            .iter()
+                                            .find(|input| input.entity == id)
+                                            .map(|input| input.transform)
                                     })
                                 })
                                 .unwrap_or(transform)
                                 .transform_point3(Vec3::from(offset))
                         };
                         let start = endpoint(beam.start_target, beam.start);
-                        let end = endpoint(beam.end_target, beam.end);
-                        let n = beam.segments.clamp(1, 4096) as usize;
-                        let direction = (end - start).normalize_or_zero();
-                        let side = direction
-                            .cross(if direction.y.abs() > 0.9 {
-                                Vec3::X
-                            } else {
-                                Vec3::Y
-                            })
-                            .normalize_or_zero();
-                        let up = direction.cross(side);
-                        let points: Vec<_> = (0..=n)
-                            .map(|i| {
-                                let f = i as f32 / n as f32;
-                                let phase =
-                                    f * beam.noise_frequency * TAU + self.time * beam.noise_speed;
-                                start.lerp(end, f)
-                                    + (side * phase.sin() + up * (phase * 1.73 + 1.0).sin())
-                                        * beam.noise_amplitude
-                                        * (f * std::f32::consts::PI).sin()
-                            })
-                            .collect();
-                        self.frame.geometry.push(make_path_geometry(
-                            input.entity,
-                            ribbon_mesh(&points, &vec![beam.width; points.len()], 0, camera),
-                            &beam.appearance,
-                            t,
-                            self.time,
-                        ));
-                        for branch in 0..beam.branch_count.min(64) {
-                            let index = ((branch as usize + 1) * n
-                                / (beam.branch_count.min(64) as usize + 1))
-                                .min(n);
-                            let a = points[index];
-                            let b = a
-                                + side
-                                    * ((branch as f32 * 2.1 + self.time * beam.noise_speed).sin()
-                                        * beam.noise_amplitude
-                                        * 5.0)
-                                + direction * (end - start).length() * 0.2;
-                            self.frame.geometry.push(make_path_geometry(
-                                input.entity,
-                                ribbon_mesh(&[a, b], &[beam.width * 0.5, 0.0], 0, camera),
-                                &beam.appearance,
-                                t,
-                                self.time,
-                            ));
+                        let mut end = endpoint(beam.end_target, beam.end);
+                        if beam.endpoint_collision
+                            && let Some((hit, _)) = cpu_geometry::raycast_volumes(
+                                start,
+                                end,
+                                inputs,
+                                &active_fields,
+                                beam.collision_layers,
+                            )
+                        {
+                            end = hit;
                         }
+                        self.frame.geometry.extend(cpu_geometry::beam_geometry(
+                            input.entity,
+                            beam,
+                            start,
+                            end,
+                            common.random_seed,
+                            camera,
+                            self.time,
+                            t,
+                        ));
                     }
                     EffectKind::Shockwave(ring) if render_visible => {
-                        let radius =
-                            ring.initial_radius + (ring.final_radius - ring.initial_radius) * t;
-                        let mut mesh = ring_mesh(radius, ring.thickness, 96);
-                        for p in &mut mesh.positions {
-                            let mut v = Vec3::from(*p);
-                            v.y += ring.vertical_offset;
-                            *p = transform.transform_point3(v).to_array();
-                        }
-                        for normal in &mut mesh.normals {
-                            *normal = transform
-                                .inverse()
-                                .transpose()
-                                .transform_vector3(Vec3::from(*normal))
-                                .normalize_or_zero()
-                                .to_array();
-                        }
-                        self.frame.geometry.push(make_geometry(
+                        self.frame.geometry.push(cpu_geometry::shockwave_geometry(
                             input.entity,
-                            mesh,
-                            &ring.appearance,
+                            ring,
+                            transform,
+                            age,
                             t,
                             self.time,
+                            inputs,
+                            &active_fields,
                         ));
+                        let radius = ring.final_radius.max(ring.initial_radius).max(0.01);
+                        let influence =
+                            (1.0 - position.distance(camera) / (radius * 4.0)).clamp(0.0, 1.0);
+                        if common.visibility_layers & self.visibility_layers != 0
+                            && render_center.distance(camera) - render_radius
+                                <= common.render_distance
+                        {
+                            self.frame.post.distortion += ring.screen_distortion
+                                * influence
+                                * ring.appearance.opacity.sample(t);
+                        }
                     }
                     EffectKind::WaterRipple(ring) if render_visible => {
                         let disturbance = WaterDisturbance {
@@ -957,10 +1390,16 @@ impl EffectRuntime {
                         }
                     }
                     EffectKind::Ribbon(ribbon) if render_visible => {
-                        let points: Vec<_> = ribbon
-                            .points
-                            .iter()
-                            .map(|p| transform.transform_point3(Vec3::from(*p)))
+                        let mut local_points: Vec<_> =
+                            ribbon.points.iter().copied().map(Vec3::from).collect();
+                        cpu_geometry::animate_ribbon_points(
+                            &mut local_points,
+                            ribbon.animation_speed,
+                            self.time,
+                        );
+                        let points: Vec<_> = local_points
+                            .into_iter()
+                            .map(|point| transform.transform_point3(point))
                             .collect();
                         let points = smooth_path(&points, ribbon.subdivisions.min(32) as u16);
                         let widths: Vec<_> = (0..points.len())
@@ -992,23 +1431,69 @@ impl EffectRuntime {
                     }
                     EffectKind::ProjectileTracer(tracer) if render_visible => {
                         let velocity = transform.transform_vector3(Vec3::from(tracer.velocity));
-                        let head = position + velocity * age;
-                        let tail = head - velocity.normalize_or_zero() * tracer.length;
-                        self.frame.geometry.push(make_geometry(
+                        let start = transform.transform_point3(Vec3::from(tracer.start_position));
+                        let endpoint = tracer
+                            .end_target
+                            .and_then(|entity| targets.get(&entity))
+                            .map(|matrix| matrix.transform_point3(Vec3::ZERO))
+                            .or_else(|| {
+                                tracer
+                                    .end_position
+                                    .map(|point| transform.transform_point3(Vec3::from(point)))
+                            });
+                        let head =
+                            endpoint.map_or(start + velocity * age, |end| start.lerp(end, t));
+                        let direction = endpoint
+                            .map_or(velocity, |end| end - start)
+                            .normalize_or_zero();
+                        let length = tracer.length + velocity.length() * tracer.velocity_stretch;
+                        let tail = head - direction * length;
+                        let points: Vec<_> = (0..=8)
+                            .map(|index| tail.lerp(head, index as f32 / 8.0))
+                            .collect();
+                        let widths: Vec<_> = (0..=8)
+                            .map(|index| tracer.width * index as f32 / 8.0)
+                            .collect();
+                        let mut geometry = make_geometry(
                             input.entity,
-                            ribbon_mesh(&[tail, head], &[0.0, tracer.width], 0, camera),
+                            ribbon_mesh(&points, &widths, 0, camera),
                             &tracer.appearance,
                             t,
                             self.time,
-                        ));
+                        );
+                        geometry.colors = vec![geometry.color; geometry.mesh.positions.len()];
+                        for (index, color) in geometry.colors.iter_mut().enumerate() {
+                            color[3] *= ((index / 2) as f32 / 8.0).powf(tracer.tail_fade);
+                        }
+                        self.frame.geometry.push(geometry);
                     }
                     EffectKind::FoliageScatter(scatter) if render_visible => {
-                        let mut rng = Random::new(common.random_seed);
-                        let count =
-                            (scatter.density * scatter.dimensions[0] * scatter.dimensions[2])
-                                .max(0.0)
-                                .min(scatter.max_instances.min(100_000) as f32)
-                                as usize;
+                        let surface = scatter
+                            .surface_target
+                            .and_then(|entity| targets.get(&entity).copied())
+                            .unwrap_or(transform);
+                        let mut views = vec![camera];
+                        views.extend(inputs.iter().filter_map(|probe_input| {
+                            if let EffectKind::ReflectionProbe(probe) = &probe_input.effect.kind {
+                                (active_fields.contains(&probe_input.entity)
+                                    && probe.visibility_layers & common.visibility_layers != 0)
+                                    .then(|| {
+                                        probe_input
+                                            .transform
+                                            .transform_point3(Vec3::from(probe.capture_position))
+                                    })
+                            } else {
+                                None
+                            }
+                        }));
+                        let samples = cpu_geometry::scatter_samples(
+                            scatter,
+                            transform,
+                            surface,
+                            common.random_seed,
+                            &views,
+                            common.render_distance,
+                        );
                         let mut foliage = make_geometry(
                             input.entity,
                             PrimitiveMesh::default(),
@@ -1016,52 +1501,54 @@ impl EffectRuntime {
                             0.0,
                             self.time,
                         );
-                        for i in 0..count {
-                            let local = Vec3::new(
-                                rng.range(-0.5, 0.5) * scatter.dimensions[0],
-                                0.0,
-                                rng.range(-0.5, 0.5) * scatter.dimensions[2],
-                            );
-                            let world = transform.transform_point3(local);
-                            if world.distance(camera) > common.render_distance {
-                                continue;
-                            }
-                            let wind = sample_active_wind(
+                        foliage.pbr = true;
+                        foliage.cast_shadows = scatter.cast_shadows;
+                        foliage.receive_shadows = scatter.receive_shadows;
+                        for sample in samples {
+                            let wind = sample_active_wind_for(
                                 inputs,
                                 &active_fields,
-                                world,
+                                sample.position,
                                 self.time,
                                 common.visibility_layers,
+                                true,
                             ) * scatter.wind_response;
-                            let rotation = rng.unit() * TAU;
-                            let size = rng.range(scatter.scale[0], scatter.scale[1]);
-                            if scatter.meshes.is_empty() {
+                            if sample.mesh.is_none() {
                                 append_foliage(
                                     &mut foliage,
-                                    world,
-                                    size,
-                                    rotation,
+                                    sample.position,
+                                    sample.size,
+                                    sample.rotation,
                                     wind * 0.03,
-                                    scatter.appearance.color.sample(0.0),
+                                    scatter
+                                        .appearance
+                                        .sample_color(0.0, appearance_random(input.entity)),
                                 );
                             } else {
                                 self.frame.particles.push(ParticleInstance {
                                     entity: input.entity,
-                                    position: world + wind * 0.03,
+                                    position: sample.position,
                                     velocity: Vec3::ZERO,
                                     stretch: 0.0,
                                     uv_rect: [0.0, 0.0, 1.0, 1.0],
-                                    rotation,
-                                    size,
-                                    color: scatter.appearance.color.sample(0.0),
-                                    mesh: scatter
-                                        .meshes
-                                        .get(i % scatter.meshes.len().max(1))
-                                        .copied(),
-                                    material: scatter.appearance.material,
+                                    rotation: sample.rotation.z,
+                                    rotation3: sample.rotation,
+                                    scale: Vec3::ONE,
+                                    size: sample.size,
+                                    color: scatter
+                                        .appearance
+                                        .sample_color(0.0, appearance_random(input.entity)),
+                                    mesh: sample.mesh,
+                                    material: sample.material,
                                     texture: scatter.appearance.texture,
                                     emission: scatter.appearance.emission,
                                     blend: scatter.appearance.blend,
+                                    cast_shadows: scatter.cast_shadows,
+                                    receive_shadows: scatter.receive_shadows,
+                                    wind,
+                                    sort_mode: super::ParticleSortMode::Distance,
+                                    sort_key: 0.0,
+                                    soft_particle_distance: 0.0,
                                 });
                             }
                         }
@@ -1082,21 +1569,42 @@ impl EffectRuntime {
                         entity: input.entity,
                         kind: EffectEventKind::Completed,
                         position,
+                        velocity: Vec3::ZERO,
                         child_effect: None,
                     });
                     instance.completed_event = true;
                 }
-                if instance.particles.is_empty() && instance.points.is_empty() {
+                if instance.particles.is_empty()
+                    && instance.points.is_empty()
+                    && instance.deposits.is_empty()
+                {
                     instance.state = PlaybackState::Completed;
                 }
             }
         }
+        // All emitters sharing a water receiver share its strictest authored budget.
+        let mut water_limits = BTreeMap::new();
+        for water in &self.frame.water {
+            water_limits
+                .entry(water.target)
+                .and_modify(|limit: &mut u32| {
+                    *limit = (*limit).min(water.disturbance.settings.max_disturbances);
+                })
+                .or_insert(water.disturbance.settings.max_disturbances);
+        }
+        let mut water_counts = BTreeMap::new();
+        self.frame.water.retain(|water| {
+            let count = water_counts.entry(water.target).or_insert(0usize);
+            *count += 1;
+            *count <= water_limits[&water.target].clamp(1, 256) as usize
+        });
         let mut ordered: Vec<_> = inputs.iter().collect();
         ordered.sort_by_key(|i| (i.effect.common.priority, i.entity));
         for input in ordered {
             let target = match &input.effect.kind {
                 EffectKind::CameraShake(v) => v.target,
                 EffectKind::ScreenFlash(v) => v.target,
+                EffectKind::PostProcess(v) => v.camera,
                 _ => None,
             };
             if target.is_some() && self.camera_target.is_some() && target != self.camera_target {
@@ -1105,6 +1613,13 @@ impl EffectRuntime {
             if let Some(state) = self.instances.get(&input.entity)
                 && input.effect.common.enabled
                 && input.effect.common.visible
+                && (!matches!(
+                    input.effect.kind,
+                    EffectKind::CameraShake(_)
+                        | EffectKind::ScreenFlash(_)
+                        | EffectKind::PostProcess(_)
+                        | EffectKind::HeatHaze(_)
+                ) || input.effect.common.visibility_layers & self.visibility_layers != 0)
                 && state.time >= 0.0
                 && matches!(state.state, PlaybackState::Playing | PlaybackState::Paused)
             {
@@ -1113,6 +1628,15 @@ impl EffectRuntime {
                 } else {
                     state.time
                 };
+                if let EffectKind::Wind(field) = &input.effect.kind
+                    && field.affect_materials
+                {
+                    self.frame.wind_zones.push(super::RenderWindZone {
+                        entity: input.entity,
+                        transform: input.transform,
+                        field: field.clone(),
+                    });
+                }
                 super::modifiers::extract_modifier(
                     input,
                     camera,
@@ -1120,6 +1644,16 @@ impl EffectRuntime {
                     (elapsed / input.effect.common.duration.max(0.001)).clamp(0.0, 1.0),
                     &mut self.frame,
                 );
+                if matches!(input.effect.kind, EffectKind::ReflectionProbe(_))
+                    && let Some(probe) = self
+                        .frame
+                        .probes
+                        .iter_mut()
+                        .rev()
+                        .find(|probe| probe.entity == input.entity)
+                {
+                    probe.time = state.time;
+                }
             }
         }
         &self.frame
@@ -1167,6 +1701,14 @@ fn twisted_ribbon_mesh(
     mesh
 }
 
+#[allow(
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    reason = "24-bit stable entity hash is exactly representable as f32"
+)]
+fn appearance_random(entity: EntityId) -> f32 {
+    ((entity.as_uuid().as_u128() & 0x00ff_ffff) as u32) as f32 / 16_777_215.0
+}
 fn make_path_geometry(
     entity: EntityId,
     mesh: PrimitiveMesh,
@@ -1184,7 +1726,7 @@ fn make_path_geometry(
         .tex_coords
         .iter()
         .map(|uv| {
-            let mut c = appearance.color.sample(uv[0] / length);
+            let mut c = appearance.sample_color(uv[0] / length, appearance_random(entity));
             c[3] *= appearance.opacity.sample(t).clamp(0.0, 1.0);
             c
         })
@@ -1221,9 +1763,12 @@ fn make_geometry(
             *value = *value * appearance.uv_scale[axis] + appearance.uv_scroll[axis] * time;
         }
     }
-    let mut color = appearance.color.sample(t);
+    let mut color = appearance.sample_color(t, appearance_random(entity));
     color[3] *= appearance.opacity.sample(t).clamp(0.0, 1.0);
     EffectGeometry {
+        pbr: appearance.material.is_some(),
+        cast_shadows: true,
+        receive_shadows: true,
         entity,
         mesh,
         colors: Vec::new(),
@@ -1239,7 +1784,8 @@ fn append_cube(
     geometry: &mut EffectGeometry,
     position: Vec3,
     size: f32,
-    rotation: f32,
+    rotation: Vec3,
+    scale: Vec3,
     color: [f32; 4],
 ) {
     // One batched indexed mesh for the emitter's procedural debris. Asset-backed
@@ -1251,8 +1797,13 @@ fn append_cube(
             .expect("unit cube is valid")
     });
     let transform = Mat4::from_translation(position)
-        * Mat4::from_rotation_z(rotation)
-        * Mat4::from_scale(Vec3::splat(size));
+        * Mat4::from_quat(glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            rotation.x,
+            rotation.y,
+            rotation.z,
+        ))
+        * Mat4::from_scale(scale * size);
     let base =
         u32::try_from(geometry.mesh.positions.len()).expect("bounded effect geometry fits u32");
     geometry.mesh.positions.extend(
@@ -1261,9 +1812,14 @@ fn append_cube(
             .map(|p| transform.transform_point3(Vec3::from(*p)).to_array()),
     );
     geometry.mesh.normals.extend(mesh.normals.iter().map(|n| {
-        Mat4::from_rotation_z(rotation)
-            .transform_vector3(Vec3::from(*n))
-            .to_array()
+        Mat4::from_quat(glam::Quat::from_euler(
+            glam::EulerRot::XYZ,
+            rotation.x,
+            rotation.y,
+            rotation.z,
+        ))
+        .transform_vector3(Vec3::from(*n))
+        .to_array()
     }));
     geometry.mesh.tex_coords.extend_from_slice(&mesh.tex_coords);
     geometry
@@ -1279,13 +1835,16 @@ fn append_foliage(
     geometry: &mut EffectGeometry,
     position: Vec3,
     size: f32,
-    rotation: f32,
+    rotation: Vec3,
     wind: Vec3,
     color: [f32; 4],
 ) {
-    for angle in [rotation, rotation + std::f32::consts::FRAC_PI_2] {
-        let blade_width = Vec3::new(angle.cos(), 0.0, angle.sin()) * size * 0.2;
-        let top = position + Vec3::Y * size + wind;
+    let orientation =
+        glam::Quat::from_euler(glam::EulerRot::XYZ, rotation.x, rotation.y, rotation.z);
+    let up = orientation * Vec3::Y;
+    for angle in [0.0, std::f32::consts::FRAC_PI_2] {
+        let blade_width = orientation * Vec3::new(angle.cos(), 0.0, angle.sin()) * size * 0.2;
+        let top = position + up * size + wind;
         let base =
             u32::try_from(geometry.mesh.positions.len()).expect("bounded effect geometry fits u32");
         geometry.mesh.positions.extend(
@@ -1297,7 +1856,7 @@ fn append_foliage(
             ]
             .map(|v| v.to_array()),
         );
-        let normal = blade_width.cross(Vec3::Y).normalize_or_zero().to_array();
+        let normal = blade_width.cross(up).normalize_or_zero().to_array();
         geometry.mesh.normals.extend([normal; 4]);
         geometry
             .mesh
@@ -1332,11 +1891,29 @@ fn sample_active_wind(
     time: f32,
     layers: u32,
 ) -> Vec3 {
+    sample_active_wind_for(inputs, active, position, time, layers, false)
+}
+
+fn sample_active_wind_for(
+    inputs: &[EffectInput],
+    active: &BTreeSet<EntityId>,
+    position: Vec3,
+    time: f32,
+    layers: u32,
+    foliage: bool,
+) -> Vec3 {
     inputs
         .iter()
         .filter(|i| active.contains(&i.entity))
         .filter_map(|i| match &i.effect.kind {
-            EffectKind::Wind(f) if f.layers & layers != 0 => {
+            EffectKind::Wind(f)
+                if f.layers & layers != 0
+                    && if foliage {
+                        f.affect_foliage
+                    } else {
+                        f.affect_particles
+                    } =>
+            {
                 Some(field_force(f, i.transform, position, time))
             }
             _ => None,
@@ -1344,7 +1921,21 @@ fn sample_active_wind(
         .sum()
 }
 
-fn field_force(field: &ForceField, transform: Mat4, position: Vec3, time: f32) -> Vec3 {
+/// Samples render-material wind using the same spatial falloff and gusts as particles.
+pub fn sample_render_wind(
+    zones: &[super::RenderWindZone],
+    position: Vec3,
+    time: f32,
+    layers: u32,
+) -> Vec3 {
+    zones
+        .iter()
+        .filter(|zone| zone.field.affect_materials && zone.field.layers & layers != 0)
+        .map(|zone| field_force(&zone.field, zone.transform, position, time))
+        .sum()
+}
+
+fn field_weight(field: &ForceField, transform: Mat4, position: Vec3) -> f32 {
     let local = transform.inverse().transform_point3(position);
     let half = Vec3::from(field.dimensions).abs() * 0.5;
     let normalized = match field.shape {
@@ -1355,30 +1946,354 @@ fn field_force(field: &ForceField, transform: Mat4, position: Vec3, time: f32) -
         _ => (local.abs() / half.max(Vec3::splat(0.001))).max_element(),
     };
     if !field.global && normalized > 1.0 {
-        return Vec3::ZERO;
+        return 0.0;
     }
-    let weight = if field.global {
+    if field.global {
         1.0
     } else {
         (1.0 - normalized).max(0.0).powf(field.falloff.max(0.0))
-    };
+    }
+}
+
+fn field_force(field: &ForceField, transform: Mat4, position: Vec3, time: f32) -> Vec3 {
+    let weight = field_weight(field, transform, position);
     let direction = transform
         .transform_vector3(Vec3::from(field.direction))
         .normalize_or_zero();
     let radial = (position - transform.transform_point3(Vec3::ZERO)).normalize_or_zero();
     let noise = Vec3::new(
-        (position.z * field.frequency + time).sin(),
-        (position.x * field.frequency + time * 1.37).sin(),
-        (position.y * field.frequency - time * 0.93).cos(),
+        (position.z * field.frequency / field.noise_scale + time).sin(),
+        (position.x * field.frequency / field.noise_scale + time * 1.37).sin(),
+        (position.y * field.frequency / field.noise_scale - time * 0.93).cos(),
     );
     let force = match field.force_type {
         ForceType::Directional => direction,
         ForceType::Attraction => -radial,
         ForceType::Repulsion => radial,
-        ForceType::Vortex => direction.cross(radial),
+        ForceType::Vortex => direction.cross(radial) * field.vortex_speed,
         ForceType::Turbulence => noise,
     };
-    (force * field.strength + noise * field.turbulence) * weight
+    let gust = field.gust_strength * (0.5 + 0.5 * (time * field.gust_frequency * TAU).sin());
+    (force * (field.strength + gust) + noise * field.turbulence) * weight
+}
+
+fn append_gpu_commands(instance: &Instance, frame: &mut EffectFrame, visible: bool) {
+    if instance.gpu_pending.is_empty() {
+        if let Some(last) = &instance.gpu_last_frame {
+            let mut heartbeat = last.clone();
+            heartbeat.spawns.clear();
+            heartbeat.delta = 0.0;
+            heartbeat.visible = visible;
+            frame.gpu_emitters.push(heartbeat);
+        }
+    } else {
+        frame
+            .gpu_emitters
+            .extend(instance.gpu_pending.iter().cloned().map(|mut command| {
+                command.visible = visible;
+                command
+            }));
+    }
+}
+
+fn gpu_fallback_reason(
+    emitter: &ParticleEmitter,
+    input: &EffectInput,
+    inputs: &[EffectInput],
+    active: &BTreeSet<EntityId>,
+    context: Option<u64>,
+) -> Option<String> {
+    let reason = if context.is_none() {
+        Some("renderer has no compute/storage particle support")
+    } else if !matches!(input.effect.kind, EffectKind::Particle(_)) {
+        Some("mesh particles and weather use the complete CPU simulator")
+    } else if emitter.generate_events
+        || emitter.sub_emitter.is_some()
+        || !emitter.sub_emitters.is_empty()
+    {
+        Some("per-particle events and sub-emitters require CPU simulation")
+    } else if emitter.appearance.color_parameter.is_some() {
+        Some("random gradient parameters use complete CPU appearance evaluation")
+    } else if emitter.prewarm {
+        Some("prewarm requires CPU simulation")
+    } else if emitter.noise != 0.0
+        || emitter.turbulence != 0.0
+        || inputs.iter().any(|field| {
+            active.contains(&field.entity)
+                && match &field.effect.kind {
+                    EffectKind::Wind(wind) => {
+                        emitter.wind_influence != 0.0
+                            && wind.layers & input.effect.common.visibility_layers != 0
+                    }
+                    EffectKind::ForceField(force) => {
+                        force.layers & input.effect.common.visibility_layers != 0
+                    }
+                    _ => false,
+                }
+        })
+    {
+        Some("noise, turbulence, force fields and wind require CPU simulation")
+    } else if emitter.sorting != super::ParticleSortMode::None
+        && emitter.appearance.blend == super::BlendMode::Alpha
+    {
+        Some(
+            "per-particle sorting requires CPU simulation; use unsorted additive particles for GPU",
+        )
+    } else if emitter.soft_particle_distance > 0.0 {
+        Some("soft scene-depth intersections use CPU billboard batching")
+    } else if emitter.mesh.is_some() || !emitter.mesh_variants.is_empty() {
+        Some("mesh particle instances require CPU simulation")
+    } else if emitter.appearance.texture.is_some()
+        || emitter.appearance.material.is_some()
+        || emitter.flipbook != [1, 1]
+    {
+        Some("textured materials and flipbook sprites require CPU simulation")
+    } else if emitter.appearance.color.keys.len() > GpuParticleEmitterFrame::MAX_CURVE_KEYS
+        || emitter.appearance.size.keys.len() > GpuParticleEmitterFrame::MAX_CURVE_KEYS
+        || emitter.appearance.opacity.keys.len() > GpuParticleEmitterFrame::MAX_CURVE_KEYS
+    {
+        Some("GPU appearance curves support at most 16 keys")
+    } else if emitter
+        .velocity_over_lifetime
+        .iter()
+        .flat_map(|c| &c.keys)
+        .any(|key| key.value != 0.0)
+        || emitter
+            .rotation_over_lifetime
+            .keys
+            .iter()
+            .any(|key| key.value != 0.0)
+    {
+        Some("lifetime motion curves require CPU simulation")
+    } else if emitter.start_scale != [[1.0; 3]; 2]
+        || emitter
+            .start_rotation
+            .iter()
+            .any(|v| v[0] != 0.0 || v[1] != 0.0)
+        || emitter.angular_velocity_range != [[0.0; 3]; 2]
+    {
+        Some("3D scale/rotation variation requires CPU simulation")
+    } else if emitter.collision
+        && (emitter.collision_quality == ParticleCollisionQuality::Discrete
+            || emitter.collision_response == CollisionResponse::Kill)
+    {
+        Some("discrete and kill collisions require CPU simulation")
+    } else {
+        None
+    };
+    if let Some(reason) = reason {
+        return Some(reason.into());
+    }
+    gpu_collision_fallback(emitter, inputs, active)
+}
+
+fn gpu_collision_fallback(
+    emitter: &ParticleEmitter,
+    inputs: &[EffectInput],
+    active: &BTreeSet<EntityId>,
+) -> Option<String> {
+    if !emitter.collision {
+        return None;
+    }
+    let mut count = 0;
+    for field in inputs {
+        if active.contains(&field.entity)
+            && let EffectKind::CollisionVolume(volume) = &field.effect.kind
+            && volume.layers & emitter.collision_layers != 0
+        {
+            count += 1;
+            if volume.response == CollisionResponse::Kill
+                || volume.quality == ParticleCollisionQuality::Discrete
+                || volume.impact_effect.is_some()
+            {
+                return Some(
+                    "collision events, discrete and kill volumes require CPU simulation".into(),
+                );
+            }
+        }
+    }
+    (count > GpuParticleEmitterFrame::MAX_COLLIDERS)
+        .then(|| "GPU particles support at most 16 collision volumes".into())
+}
+
+fn gpu_colliders(
+    emitter: &ParticleEmitter,
+    inputs: &[EffectInput],
+    active: &BTreeSet<EntityId>,
+) -> Vec<GpuParticleCollider> {
+    if !emitter.collision {
+        return Vec::new();
+    }
+    inputs
+        .iter()
+        .filter(|field| active.contains(&field.entity))
+        .filter_map(|field| {
+            let EffectKind::CollisionVolume(volume) = &field.effect.kind else {
+                return None;
+            };
+            if volume.layers & emitter.collision_layers == 0 {
+                return None;
+            }
+            Some(GpuParticleCollider {
+                inverse_transform: field.transform.inverse(),
+                transform: field.transform,
+                dimensions: volume.dimensions,
+                shape: volume.shape,
+                bounce: emitter.bounce * volume.bounce,
+                friction: 1.0 - (1.0 - emitter.friction) * (1.0 - volume.friction),
+                response: if emitter.collision_response == CollisionResponse::Stick
+                    || volume.response == CollisionResponse::Stick
+                {
+                    CollisionResponse::Stick
+                } else {
+                    CollisionResponse::Bounce
+                },
+            })
+        })
+        .collect()
+}
+
+fn random_vector_range(range: [[f32; 3]; 2], rng: &mut Random) -> Vec3 {
+    Vec3::from(std::array::from_fn(|axis| {
+        let minimum = range[0][axis];
+        let maximum = range[1][axis];
+        if minimum.to_bits() == maximum.to_bits() {
+            minimum
+        } else {
+            rng.range(minimum, maximum)
+        }
+    }))
+}
+
+fn weighted_mesh(
+    meshes: &[super::WeightedParticleMesh],
+    rng: &mut Random,
+) -> Option<(crate::AssetId, Option<crate::AssetId>)> {
+    let total: f32 = meshes.iter().map(|v| v.weight.max(0.0)).sum();
+    if total <= 0.0 {
+        return None;
+    }
+    let mut choice = rng.unit() * total;
+    for variant in meshes {
+        choice -= variant.weight.max(0.0);
+        if choice < 0.0 {
+            return Some((variant.mesh, variant.material));
+        }
+    }
+    meshes.last().map(|v| (v.mesh, v.material))
+}
+
+fn movement_velocity(particle: &Particle, emitter: &ParticleEmitter) -> Vec3 {
+    if particle.stuck {
+        return Vec3::ZERO;
+    }
+    let progress = (particle.age / particle.lifetime).clamp(0.0, 1.0);
+    let added = Vec3::from(emitter.velocity_over_lifetime.sample(progress));
+    (particle.velocity + added).clamp_length_max(emitter.velocity_limit.max(0.0))
+}
+
+fn discrete_contact(point: Vec3, shape: VolumeShape, half: Vec3) -> Option<Vec3> {
+    match shape {
+        VolumeShape::Plane => {
+            (point.y <= 0.0 && point.x.abs() <= half.x && point.z.abs() <= half.z)
+                .then_some(Vec3::Y)
+        }
+        VolumeShape::Sphere => {
+            if point.length_squared() <= half.max_element().powi(2) {
+                Some(if point.length_squared() > 1e-12 {
+                    point.normalize()
+                } else {
+                    Vec3::Y
+                })
+            } else {
+                None
+            }
+        }
+        VolumeShape::Box => {
+            if point.abs().cmple(half).all() {
+                let distance = half - point.abs();
+                let axis = if distance.x <= distance.y && distance.x <= distance.z {
+                    0
+                } else if distance.y <= distance.z {
+                    1
+                } else {
+                    2
+                };
+                let mut normal = Vec3::ZERO;
+                normal[axis] = if point[axis] < 0.0 { -1.0 } else { 1.0 };
+                Some(normal)
+            } else {
+                None
+            }
+        }
+        VolumeShape::Cylinder => {
+            let radius = half.x.max(half.z);
+            let radial = point.xz().length();
+            if radial > radius || point.y.abs() > half.y {
+                None
+            } else if half.y - point.y.abs() < radius - radial {
+                Some(Vec3::Y * if point.y < 0.0 { -1.0 } else { 1.0 })
+            } else {
+                Some(if radial > 1e-6 {
+                    Vec3::new(point.x, 0.0, point.z) / radial
+                } else {
+                    Vec3::X
+                })
+            }
+        }
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one bounded event dispatcher consistently handles all particle lifecycle triggers"
+)]
+fn particle_events(
+    frame: &mut EffectFrame,
+    entity: EntityId,
+    kind: EffectEventKind,
+    position: Vec3,
+    velocity: Vec3,
+    emitter: &ParticleEmitter,
+    rng: &mut Random,
+    impact: Option<crate::AssetId>,
+) {
+    let legacy = impact.or_else(|| {
+        if rng.unit() < emitter.sub_emitter_probability {
+            emitter.sub_emitter
+        } else {
+            None
+        }
+    });
+    if (emitter.generate_events || legacy.is_some()) && frame.events.len() < MAX_EVENTS {
+        frame.events.push(EffectEvent {
+            entity,
+            kind,
+            position,
+            velocity: Vec3::ZERO,
+            child_effect: legacy,
+        });
+    }
+    let trigger = match kind {
+        EffectEventKind::Birth => ParticleTrigger::Birth,
+        EffectEventKind::Collision => ParticleTrigger::Collision,
+        EffectEventKind::Death => ParticleTrigger::Death,
+        EffectEventKind::Completed => return,
+    };
+    for child in &emitter.sub_emitters {
+        if child.trigger == trigger
+            && rng.unit() < child.probability
+            && frame.events.len() < MAX_EVENTS
+        {
+            frame.events.push(EffectEvent {
+                entity,
+                kind,
+                position,
+                velocity: velocity * child.inherit_velocity,
+                child_effect: Some(child.effect),
+            });
+        }
+    }
 }
 
 fn sample_triangles(triangles: &[[[f32; 3]; 3]], rng: &mut Random) -> Vec3 {
@@ -1490,10 +2405,21 @@ fn simulate_particles(
     dt: f32,
     previous_time: f32,
     emitting: bool,
+    gpu: bool,
+    gpu_spawns: &mut Vec<GpuParticleSpawn>,
+    global_particle_budget: &mut usize,
     frame: &mut EffectFrame,
 ) {
     let common = &input.effect.common;
     let local = common.simulation_space == SimulationSpace::Local;
+    if let EffectKind::Weather(weather) = &input.effect.kind {
+        for deposit in &mut instance.deposits {
+            deposit.age += dt;
+        }
+        instance
+            .deposits
+            .retain(|deposit| deposit.age < weather.accumulation_lifetime);
+    }
     let quality = match common.quality {
         QualityLevel::Low => 0.5,
         QualityLevel::Medium => 1.0,
@@ -1535,7 +2461,7 @@ fn simulate_particles(
                     }
                     if (when > previous_time || (when == 0.0 && !instance.began))
                         && when <= instance.time
-                        && instance.rng.unit() <= burst.probability
+                        && instance.rng.unit() < burst.probability
                     {
                         spawn = spawn.saturating_add(burst.count as usize);
                     }
@@ -1545,7 +2471,10 @@ fn simulate_particles(
         instance.began = true;
         let capacity = ((p.max_particles as f32 * quality.min(1.0)).min(100_000.0) as usize)
             .saturating_sub(instance.particles.len());
-        for _ in 0..spawn.min(capacity) {
+        if spawn.min(capacity) > *global_particle_budget {
+            frame.particle_budget_exhausted = true;
+        }
+        for _ in 0..spawn.min(capacity).min(*global_particle_budget) {
             let offset = if p.shape == SpawnShape::MeshSurface {
                 sample_triangles(&p.mesh_spawn_triangles, &mut instance.rng)
             } else {
@@ -1562,8 +2491,20 @@ fn simulate_particles(
             } else {
                 Vec3::from(p.direction).normalize_or_zero()
             };
-            let velocity = direction * instance.rng.range(p.speed[0], p.speed[1]);
+            let velocity = direction * instance.rng.range(p.speed[0], p.speed[1])
+                + Vec3::from(p.initial_velocity);
+            let rotation3 = random_vector_range(p.start_rotation, &mut instance.rng);
+            let angular_velocity3 =
+                random_vector_range(p.angular_velocity_range, &mut instance.rng)
+                    + Vec3::Z * p.angular_velocity;
+            let scale = random_vector_range(p.start_scale, &mut instance.rng);
+            let variant = weighted_mesh(&p.mesh_variants, &mut instance.rng);
             let particle = Particle {
+                color_random: if p.appearance.color_parameter.is_some() {
+                    instance.rng.unit()
+                } else {
+                    0.5
+                },
                 position: if local {
                     offset
                 } else {
@@ -1571,27 +2512,81 @@ fn simulate_particles(
                 },
                 velocity: if local {
                     velocity
+                        + transform.inverse().transform_vector3(emitter_velocity)
+                            * p.inherit_velocity
                 } else {
                     transform.transform_vector3(velocity) + emitter_velocity * p.inherit_velocity
                 },
                 age: 0.0,
                 lifetime: instance.rng.range(p.lifetime[0], p.lifetime[1]).max(0.001),
                 size: instance.rng.range(p.start_size[0], p.start_size[1]),
-                rotation: instance.rng.unit() * TAU,
+                rotation: rotation3.z,
+                rotation3,
+                angular_velocity3,
+                scale,
+                mesh: variant.map(|v| v.0).or(p.mesh),
+                material: variant.and_then(|v| v.1),
+                gpu_slot: if gpu {
+                    instance.gpu_free_slots.pop().unwrap_or_else(|| {
+                        let slot = instance.gpu_next_slot;
+                        instance.gpu_next_slot = instance.gpu_next_slot.saturating_add(1);
+                        slot
+                    })
+                } else {
+                    0
+                },
                 stuck: false,
             };
-            if frame.events.len() < MAX_EVENTS {
-                frame.events.push(EffectEvent {
-                    entity: input.entity,
-                    kind: EffectEventKind::Birth,
-                    position: particle.position,
-                    child_effect: if instance.rng.unit() <= p.sub_emitter_probability {
-                        p.sub_emitter
-                    } else {
-                        None
-                    },
+            if let EffectKind::Weather(weather) = &input.effect.kind {
+                let relative = if local {
+                    particle.position
+                } else {
+                    transform.inverse().transform_point3(particle.position)
+                };
+                let radius = Vec3::from(p.dimensions).length().max(0.001) * 0.5;
+                if weather.density_falloff > 0.0
+                    && instance.rng.unit()
+                        > (1.0 - relative.length() / radius)
+                            .clamp(0.0, 1.0)
+                            .powf(weather.density_falloff)
+                {
+                    continue;
+                }
+            }
+            let world_position = if local {
+                transform.transform_point3(particle.position)
+            } else {
+                particle.position
+            };
+            let world_velocity = if local {
+                transform.transform_vector3(movement_velocity(&particle, p))
+            } else {
+                movement_velocity(&particle, p)
+            };
+            particle_events(
+                frame,
+                input.entity,
+                EffectEventKind::Birth,
+                world_position,
+                world_velocity,
+                p,
+                &mut instance.rng,
+                None,
+            );
+            if gpu {
+                gpu_spawns.push(GpuParticleSpawn {
+                    slot: particle.gpu_slot,
+                    state: GpuParticleState::new(
+                        particle.position,
+                        particle.velocity,
+                        0.0,
+                        particle.lifetime,
+                        particle.size,
+                        particle.rotation,
+                    ),
                 });
             }
+            *global_particle_budget = global_particle_budget.saturating_sub(1);
             instance.particles.push(particle);
         }
     }
@@ -1603,7 +2598,7 @@ fn simulate_particles(
             if particle.age >= particle.lifetime {
                 continue;
             }
-            if particle.stuck {
+            if particle.stuck || gpu {
                 continue;
             }
             let world_position = if local {
@@ -1620,10 +2615,26 @@ fn simulate_particles(
                     instance.time,
                     common.visibility_layers,
                 ) * p.wind_influence;
+            let field_priority = inputs
+                .iter()
+                .filter_map(|field| {
+                    if let EffectKind::ForceField(config) = &field.effect.kind {
+                        (active_fields.contains(&field.entity)
+                            && config.affect_particles
+                            && config.layers & common.visibility_layers != 0
+                            && field_weight(config, field.transform, world_position) > 0.0)
+                            .then_some(field.effect.common.priority)
+                    } else {
+                        None
+                    }
+                })
+                .max();
             for field in inputs {
                 if let EffectKind::ForceField(f) = &field.effect.kind
                     && active_fields.contains(&field.entity)
                     && f.layers & common.visibility_layers != 0
+                    && f.affect_particles
+                    && Some(field.effect.common.priority) == field_priority
                 {
                     force += field_force(f, field.transform, world_position, instance.time);
                 }
@@ -1636,15 +2647,40 @@ fn simulate_particles(
             if local {
                 force = transform.inverse().transform_vector3(force);
             }
+            force += Vec3::new(
+                (particle.position.y * 1.7 + instance.time).cos()
+                    - (particle.position.z * 1.3 - instance.time).sin(),
+                (particle.position.z * 1.3 - instance.time).cos()
+                    - (particle.position.x * 1.1 + instance.time).sin(),
+                (particle.position.x * 1.1 + instance.time).cos()
+                    - (particle.position.y * 1.7 + instance.time).sin(),
+            ) * p.turbulence;
+            let field_drag: f32 = inputs
+                .iter()
+                .filter(|field| active_fields.contains(&field.entity))
+                .filter_map(|field| match &field.effect.kind {
+                    EffectKind::ForceField(config) | EffectKind::Wind(config)
+                        if config.affect_particles
+                            && config.layers & common.visibility_layers != 0 =>
+                    {
+                        Some(
+                            config.drag_influence
+                                * field_weight(config, field.transform, world_position),
+                        )
+                    }
+                    _ => None,
+                })
+                .sum();
             particle.velocity =
-                (particle.velocity + force * step) * (-p.drag.max(0.0) * step).exp();
+                (particle.velocity + force * step) * (-(p.drag + field_drag).max(0.0) * step).exp();
             particle.velocity = particle
                 .velocity
                 .clamp_length_max(p.velocity_limit.max(0.0));
             let old = particle.position;
-            let next = old + particle.velocity * step;
+            let next = old + movement_velocity(particle, p) * step;
             particle.position = next;
-            particle.rotation += p.angular_velocity * step;
+            particle.rotation3 += particle.angular_velocity3 * step;
+            particle.rotation = particle.rotation3.z;
             if p.collision && step > 0.0 {
                 let start = if local {
                     transform.transform_point3(old)
@@ -1668,23 +2704,31 @@ fn simulate_particles(
                     let a = inverse.transform_point3(start);
                     let b = inverse.transform_point3(end);
                     let half = Vec3::from(c.dimensions).abs() * 0.5;
-                    let contact = match c.shape {
-                        VolumeShape::Sphere => sweep_sphere(a, b, half.max_element()),
-                        VolumeShape::Box => sweep_box(a, b, half),
-                        VolumeShape::Plane => {
-                            if a.y >= 0.0 && b.y <= 0.0 && (a.y - b.y) != 0.0 {
-                                let fraction = a.y / (a.y - b.y);
-                                let hit = a.lerp(b, fraction);
-                                if hit.x.abs() <= half.x && hit.z.abs() <= half.z {
-                                    Some((fraction, Vec3::Y))
+                    let contact = if p.collision_quality == ParticleCollisionQuality::Discrete
+                        || c.quality == ParticleCollisionQuality::Discrete
+                    {
+                        discrete_contact(b, c.shape, half).map(|normal| (1.0, normal))
+                    } else {
+                        match c.shape {
+                            VolumeShape::Sphere => sweep_sphere(a, b, half.max_element()),
+                            VolumeShape::Box => sweep_box(a, b, half),
+                            VolumeShape::Plane => {
+                                if a.y >= 0.0 && b.y <= 0.0 && (a.y - b.y) != 0.0 {
+                                    let fraction = a.y / (a.y - b.y);
+                                    let hit = a.lerp(b, fraction);
+                                    if hit.x.abs() <= half.x && hit.z.abs() <= half.z {
+                                        Some((fraction, Vec3::Y))
+                                    } else {
+                                        None
+                                    }
                                 } else {
                                     None
                                 }
-                            } else {
-                                None
+                            }
+                            VolumeShape::Cylinder => {
+                                sweep_cylinder(a, b, half.x.max(half.z), half.y)
                             }
                         }
-                        VolumeShape::Cylinder => sweep_cylinder(a, b, half.x.max(half.z), half.y),
                     };
                     if let Some((fraction, normal)) = contact {
                         let normal = volume
@@ -1699,6 +2743,17 @@ fn simulate_particles(
                         } else {
                             hit
                         };
+                        if let EffectKind::Weather(weather) = &input.effect.kind
+                            && instance.deposits.len() < weather.max_accumulation as usize
+                            && instance.rng.unit() < weather.accumulation
+                        {
+                            instance.deposits.push(WeatherDeposit {
+                                position: hit,
+                                normal,
+                                age: 0.0,
+                                size: particle.size.max(0.01),
+                            });
+                        }
                         let response = if p.collision_response == CollisionResponse::Kill
                             || c.response == CollisionResponse::Kill
                         {
@@ -1710,6 +2765,11 @@ fn simulate_particles(
                         } else {
                             CollisionResponse::Bounce
                         };
+                        let collision_velocity = if local {
+                            transform.transform_vector3(movement_velocity(particle, p))
+                        } else {
+                            movement_velocity(particle, p)
+                        };
                         match response {
                             CollisionResponse::Kill => particle.age = particle.lifetime,
                             CollisionResponse::Stick => {
@@ -1717,32 +2777,34 @@ fn simulate_particles(
                                 particle.stuck = true;
                             }
                             CollisionResponse::Bounce => {
-                                let v = if local {
-                                    transform.transform_vector3(particle.velocity)
-                                } else {
-                                    particle.velocity
-                                };
                                 let v = bounce_velocity(
-                                    v,
+                                    collision_velocity,
                                     normal,
                                     p.bounce * c.bounce,
                                     1.0 - (1.0 - p.friction) * (1.0 - c.friction),
                                 );
-                                particle.velocity = if local {
+                                let reflected = if local {
                                     transform.inverse().transform_vector3(v)
                                 } else {
                                     v
                                 };
+                                let progress = (particle.age / particle.lifetime).clamp(0.0, 1.0);
+                                particle.velocity = reflected
+                                    - Vec3::from(std::array::from_fn(|axis| {
+                                        p.velocity_over_lifetime[axis].sample(progress)
+                                    }));
                             }
                         }
-                        if frame.events.len() < MAX_EVENTS {
-                            frame.events.push(EffectEvent {
-                                entity: input.entity,
-                                kind: EffectEventKind::Collision,
-                                position: hit,
-                                child_effect: c.impact_effect.or(p.sub_emitter),
-                            });
-                        }
+                        particle_events(
+                            frame,
+                            input.entity,
+                            EffectEventKind::Collision,
+                            hit,
+                            collision_velocity,
+                            p,
+                            &mut instance.rng,
+                            c.impact_effect,
+                        );
                         break;
                     }
                 }
@@ -1751,14 +2813,30 @@ fn simulate_particles(
     }
     instance.particles.retain(|particle| {
         if particle.age >= particle.lifetime {
-            if frame.events.len() < MAX_EVENTS {
-                frame.events.push(EffectEvent {
-                    entity: input.entity,
-                    kind: EffectEventKind::Death,
-                    position: particle.position,
-                    child_effect: p.sub_emitter,
-                });
+            *global_particle_budget = global_particle_budget.saturating_add(1).min(100_000);
+            if gpu {
+                instance.gpu_free_slots.push(particle.gpu_slot);
             }
+            let world_position = if local {
+                transform.transform_point3(particle.position)
+            } else {
+                particle.position
+            };
+            let world_velocity = if local {
+                transform.transform_vector3(movement_velocity(particle, p))
+            } else {
+                movement_velocity(particle, p)
+            };
+            particle_events(
+                frame,
+                input.entity,
+                EffectEventKind::Death,
+                world_position,
+                world_velocity,
+                p,
+                &mut instance.rng,
+                None,
+            );
             false
         } else {
             true
@@ -1770,6 +2848,7 @@ fn simulate_particles(
 #[allow(
     clippy::float_cmp,
     clippy::field_reassign_with_default,
+    clippy::cast_precision_loss,
     reason = "tests check exact deterministic values and modify individual fixture controls"
 )]
 mod geometry_tests {
@@ -1777,6 +2856,258 @@ mod geometry_tests {
     use crate::effects::{
         BeamRenderer, Burst, EffectParameter, FoliageScatter, ScreenFlash, TrailRenderer,
     };
+    #[test]
+    fn particle_buffers_are_recycled_between_entities_and_released_on_unload() {
+        let first = emitter();
+        let mut runtime = EffectRuntime::new();
+        runtime.update(0.1, std::slice::from_ref(&first), Vec3::Z);
+        let pointer = runtime.instances[&first.entity].particles.as_ptr();
+        let capacity = runtime.instances[&first.entity].particles.capacity();
+        runtime.remove(first.entity);
+        assert_eq!(runtime.particle_pool.len(), 1);
+        let second = emitter();
+        runtime.ensure(&second);
+        assert_eq!(
+            runtime.instances[&second.entity].particles.capacity(),
+            capacity
+        );
+        assert_eq!(
+            runtime.instances[&second.entity].particles.as_ptr(),
+            pointer
+        );
+        assert!(runtime.instances[&second.entity].particles.is_empty());
+        runtime.update(0.1, std::slice::from_ref(&second), Vec3::Z);
+        let mut fresh = EffectRuntime::new();
+        fresh.update(0.1, std::slice::from_ref(&second), Vec3::Z);
+        assert_eq!(
+            runtime.frame().particles[0].position,
+            fresh.frame().particles[0].position
+        );
+        assert_eq!(
+            runtime.frame().particles[0].rotation3,
+            fresh.frame().particles[0].rotation3
+        );
+        assert_eq!(
+            runtime.frame().particles[0].size,
+            fresh.frame().particles[0].size
+        );
+        runtime.update(0.0, &[], Vec3::Z);
+        assert_eq!(runtime.particle_pool.len(), 1);
+        runtime.clear();
+        assert!(runtime.particle_pool.is_empty());
+    }
+
+    #[test]
+    fn global_particle_admission_budget_preserves_existing_particles() {
+        let make = || {
+            let mut input = emitter();
+            if let EffectKind::Particle(emitter) = &mut input.effect.kind {
+                emitter.max_particles = 100_000;
+                emitter.rate = 0.0;
+                emitter.bursts = vec![Burst {
+                    count: 60_000,
+                    ..Default::default()
+                }];
+            }
+            input
+        };
+        let first = make();
+        let second = make();
+        let mut runtime = EffectRuntime::new();
+        runtime.update(0.0, &[first.clone(), second.clone()], Vec3::Z);
+        assert_eq!(runtime.particle_count(), 100_000);
+        assert!(runtime.frame().particle_budget_exhausted);
+        assert_eq!(runtime.instances[&first.entity].particles.len(), 60_000);
+        assert_eq!(runtime.instances[&second.entity].particles.len(), 40_000);
+        let third = make();
+        runtime.update(0.0, &[first.clone(), second.clone(), third], Vec3::Z);
+        assert_eq!(runtime.particle_count(), 100_000);
+        assert_eq!(runtime.instances[&first.entity].particles.len(), 60_000);
+        assert_eq!(runtime.instances[&second.entity].particles.len(), 40_000);
+    }
+
+    #[test]
+    fn per_pass_distance_metadata_resolves_attachments() {
+        let mut input = emitter();
+        let target = EntityId::new();
+        input.effect.common.attachment_target = Some(target);
+        input.effect.common.render_distance = 25.0;
+        let targets = BTreeMap::from([(target, Mat4::from_translation(Vec3::X * 12.0))]);
+        let mut runtime = EffectRuntime::new();
+        let frame =
+            runtime.update_with_targets(0.0, std::slice::from_ref(&input), Vec3::ZERO, &targets);
+        assert_eq!(
+            frame.effect_render_distances[&input.entity],
+            (Vec3::X * 12.0, 0.0, 25.0)
+        );
+        runtime.update(0.0, &[], Vec3::ZERO);
+        assert!(runtime.frame().effect_render_distances.is_empty());
+    }
+
+    #[test]
+    fn weather_collision_spawns_splash_and_deposits_expire_without_events() {
+        let splash = crate::AssetId::new();
+        let mut weather = crate::effects::WeatherVolume::default();
+        weather.accumulation = 1.0;
+        weather.accumulation_lifetime = 0.2;
+        weather.splash_effect = Some(splash);
+        weather.emitter.shape = SpawnShape::Point;
+        weather.emitter.rate = 10.0;
+        weather.emitter.gravity = [0.0; 3];
+        weather.emitter.speed = [10.0; 2];
+        weather.emitter.collision = true;
+        weather.emitter.generate_events = false;
+        weather.emitter.collision_response = CollisionResponse::Kill;
+        let input = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::from_translation(Vec3::Y),
+            effect: EffectComponent::new(EffectKind::Weather(weather)),
+        };
+        let collider = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent::new(EffectKind::CollisionVolume(
+                crate::effects::CollisionVolume::default(),
+            )),
+        };
+        let mut runtime = EffectRuntime::new();
+        let frame = runtime.update(0.11, &[input.clone(), collider.clone()], Vec3::Z * 10.0);
+        assert!(
+            frame
+                .geometry
+                .iter()
+                .any(|geometry| geometry.entity == input.entity
+                    && !geometry.mesh.positions.is_empty())
+        );
+        assert!(
+            frame
+                .events
+                .iter()
+                .any(|event| event.child_effect == Some(splash))
+        );
+        assert_eq!(runtime.instances[&input.entity].deposits.len(), 1);
+        let mut stopped = input.clone();
+        if let EffectKind::Weather(weather) = &mut stopped.effect.kind {
+            weather.emitter.rate = 0.0;
+        }
+        runtime.update(0.3, &[stopped, collider], Vec3::Z * 10.0);
+        assert!(runtime.instances[&input.entity].deposits.is_empty());
+    }
+
+    #[test]
+    fn local_trails_move_history_with_parent_without_collapsing_head() {
+        let mut input = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent::new(EffectKind::Trail(TrailRenderer::default())),
+        };
+        input.effect.common.simulation_space = SimulationSpace::Local;
+        let mut runtime = EffectRuntime::new();
+        let mut parents = BTreeMap::new();
+        parents.insert(input.entity, Mat4::IDENTITY);
+        runtime.set_parent_transforms(&parents);
+        runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z * 10.0);
+        input.transform = Mat4::from_translation(Vec3::X);
+        runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z * 10.0);
+        parents.insert(input.entity, Mat4::from_translation(Vec3::Y * 3.0));
+        runtime.set_parent_transforms(&parents);
+        input.transform = Mat4::from_translation(Vec3::Y * 3.0 + Vec3::X * 2.0);
+        let frame = runtime.update(0.1, &[input], Vec3::Z * 10.0);
+        assert_eq!(frame.geometry.len(), 1);
+        let positions = &frame.geometry[0].mesh.positions;
+        assert_eq!(positions.len(), 6);
+        for pair in positions.as_chunks::<2>().0 {
+            assert!(((Vec3::from(pair[0]) + Vec3::from(pair[1])) * 0.5).y > 2.99);
+        }
+    }
+
+    #[test]
+    fn smoothing_large_paths_preserves_last_control_point() {
+        let points: Vec<_> = (0..4096).map(|index| Vec3::X * index as f32).collect();
+        let smoothed = smooth_path(&points, 2);
+        assert_eq!(smoothed.first(), points.first());
+        assert_eq!(smoothed.last(), points.last());
+        assert!(smoothed.len() <= 4095);
+    }
+
+    #[test]
+    fn tracer_endpoints_tail_alpha_and_velocity_stretch_are_consumed() {
+        let mut tracer = crate::effects::ProjectileTracer::default();
+        tracer.start_position = [1.0, 0.0, 0.0];
+        tracer.end_position = Some([5.0, 0.0, 0.0]);
+        tracer.velocity_stretch = 0.1;
+        let mut input = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent::new(EffectKind::ProjectileTracer(tracer)),
+        };
+        input.effect.common.duration = 2.0;
+        let mut runtime = EffectRuntime::new();
+        let frame = runtime.update(1.0, &[input], Vec3::Z * 10.0);
+        let geometry = &frame.geometry[0];
+        assert!(geometry.colors[0][3] == 0.0 && geometry.colors[16][3] > 0.0);
+        let head = (Vec3::from(geometry.mesh.positions[16])
+            + Vec3::from(geometry.mesh.positions[17]))
+            * 0.5;
+        let tail = Vec3::from(geometry.mesh.positions[0]);
+        assert!((head.x - 3.0).abs() < 1e-5);
+        assert!((head.distance(tail) - 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn overlapping_particle_fields_use_highest_priority() {
+        let input = emitter();
+        let mut field = ForceField::default();
+        field.global = true;
+        field.strength = 10.0;
+        field.direction = [1.0, 0.0, 0.0];
+        let mut low = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent::new(EffectKind::ForceField(field.clone())),
+        };
+        low.effect.common.priority = 0;
+        field.direction = [0.0, 1.0, 0.0];
+        let mut high = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent::new(EffectKind::ForceField(field)),
+        };
+        high.effect.common.priority = 2;
+        let mut runtime = EffectRuntime::new();
+        let frame = runtime.update(0.1, &[input, low, high], Vec3::Z);
+        assert!(
+            frame
+                .particles
+                .iter()
+                .all(|particle| particle.velocity.x.abs() < 1e-6 && particle.velocity.y > 0.9)
+        );
+    }
+
+    #[test]
+    fn material_wind_gusts_respect_recipient_mask_and_layers() {
+        let mut field = ForceField::default();
+        field.global = true;
+        field.direction = [1.0, 0.0, 0.0];
+        field.strength = 0.0;
+        field.turbulence = 0.0;
+        field.gust_strength = 4.0;
+        field.gust_frequency = 1.0;
+        field.layers = 2;
+        let mut zone = super::super::RenderWindZone {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            field,
+        };
+        assert_eq!(
+            sample_render_wind(&[zone.clone()], Vec3::ZERO, 0.25, 1),
+            Vec3::ZERO
+        );
+        assert!((sample_render_wind(&[zone.clone()], Vec3::ZERO, 0.25, 2).x - 4.0).abs() < 1e-5);
+        zone.field.affect_materials = false;
+        assert_eq!(sample_render_wind(&[zone], Vec3::ZERO, 0.25, 2), Vec3::ZERO);
+    }
+
     #[test]
     fn ribbon_is_indexed_and_camera_facing() {
         let mesh = ribbon_mesh(&[Vec3::ZERO, Vec3::Y], &[2.0, 1.0], 0, Vec3::Z * 5.0);
@@ -1804,6 +3135,62 @@ mod geometry_tests {
             let direction = a.direction();
             assert_eq!(direction, b.direction());
             assert!((direction.length() - 1.0).abs() < 1.0e-5);
+        }
+    }
+
+    #[test]
+    fn dual_gradients_keep_birth_random_stable_and_vector_curves_drive_motion() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.rate = 40.0;
+            p.appearance.opacity = crate::effects::Curve::constant(1.0);
+            p.appearance.color_parameter =
+                Some(crate::effects::GradientParameter::BetweenGradients {
+                    min: crate::effects::Gradient::constant([1., 0., 0., 1.]),
+                    max: crate::effects::Gradient::constant([0., 0., 1., 1.]),
+                });
+            p.velocity_over_lifetime = crate::effects::VectorCurve([
+                crate::effects::Curve::constant(2.0),
+                crate::effects::Curve::constant(0.0),
+                crate::effects::Curve::constant(0.0),
+            ]);
+        }
+        input.effect.validate().unwrap();
+        let mut runtime = EffectRuntime::new();
+        let first = runtime
+            .update(0.1, std::slice::from_ref(&input), Vec3::Z * 10.)
+            .particles
+            .clone();
+        assert_eq!(first.len(), 4);
+        assert!(first.iter().all(|particle| particle.color[0] > 0.
+            && particle.color[2] > 0.
+            && (particle.color[0] + particle.color[2] - 1.).abs() < 0.0001));
+        assert!(
+            first
+                .windows(2)
+                .any(|pair| (pair[0].color[0] - pair[1].color[0]).abs() > 0.0001)
+        );
+        let mut repeated = EffectRuntime::new();
+        let again = repeated.update(0.1, std::slice::from_ref(&input), Vec3::Z * 10.);
+        assert_eq!(
+            first
+                .iter()
+                .map(|particle| particle.color)
+                .collect::<Vec<_>>(),
+            again
+                .particles
+                .iter()
+                .map(|particle| particle.color)
+                .collect::<Vec<_>>()
+        );
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.rate = 0.;
+        }
+        let later = runtime.update(0.1, &[input], Vec3::Z * 10.);
+        assert_eq!(first.len(), later.particles.len());
+        for (before, after) in first.iter().zip(&later.particles) {
+            assert_eq!(before.color, after.color);
+            assert!((after.position.x - before.position.x - 0.2).abs() < 0.0001);
         }
     }
 
@@ -2057,12 +3444,7 @@ mod geometry_tests {
         if let EffectKind::Trail(t) = &mut input.effect.kind {
             t.emitting = false;
         }
-        assert!(
-            runtime.update(0.4, &[input], Vec3::Z).geometry[0]
-                .mesh
-                .positions
-                .is_empty()
-        );
+        assert!(runtime.update(0.4, &[input], Vec3::Z).geometry.is_empty());
     }
 
     #[test]
@@ -2189,5 +3571,319 @@ mod geometry_tests {
         let before = runtime.particle_count();
         runtime.update(0.1, &[input], Vec3::Z);
         assert!(runtime.particle_count() >= before + 9);
+    }
+    #[test]
+    fn local_space_inherits_world_emitter_velocity_and_reports_world_events() {
+        let mut input = emitter();
+        input.effect.common.simulation_space = SimulationSpace::Local;
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.inherit_velocity = 1.0;
+        }
+        let mut runtime = EffectRuntime::new();
+        runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z);
+        input.transform = Mat4::from_translation(Vec3::X);
+        let frame = runtime.update(0.1, &[input], Vec3::Z);
+        assert!(
+            frame
+                .particles
+                .iter()
+                .any(|p| (p.velocity.x - 10.0).abs() < 0.0001)
+        );
+        assert!(
+            frame
+                .events
+                .iter()
+                .any(|e| e.kind == EffectEventKind::Birth && (e.position.x - 1.0).abs() < 0.0001)
+        );
+    }
+
+    #[test]
+    fn zero_subemitter_probability_blocks_birth_and_death_children() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.lifetime = [0.01; 2];
+            p.sub_emitter = Some(crate::AssetId::new());
+            p.sub_emitter_probability = 0.0;
+        }
+        let mut runtime = EffectRuntime::new();
+        let frame = runtime.update(0.1, &[input], Vec3::Z);
+        assert!(
+            frame
+                .events
+                .iter()
+                .any(|e| e.kind == EffectEventKind::Birth)
+        );
+        assert!(
+            frame
+                .events
+                .iter()
+                .any(|e| e.kind == EffectEventKind::Death)
+        );
+        assert!(frame.events.iter().all(|e| e.child_effect.is_none()));
+    }
+    #[test]
+    fn gpu_commands_queue_fixed_steps_until_renderer_acknowledges() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.generate_events = false;
+            p.sorting = super::super::ParticleSortMode::None;
+            p.simulation_mode = ParticleSimulationMode::Gpu;
+        }
+        let mut runtime = EffectRuntime::new();
+        runtime.set_gpu_particle_context(Some(7));
+        let frame = runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z);
+        assert!(frame.particles.is_empty());
+        assert_eq!(frame.gpu_emitters.len(), 1);
+        assert_eq!(frame.gpu_emitters[0].spawns.len(), 1);
+        let first_sequence = frame.gpu_emitters[0].sequence;
+        let epoch = frame.gpu_emitters[0].epoch;
+        let frame = runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z);
+        assert_eq!(frame.gpu_emitters.len(), 2);
+        assert_ne!(
+            frame.gpu_emitters[0].spawns[0].slot,
+            frame.gpu_emitters[1].spawns[0].slot
+        );
+        runtime.acknowledge_gpu_particles(&[(input.entity, first_sequence)]);
+        assert_eq!(
+            runtime
+                .update(0.0, std::slice::from_ref(&input), Vec3::Z)
+                .gpu_emitters
+                .len(),
+            1
+        );
+        runtime.set_gpu_particle_context(Some(8));
+        let frame = runtime.update(0.1, &[input], Vec3::Z);
+        assert_ne!(frame.gpu_emitters[0].epoch, epoch);
+        assert_eq!(frame.gpu_emitters[0].spawns.len(), 1);
+    }
+
+    #[test]
+    fn discrete_collision_volume_selects_complete_cpu_fallback() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.generate_events = false;
+            p.sorting = super::super::ParticleSortMode::None;
+            p.simulation_mode = ParticleSimulationMode::Gpu;
+            p.collision = true;
+        }
+        let volume = EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent::new(EffectKind::CollisionVolume(
+                super::super::CollisionVolume {
+                    quality: ParticleCollisionQuality::Discrete,
+                    ..super::super::CollisionVolume::default()
+                },
+            )),
+        };
+        let mut runtime = EffectRuntime::new();
+        runtime.set_gpu_particle_context(Some(7));
+        let frame = runtime.update(0.1, &[input, volume], Vec3::Z);
+        assert!(frame.gpu_emitters.is_empty());
+        assert_eq!(frame.particle_backends[0].active, ParticleBackend::Cpu);
+        assert!(
+            frame.particle_backends[0]
+                .reason
+                .as_deref()
+                .unwrap()
+                .contains("discrete")
+        );
+        assert!(!frame.particles.is_empty());
+    }
+
+    #[test]
+    fn paused_gpu_emitters_publish_live_transform_without_advancing_particles() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.generate_events = false;
+            p.sorting = super::super::ParticleSortMode::None;
+            p.simulation_mode = ParticleSimulationMode::Gpu;
+        }
+        input.effect.common.simulation_space = SimulationSpace::Local;
+        let mut runtime = EffectRuntime::new();
+        runtime.set_gpu_particle_context(Some(7));
+        let first = runtime
+            .update(0.1, std::slice::from_ref(&input), Vec3::Z)
+            .gpu_emitters[0]
+            .clone();
+        runtime.acknowledge_gpu_particles(&[(input.entity, first.sequence)]);
+        runtime.control(input.entity, PlaybackCommand::Pause);
+        input.transform = Mat4::from_translation(Vec3::X * 5.0);
+        let frame = runtime.update(0.1, &[input.clone()], Vec3::Z);
+        assert_eq!(frame.gpu_emitters.len(), 1);
+        assert_eq!(frame.gpu_emitters[0].transform, input.transform);
+        assert!(frame.gpu_emitters[0].sequence > first.sequence);
+        assert!(frame.gpu_emitters[0].delta.abs() < f32::EPSILON);
+        assert!(frame.gpu_emitters[0].spawns.is_empty());
+    }
+
+    #[test]
+    fn stale_gpu_acknowledgements_cannot_discard_restarted_births() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.generate_events = false;
+            p.sorting = super::super::ParticleSortMode::None;
+            p.simulation_mode = ParticleSimulationMode::Gpu;
+        }
+        let mut runtime = EffectRuntime::new();
+        runtime.set_gpu_particle_context(Some(7));
+        let first = runtime
+            .update(0.1, std::slice::from_ref(&input), Vec3::Z)
+            .gpu_emitters[0]
+            .clone();
+        runtime.control(input.entity, PlaybackCommand::Restart);
+        let restarted = runtime
+            .update(0.1, std::slice::from_ref(&input), Vec3::Z)
+            .gpu_emitters[0]
+            .clone();
+        assert_ne!(first.epoch, restarted.epoch);
+        assert!(first.sequence < restarted.sequence);
+        runtime.acknowledge_gpu_particles(&[(input.entity, first.sequence)]);
+        let pending = runtime.update(0.0, std::slice::from_ref(&input), Vec3::Z);
+        assert_eq!(pending.gpu_emitters.len(), 1);
+        assert_eq!(pending.gpu_emitters[0].sequence, restarted.sequence);
+        assert!(!pending.gpu_emitters[0].spawns.is_empty());
+        input.effect.common.random_seed += 1;
+        let reseeded = runtime
+            .update(0.1, std::slice::from_ref(&input), Vec3::Z)
+            .gpu_emitters[0]
+            .clone();
+        assert!(reseeded.sequence > restarted.sequence);
+        runtime.acknowledge_gpu_particles(&[(input.entity, restarted.sequence)]);
+        assert_eq!(
+            runtime.update(0.0, &[input], Vec3::Z).gpu_emitters[0].sequence,
+            reseeded.sequence
+        );
+    }
+
+    #[test]
+    fn gpu_fallback_is_explicit_and_render_masks_keep_simulation_running() {
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.simulation_mode = ParticleSimulationMode::Gpu;
+        }
+        let mut runtime = EffectRuntime::new();
+        runtime.set_gpu_particle_support(true);
+        runtime.set_visibility_layers(0);
+        let frame = runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z);
+        // Extraction includes geometry for probe views; each render pass applies its mask.
+        assert_eq!(frame.particles.len(), 1);
+        assert_eq!(frame.effect_layers[&input.entity], u32::MAX);
+        assert_eq!(frame.particle_backends[0].active, ParticleBackend::Cpu);
+        assert!(
+            frame.particle_backends[0]
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("events")
+        );
+        assert_eq!(runtime.particle_count(), 1);
+        runtime.set_visibility_layers(u32::MAX);
+        assert_eq!(runtime.update(0.1, &[input], Vec3::Z).particles.len(), 2);
+    }
+
+    #[test]
+    fn weighted_meshes_3d_variation_and_lifetime_motion_are_consumed() {
+        let a = crate::AssetId::new();
+        let b = crate::AssetId::new();
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.rate = 0.0;
+            p.bursts = vec![Burst {
+                count: 1,
+                ..Default::default()
+            }];
+            p.lifetime = [1.0; 2];
+            p.mesh_variants = vec![
+                super::super::WeightedParticleMesh {
+                    mesh: a,
+                    weight: 0.0,
+                    material: None,
+                },
+                super::super::WeightedParticleMesh {
+                    mesh: b,
+                    weight: 1.0,
+                    material: None,
+                },
+            ];
+            p.start_scale = [[2.0, 1.0, 3.0]; 2];
+            p.start_rotation = [[std::f32::consts::FRAC_PI_2, 0.0, 0.0]; 2];
+            p.angular_velocity_range = [[0.0, 1.0, 0.0]; 2];
+            p.velocity_over_lifetime[0] = super::super::Curve::constant(2.0);
+            p.rotation_over_lifetime = super::super::Curve::linear(0.0, std::f32::consts::PI);
+        }
+        let mut runtime = EffectRuntime::new();
+        let frame = runtime.update(0.1, &[input], Vec3::Z);
+        let p = &frame.particles[0];
+        assert_eq!(p.mesh, Some(b));
+        assert_eq!(p.scale, Vec3::new(2.0, 1.0, 3.0));
+        assert!((p.position.x - 0.2).abs() < 0.0001);
+        assert!((p.rotation3.y - 0.1).abs() < 0.0001);
+        assert!((p.rotation3.z - std::f32::consts::PI * 0.1).abs() < 0.0001);
+    }
+
+    #[test]
+    fn explicit_subemitter_triggers_inherit_world_velocity() {
+        let birth = crate::AssetId::new();
+        let death = crate::AssetId::new();
+        let mut input = emitter();
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.rate = 0.0;
+            p.bursts = vec![Burst {
+                count: 1,
+                ..Default::default()
+            }];
+            p.lifetime = [0.05; 2];
+            p.initial_velocity = [4.0, 0.0, 0.0];
+            p.sub_emitters = vec![
+                super::super::ParticleSubEmitter {
+                    trigger: ParticleTrigger::Birth,
+                    effect: birth,
+                    probability: 1.0,
+                    inherit_velocity: 0.5,
+                },
+                super::super::ParticleSubEmitter {
+                    trigger: ParticleTrigger::Death,
+                    effect: death,
+                    probability: 1.0,
+                    inherit_velocity: 1.0,
+                },
+            ];
+        }
+        let mut runtime = EffectRuntime::new();
+        let frame = runtime.update(0.1, &[input], Vec3::Z);
+        let b = frame
+            .events
+            .iter()
+            .find(|event| event.child_effect == Some(birth))
+            .unwrap();
+        assert_eq!(b.kind, EffectEventKind::Birth);
+        assert_eq!(b.velocity, Vec3::X * 2.0);
+        let d = frame
+            .events
+            .iter()
+            .find(|event| event.child_effect == Some(death))
+            .unwrap();
+        assert_eq!(d.kind, EffectEventKind::Death);
+        assert_eq!(d.velocity, Vec3::X * 4.0);
+    }
+
+    #[test]
+    fn offscreen_pause_and_clear_are_distinct_from_simulate() {
+        let mut input = emitter();
+        input.effect.common.render_distance = 1.0;
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.offscreen_behavior = ParticleOffscreenBehavior::Pause;
+        }
+        let mut runtime = EffectRuntime::new();
+        runtime.update(0.1, std::slice::from_ref(&input), Vec3::Z * 10.0);
+        assert_eq!(runtime.particle_count(), 0);
+        runtime.update(0.1, std::slice::from_ref(&input), Vec3::ZERO);
+        assert_eq!(runtime.particle_count(), 1);
+        if let EffectKind::Particle(p) = &mut input.effect.kind {
+            p.offscreen_behavior = ParticleOffscreenBehavior::Clear;
+        }
+        runtime.update(0.1, &[input], Vec3::Z * 10.0);
+        assert_eq!(runtime.particle_count(), 0);
     }
 }

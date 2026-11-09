@@ -49,10 +49,38 @@ fn edit_value(
                 .body_returned
                 .unwrap_or(false);
         }
+        if name == "color_parameter" {
+            let before=value.clone();
+            let mut mode=if value.is_null(){0}else if value.get("BetweenGradients").is_some(){2}else{1};
+            egui::ComboBox::from_id_salt("gradient-mode").selected_text(["Legacy color gradient","Gradient","Random between gradients"][mode]).show_ui(ui,|ui|{for (index,label) in ["Legacy color gradient","Gradient","Random between gradients"].iter().enumerate(){ui.selectable_value(&mut mode,index,*label);}});
+            let previous=if before.is_null(){0}else if before.get("BetweenGradients").is_some(){2}else{1};
+            if mode!=previous {let gradient=serde_json::to_value(engine_world::effects::Gradient::default()).unwrap_or(Value::Null);*value=match mode {0=>Value::Null,1=>serde_json::json!({"Gradient":gradient}),_=>serde_json::json!({"BetweenGradients":{"min":gradient,"max":gradient}})};}
+            if !value.is_null() { edit_value(ui,"Gradient values",value,root,references); }
+            return before!=*value;
+        }
+        if name == "velocity_over_lifetime" && let Some(axes)=value.as_array_mut() {
+            let mut changed=false;
+            for (axis,curve) in ["X velocity","Y velocity","Z velocity"].iter().zip(axes) {changed|=edit_value(ui,axis,curve,root,references);}
+            return changed;
+        }
         if name == "parameters"
             && let Value::Object(parameters) = value
         {
             return edit_parameters(ui, parameters, root, references);
+        }
+        if matches!(name, "source" | "source_baseline" | "child_entities" | "surface_triangles" | "mesh_spawn_triangles") { return false; }
+        if name == "end_position" {
+            let mut enabled = !value.is_null();
+            if ui.checkbox(&mut enabled, "Override end position").changed() { *value=if enabled {serde_json::json!([0.0,0.0,0.0])} else {Value::Null};return true; }
+            if !enabled {return false;}
+        }
+        if matches!(name, "start_width" | "end_width" | "expansion_speed") {
+            let mut enabled = !value.is_null();
+            if ui.checkbox(&mut enabled, format!("Override {}", label(name))).changed() {
+                *value = if enabled { Value::from(1.0) } else { Value::Null };
+                return true;
+            }
+            if !enabled { return false; }
         }
         if name == "bounds" && value.is_object() && ui.button("Clear simulation bounds").clicked() {
             *value = Value::Null;
@@ -142,7 +170,7 @@ fn edit_value(
             Value::String(value) => {
                 ui.horizontal(|ui| {
                     ui.label(label(name)).on_hover_text(field_hint(name));
-                    let choices = enum_choices(name);
+                    let choices = if name == "quality" && matches!(value.as_str(),"Discrete"|"Swept") { &["Discrete","Swept"][..] } else { enum_choices(name) };
                     if choices.is_empty() {
                         ui.text_edit_singleline(value).changed()
                     } else {
@@ -256,7 +284,7 @@ fn edit_value(
                         values.swap(index - 1, index);
                         changed = true;
                     }
-                    if name == "meshes"
+                    if matches!(name, "meshes" | "mesh_variants" | "weighted_meshes")
                         && ui.button("Add mesh asset…").clicked()
                         && let Some(path) = rfd::FileDialog::new().set_directory(root).pick_file()
                         && let (Ok(root), Ok(path)) = (root.canonicalize(), path.canonicalize())
@@ -264,10 +292,19 @@ fn edit_value(
                         && let Ok(asset_id) = ensure_asset_meta(&path)
                         && let Ok(value) = serde_json::to_value(asset_id)
                     {
-                        values.push(value);
+                        values.push(if name == "meshes" {value} else {serde_json::json!({"mesh":value,"weight":1.0,"material":null})});
                         changed = true;
                     }
-                    if name != "meshes"
+                    if name == "sound_cues" && ui.button("Add audio cue…").clicked()
+                        && let Some(path) = rfd::FileDialog::new().set_directory(root).add_filter("Audio", &["wav", "ogg", "mp3"]).pick_file()
+                        && let (Ok(root), Ok(path)) = (root.canonicalize(), path.canonicalize())
+                        && path.starts_with(root)
+                        && let Ok(asset_id) = ensure_asset_meta(&path)
+                    {
+                        values.push(serde_json::json!({"asset":asset_id,"delay":0.0,"volume":1.0,"pitch":1.0,"spatial":false,"looping":false}));
+                        changed = true;
+                    }
+                    if !matches!(name,"meshes"|"mesh_variants"|"weighted_meshes"|"sound_cues")
                         && ui.button("Add key / item").clicked()
                         && let Some(value) = values
                             .last()
@@ -363,9 +400,12 @@ fn is_asset(name: &str) -> bool {
         || name.contains("asset")
         || name.contains("cubemap")
         || name.ends_with("_map")
+        || name.ends_with("_mask")
+        || name.ends_with("_effect")
         || name == "mesh"
         || name == "sub_emitter"
         || name == "impact_effect"
+        || name == "effect"
 }
 
 fn enum_choices(name: &str) -> &'static [&'static str] {
@@ -380,6 +420,7 @@ fn enum_choices(name: &str) -> &'static [&'static str] {
             "Cylinder",
             "MeshSurface",
         ],
+        "stacking" => &["Composite", "Replace", "Maximum"],
         "quality" => &["Low", "Medium", "High"],
         "blend" | "blend_mode" => &["Alpha", "Additive", "Multiply"],
         "weather" => &["Rain", "Snow", "Hail", "Dust", "Sand", "Leaves"],
@@ -392,13 +433,20 @@ fn enum_choices(name: &str) -> &'static [&'static str] {
         ],
         "collision_response" | "response" => &["Bounce", "Stick", "Kill"],
         "refresh" => &["Baked", "OnEnable", "Interval"],
+        "sorting" => &["Distance", "OldestFirst", "YoungestFirst", "None"],
+        "simulation_mode" => &["Cpu", "Auto", "Gpu"],
+        "offscreen_behavior" => &["Simulate", "Pause", "Clear"],
+        "collision_quality" => &["Discrete", "Swept"],
+        "event" => &["Birth", "Collision", "Death", "Completed"],
+        "action" => &["Play", "Pause", "Resume", "Stop", "Restart", "Reset"],
+        "trigger" => &["Birth", "Collision", "Death"],
         "simulation_space" => &["Local", "World"],
         _ => &[],
     }
 }
 
 fn is_reference(name: &str) -> bool {
-    name == "target" || name == "light" || name.ends_with("_target")
+    name == "target" || name == "light" || name == "camera" || name.ends_with("_target")
 }
 
 impl crate::EditorViewer<'_> {
@@ -444,6 +492,37 @@ impl crate::EditorViewer<'_> {
             }
             if let Some(effect) = &mut next {
                 ui.strong(effect.kind.name());
+                let handle_key = egui::Id::new(("effect-handle", snapshot.id));
+                let mut handle = ui
+                    .ctx()
+                    .data_mut(|data| data.get_temp::<u8>(handle_key))
+                    .unwrap_or_default();
+                let old_handle = handle;
+                egui::ComboBox::from_id_salt("effect-handle-choice")
+                    .selected_text(effect_handle_name(handle))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut handle, 0, "Entity transform");
+                        if effect_dimensions(&effect.kind).is_some()
+                            || effect.common.bounds.is_some()
+                        {
+                            ui.selectable_value(&mut handle, 1, "Emission / volume size");
+                        }
+                        if matches!(&effect.kind, EffectKind::Beam(_)) {
+                            ui.selectable_value(&mut handle, 2, "Beam start");
+                            ui.selectable_value(&mut handle, 3, "Beam end");
+                        }
+                        if matches!(
+                            &effect.kind,
+                            EffectKind::Wind(_) | EffectKind::ForceField(_)
+                        ) {
+                            ui.selectable_value(&mut handle, 4, "Force / wind direction");
+                        }
+                    });
+                if old_handle != handle {
+                    self.gizmo_widget.reset();
+                }
+                ui.ctx()
+                    .data_mut(|data| data.insert_temp(handle_key, handle));
                 ui.small("Position, rotation and parenting use this entity's Transform.");
                 let references: Vec<_> = self
                     .document
@@ -458,6 +537,11 @@ impl crate::EditorViewer<'_> {
                         })
                     })
                     .collect();
+                if let EffectKind::ReflectionProbe(probe) = &mut effect.kind
+                    && ui.button("Capture now").clicked()
+                {
+                    probe.refresh_revision = probe.refresh_revision.wrapping_add(1);
+                }
                 if let Some(source) = &effect.source {
                     let source_id = source.asset;
                     if let Some(path) = find_asset_path(self.project_root, source_id) {
@@ -526,6 +610,33 @@ impl crate::EditorViewer<'_> {
             }
             if let Some(effect) = &mut next {
                 prepare_mesh_emission(effect, self.model_assets);
+                if let engine_world::effects::EffectKind::FoliageScatter(scatter) = &mut effect.kind
+                {
+                    if let Some(target) = scatter.surface_target {
+                        scatter.surface_triangles =
+                            crate::pick_scene(self.document, self.model_assets)
+                                .into_iter()
+                                .filter(|mesh| mesh.entity == target)
+                                .flat_map(|mesh| {
+                                    mesh.indices
+                                        .as_chunks::<3>()
+                                        .0
+                                        .iter()
+                                        .filter_map(|face| {
+                                            Some([
+                                                *mesh.positions.get(face[0] as usize)?,
+                                                *mesh.positions.get(face[1] as usize)?,
+                                                *mesh.positions.get(face[2] as usize)?,
+                                            ])
+                                        })
+                                        .collect::<Vec<_>>()
+                                })
+                                .take(100_000)
+                                .collect();
+                    } else {
+                        scatter.surface_triangles.clear();
+                    }
+                }
             }
             match self.document.set_effect(snapshot.id, next) {
                 Ok(()) => self.request_preview = true,
@@ -542,6 +653,19 @@ impl crate::EditorViewer<'_> {
 fn default_item(name: &str, references: &[(String, String)]) -> Option<Value> {
     match name {
         "bursts" => serde_json::to_value(engine_world::effects::Burst::default()).ok(),
+        "trigger_bindings" => {
+            serde_json::to_value(engine_world::effects::GroupTriggerBinding::default()).ok()
+        }
+        "bindings" => {
+            serde_json::to_value(engine_world::effects::GroupParameterBinding::default()).ok()
+        }
+        "lod" => serde_json::to_value(engine_world::effects::ScatterLod::default()).ok(),
+        "mesh_variants" | "weighted_meshes" => {
+            serde_json::to_value(engine_world::effects::WeightedParticleMesh::default()).ok()
+        }
+        "sub_emitters" => {
+            serde_json::to_value(engine_world::effects::ParticleSubEmitter::default()).ok()
+        }
         "points" => Some(serde_json::json!([0.0, 0.0, 0.0])),
         "keys" => Some(serde_json::json!({"time": 0.0, "value": 1.0})),
         "targets" => references.first().map(|(id, _)| Value::String(id.clone())),
@@ -565,7 +689,13 @@ impl PreviewRuntime {
         self.world.effect_frame()
     }
     pub fn particle_count(&self) -> usize {
-        self.frame().particles.len()
+        let counts: std::collections::BTreeMap<_, _> = self
+            .frame()
+            .gpu_emitters
+            .iter()
+            .map(|emitter| (emitter.entity, emitter.live_count as usize))
+            .collect();
+        self.frame().particles.len() + counts.values().sum::<usize>()
     }
     fn clear(&mut self) {
         *self = Self::default();
@@ -647,6 +777,9 @@ pub(super) struct EffectPreview {
     pub category: String,
     scene_path: std::path::PathBuf,
     pub simulation_millis: f32,
+    audio: Option<engine_play::EffectAudioPreview>,
+    audio_enabled: bool,
+    audio_error: Option<String>,
 }
 
 impl Default for EffectPreview {
@@ -662,24 +795,72 @@ impl Default for EffectPreview {
             category: "All".into(),
             scene_path: std::path::PathBuf::new(),
             simulation_millis: 0.0,
+            audio: None,
+            audio_enabled: false,
+            audio_error: None,
         }
     }
 }
 
 impl EffectPreview {
+    pub fn submit_gpu_feedback(
+        &self,
+        context: Option<u64>,
+        acks: &[(engine_world::EntityId, u64)],
+    ) {
+        self.runtime
+            .world
+            .submit_gpu_particle_feedback(context, acks);
+    }
     pub fn update(&mut self, document: &engine_editor::AuthoringDocument, camera: glam::Vec3) {
         if self.scene_path != document.scene_path() {
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
             self.runtime.clear();
             self.time = 0.0;
             self.scene_path = document.scene_path().to_path_buf();
         }
+        let real_delta = self.last_tick.elapsed().as_secs_f32().min(0.1);
         let delta = if self.playing {
-            self.last_tick.elapsed().as_secs_f32().min(0.1) * self.speed
+            real_delta * self.speed
         } else {
             0.0
         };
         self.last_tick = std::time::Instant::now();
         self.advance(document, camera, delta);
+        if self.audio_enabled {
+            if self.audio.is_none() {
+                match engine_play::EffectAudioPreview::new(document.project().root()) {
+                    Ok(audio) => {
+                        self.audio = Some(audio);
+                        self.audio_error = None;
+                    }
+                    Err(error) => {
+                        self.audio_error = Some(error);
+                        self.audio_enabled = false;
+                    }
+                }
+            }
+            if let Some(audio) = &mut self.audio
+                && let Err(error) = audio.step_scaled(
+                    &mut self.runtime.world,
+                    if self.playing {
+                        f64::from(real_delta)
+                    } else {
+                        0.0
+                    },
+                    f64::from(self.speed),
+                )
+            {
+                self.audio_error = Some(error);
+            }
+        } else {
+            self.runtime.world.take_effect_audio_events();
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
+        }
     }
     fn advance(
         &mut self,
@@ -689,7 +870,24 @@ impl EffectPreview {
     ) {
         let start = std::time::Instant::now();
         if self.runtime.synchronize(document) {
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
             self.time = 0.0;
+            if delta == 0.0 && !self.playing {
+                let roots: Vec<_> = self
+                    .runtime
+                    .world
+                    .entity_ids()
+                    .filter(|id| self.runtime.world.parent(*id).ok().flatten().is_none())
+                    .collect();
+                for root in roots {
+                    let _ = self
+                        .runtime
+                        .world
+                        .control_effect(root, engine_world::effects::PlaybackCommand::Pause);
+                }
+            }
         }
         let mut remaining = delta;
         while remaining > 0.0 {
@@ -716,6 +914,9 @@ impl EffectPreview {
                 | engine_world::effects::PlaybackCommand::Reset
                 | engine_world::effects::PlaybackCommand::Stop
         ) {
+            if let Some(audio) = &mut self.audio {
+                audio.stop();
+            }
             self.runtime.clear();
         }
         if self.runtime.synchronize(document) {
@@ -746,12 +947,16 @@ impl EffectPreview {
         camera: glam::Vec3,
         seconds: f32,
     ) {
+        if let Some(audio) = &mut self.audio {
+            audio.stop();
+        }
         self.runtime.clear();
         self.time = 0.0;
         self.control(document, engine_world::effects::PlaybackCommand::Play);
         self.advance(document, camera, seconds);
         self.control(document, engine_world::effects::PlaybackCommand::Pause);
         self.playing = false;
+        self.runtime.world.take_effect_audio_events();
     }
     pub fn controls(
         &mut self,
@@ -799,6 +1004,18 @@ impl EffectPreview {
                     changed = true;
                 }
             });
+            if ui
+                .checkbox(&mut self.audio_enabled, "Preview audio")
+                .changed()
+            {
+                self.runtime.world.take_effect_audio_events();
+                if let Some(audio) = &mut self.audio {
+                    audio.stop();
+                }
+            }
+            if let Some(error) = &self.audio_error {
+                ui.label(error);
+            }
             ui.add(egui::Slider::new(&mut self.speed, 0.0..=4.0).text("Preview speed"));
             let mut time = self.time;
             if ui
@@ -811,8 +1028,11 @@ impl EffectPreview {
             changed |= ui
                 .checkbox(&mut self.show_bounds, "Show effect bounds")
                 .changed();
+            if self.runtime.frame().particle_budget_exhausted {
+                ui.label("Particle birth budget reached (100,000 live particles).");
+            }
             ui.label(format!(
-                "{} visible particles · {:.2} ms CPU simulation",
+                "{} particles · {:.2} ms CPU simulation",
                 self.runtime.particle_count(),
                 self.simulation_millis
             ));
@@ -821,6 +1041,10 @@ impl EffectPreview {
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "shape guides share the selected effect transform and bound geometry contract"
+)]
 pub(super) fn append_bounds(
     scene: &mut renderer_wgpu::ViewportScene,
     document: &engine_editor::AuthoringDocument,
@@ -881,29 +1105,109 @@ pub(super) fn append_bounds(
         }
     };
     let half = Vec3::from(dimensions) * 0.5;
-    let corners: Vec<_> = (0..8)
-        .map(|i| {
-            transform
-                .0
-                .transform_point3(
+    let shape = if effect.common.bounds.is_some() {
+        "Box".to_owned()
+    } else {
+        match &effect.kind {
+            EffectKind::Particle(value) | EffectKind::MeshParticle(value) => {
+                format!("{:?}", value.shape)
+            }
+            EffectKind::Weather(value) => format!("{:?}", value.emitter.shape),
+            EffectKind::ForceField(value) | EffectKind::Wind(value) => format!("{:?}", value.shape),
+            EffectKind::CollisionVolume(value) => format!("{:?}", value.shape),
+            EffectKind::Fog(value) => format!("{:?}", value.shape),
+            EffectKind::PostProcess(value) => format!("{:?}", value.shape),
+            EffectKind::HeatHaze(_) => "Sphere".to_owned(),
+            _ => "Box".to_owned(),
+        }
+    };
+    let mut local = Vec::new();
+    if matches!(
+        shape.as_str(),
+        "Sphere" | "Hemisphere" | "Circle" | "Cylinder" | "Cone"
+    ) {
+        for axis in 0..3 {
+            if matches!(shape.as_str(), "Circle" | "Cylinder" | "Cone") && axis != 1 {
+                continue;
+            }
+            for segment in 0_u16..48 {
+                let point = |angle: f32, height: f32| {
+                    let (sin, cos) = angle.sin_cos();
+                    (match axis {
+                        0 => Vec3::new(height, sin * half.y, cos * half.z),
+                        1 => Vec3::new(sin * half.x, height, cos * half.z),
+                        _ => Vec3::new(sin * half.x, cos * half.y, height),
+                    }) + bounds_center
+                };
+                let a = f32::from(segment) / 48.0 * std::f32::consts::TAU;
+                let b = f32::from(segment + 1) / 48.0 * std::f32::consts::TAU;
+                if shape == "Cylinder" {
+                    for height in [-half.y, half.y] {
+                        local.extend([point(a, height), point(b, height)]);
+                    }
+                } else {
+                    local.extend([
+                        point(a, if shape == "Cone" { half.y } else { 0.0 }),
+                        point(b, if shape == "Cone" { half.y } else { 0.0 }),
+                    ]);
+                }
+            }
+        }
+        if matches!(shape.as_str(), "Cylinder" | "Cone") {
+            for (x, z) in [(-half.x, 0.0), (half.x, 0.0), (0.0, -half.z), (0.0, half.z)] {
+                local.extend([
                     bounds_center
-                        + Vec3::new(
-                            if i & 1 == 0 { -half.x } else { half.x },
-                            if i & 2 == 0 { -half.y } else { half.y },
-                            if i & 4 == 0 { -half.z } else { half.z },
-                        ),
-                )
-                .to_array()
-        })
-        .collect();
-    let mut vertices = Vec::with_capacity(24);
-    for index in 0..8 {
-        for bit in [1, 2, 4] {
-            if index & bit == 0 {
-                vertices.extend([corners[index], corners[index | bit]]);
+                        + if shape == "Cone" {
+                            Vec3::new(0.0, -half.y, 0.0)
+                        } else {
+                            Vec3::new(x, -half.y, z)
+                        },
+                    bounds_center + Vec3::new(x, half.y, z),
+                ]);
+            }
+        }
+    } else {
+        let corners: Vec<_> = (0..8)
+            .map(|i| {
+                bounds_center
+                    + Vec3::new(
+                        if i & 1 == 0 { -half.x } else { half.x },
+                        if i & 2 == 0 { -half.y } else { half.y },
+                        if i & 4 == 0 { -half.z } else { half.z },
+                    )
+            })
+            .collect();
+        for index in 0..8 {
+            for bit in [1, 2, 4] {
+                if index & bit == 0 {
+                    local.extend([corners[index], corners[index | bit]]);
+                }
             }
         }
     }
+    if let EffectKind::Wind(field) | EffectKind::ForceField(field) = &effect.kind {
+        let direction = Vec3::from_array(field.direction).normalize_or_zero();
+        let length = half.max_element().max(0.5);
+        let end = bounds_center + direction * length;
+        let side = if direction == Vec3::ZERO {
+            Vec3::X
+        } else {
+            direction.any_orthonormal_vector()
+        } * length
+            * 0.15;
+        local.extend([
+            bounds_center,
+            end,
+            end,
+            end - direction * length * 0.25 + side,
+            end,
+            end - direction * length * 0.25 - side,
+        ]);
+    }
+    let vertices = local
+        .into_iter()
+        .map(|point| transform.0.transform_point3(point).to_array())
+        .collect();
     scene.guides.push(renderer_wgpu::ViewportGuide {
         key: crate::hash_value(&(entity, "effect-bounds")),
         vertices,
@@ -984,7 +1288,11 @@ impl crate::EditorViewer<'_> {
                         .document
                         .add_effect_asset(&asset, self.document.selected())
                     {
-                        Ok(_) => self.request_preview = true,
+                        Ok(_) => {
+                            self.model_assets
+                                .extend(crate::load_project_model_assets(self.project_root));
+                            self.request_preview = true;
+                        }
                         Err(error) => self.effect_error(error.to_string()),
                     }
                 }
@@ -1006,6 +1314,10 @@ impl crate::EditorViewer<'_> {
         ));
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "capture ordered component and group metadata before one atomic asset write"
+    )]
     fn save_effect_selection(&mut self) -> Result<(), String> {
         let entity = self
             .document
@@ -1019,24 +1331,44 @@ impl crate::EditorViewer<'_> {
         let mut effects = Vec::new();
         let mut entity_ids = Vec::new();
         let mut transforms = Vec::new();
+        let mut lights = Vec::new();
+        let mut captured = Vec::new();
+        let group = snapshot.effect_group.clone();
+        if snapshot.effect.is_some() {
+            captured.push(snapshot.clone());
+        }
         if let Some(effect) = snapshot.effect {
             effects.push(effect);
+            lights.push(snapshot.light);
             entity_ids.push(snapshot.id);
             transforms.push(glam::Mat4::IDENTITY.to_cols_array());
         }
-        for child in self
-            .document
-            .world()
-            .children(entity)
-            .map_err(|e| e.to_string())?
-        {
+        let ordered_children = group
+            .as_ref()
+            .map(|group| group.child_entities.clone())
+            .filter(|children| !children.is_empty())
+            .unwrap_or(
+                self.document
+                    .world()
+                    .children(entity)
+                    .map_err(|e| e.to_string())?
+                    .to_vec(),
+            );
+        for child in &ordered_children {
+            if !self.document.world().contains(*child) {
+                continue;
+            }
             let child = self
                 .document
                 .world()
                 .snapshot(*child)
                 .map_err(|e| e.to_string())?;
+            if child.effect.is_some() {
+                captured.push(child.clone());
+            }
             if let Some(effect) = child.effect {
                 effects.push(effect);
+                lights.push(child.light);
                 entity_ids.push(child.id);
                 transforms.push(child.local_transform.matrix().to_cols_array());
             }
@@ -1050,6 +1382,47 @@ impl crate::EditorViewer<'_> {
         );
         asset.entity_ids = entity_ids;
         asset.transforms = transforms;
+        asset.lights = lights;
+        asset.capture_child_components(&captured)?;
+        if let Some(group) = group {
+            asset.group_settings = Some((&group).into());
+            asset.sound_cues = group.sound_cues;
+            asset.parameters = group.parameters;
+            let remap: std::collections::BTreeMap<_, _> = group
+                .child_entities
+                .iter()
+                .enumerate()
+                .filter_map(|(old, id)| {
+                    asset
+                        .entity_ids
+                        .iter()
+                        .position(|candidate| candidate == id)
+                        .map(|new| {
+                            (
+                                u32::try_from(old).unwrap_or_default(),
+                                u32::try_from(new).unwrap_or_default(),
+                            )
+                        })
+                })
+                .collect();
+            asset.bindings = group
+                .bindings
+                .into_iter()
+                .filter_map(|mut binding| {
+                    binding.child = *remap.get(&binding.child)?;
+                    Some(binding)
+                })
+                .collect();
+            asset.trigger_bindings = group
+                .trigger_bindings
+                .into_iter()
+                .filter_map(|mut binding| {
+                    binding.source_child = *remap.get(&binding.source_child)?;
+                    binding.target_child = *remap.get(&binding.target_child)?;
+                    Some(binding)
+                })
+                .collect();
+        }
         let bytes = asset.to_bytes()?;
         if let Some(path) = rfd::FileDialog::new()
             .set_directory(self.project_root.join("assets"))
@@ -1277,6 +1650,51 @@ impl crate::EditorViewer<'_> {
         reason = "timeline controls share one undoable operation dispatch"
     )]
     fn composite_timeline(&mut self, ui: &mut egui::Ui, snapshot: &engine_world::EntitySnapshot) {
+        if let Some(group) = &snapshot.effect_group {
+            ui.collapsing("Composite playback, parameters and audio", |ui| {
+                let references = self
+                    .document
+                    .entity_snapshots()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|entity| {
+                        (
+                            entity.id.to_string(),
+                            entity.name.unwrap_or_else(|| entity.id.to_string()),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let mut edited = group.clone();
+                let mut value = serde_json::to_value(&edited).unwrap_or(Value::Null);
+                if let Some(fields) = value.as_object_mut() {
+                    fields.remove("bindings");
+                    fields.remove("trigger_bindings");
+                }
+                let mut changed = properties(ui, &mut value, self.project_root, &references);
+                if changed
+                    && let Ok(mut decoded) =
+                        serde_json::from_value::<engine_world::effects::EffectGroup>(value)
+                {
+                    decoded.bindings.clone_from(&edited.bindings);
+                    decoded
+                        .trigger_bindings
+                        .clone_from(&edited.trigger_bindings);
+                    edited = decoded;
+                }
+                let tracks = group
+                    .child_entities
+                    .iter()
+                    .filter_map(|id| self.document.world().effect(*id).ok().flatten())
+                    .collect::<Vec<_>>();
+                changed |= edit_group_links(ui, &mut edited, &tracks);
+                if changed {
+                    match self.document.set_effect_group(snapshot.id, Some(edited)) {
+                        Ok(()) => self.request_preview = true,
+                        Err(error) => self.effect_error(error.to_string()),
+                    }
+                }
+            });
+        }
         let mut children: Vec<_> = self
             .document
             .world()
@@ -1915,7 +2333,13 @@ fn missing_effect_meshes(
             p.mesh.is_some_and(|id| !models.contains_key(&id))
         }
         EffectKind::Weather(w) => w.emitter.mesh.is_some_and(|id| !models.contains_key(&id)),
-        EffectKind::FoliageScatter(f) => f.meshes.iter().any(|id| !models.contains_key(id)),
+        EffectKind::FoliageScatter(f) => {
+            f.surface_target.is_some()
+                || f.meshes
+                    .iter()
+                    .chain(f.weighted_meshes.iter().map(|mesh| &mesh.mesh))
+                    .any(|id| !models.contains_key(id))
+        }
         _ => false,
     }
 }
@@ -1932,11 +2356,15 @@ fn particle_module(name: &str) -> &'static str {
         "lifetime" | "speed" | "direction" | "start_size" | "angular_velocity"
         | "inherit_velocity" => "Initialization",
         "gravity" | "force" | "drag" | "wind_influence" | "noise" | "velocity_limit" => "Movement",
-        "appearance" | "mesh" | "flipbook" | "flipbook_fps" | "stretch" => "Appearance",
+        "appearance" | "mesh" | "mesh_variants" | "flipbook" | "flipbook_fps" | "stretch" => {
+            "Appearance"
+        }
         "collision" | "collision_layers" | "bounce" | "friction" | "collision_response" => {
             "Collision"
         }
-        "sub_emitter" | "sub_emitter_probability" | "max_generations" => "Sub-emitters",
+        "sub_emitter" | "sub_emitter_probability" | "sub_emitters" | "max_generations" => {
+            "Sub-emitters"
+        }
         _ => "Capacity and simulation",
     }
 }
@@ -2012,4 +2440,395 @@ fn prepare_mesh_emission(
         })
         .take(100_000)
         .collect();
+}
+
+fn binding_paths(value: &Value, prefix: &str, result: &mut Vec<String>) {
+    match value {
+        Value::Object(fields) => {
+            for (name, value) in fields {
+                let path = if prefix.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{prefix}.{name}")
+                };
+                binding_paths(value, &path, result);
+            }
+        }
+        Value::Number(_) | Value::Bool(_) | Value::Array(_)
+            if prefix.starts_with("kind.") || prefix.starts_with("common.") =>
+        {
+            result.push(prefix.into());
+        }
+        _ => {}
+    }
+}
+#[allow(
+    clippy::too_many_lines,
+    reason = "validated native parameter and event link editors share one undoable group change"
+)]
+fn edit_group_links(
+    ui: &mut egui::Ui,
+    group: &mut engine_world::effects::EffectGroup,
+    tracks: &[engine_world::effects::EffectComponent],
+) -> bool {
+    use engine_world::effects::{
+        GroupParameterBinding, GroupTriggerBinding, validate_group_bindings,
+    };
+    let mut changed = false;
+    ui.collapsing("Parameter bindings", |ui| {
+        let mut remove = None;
+        for (index, binding) in group.bindings.iter_mut().enumerate() {
+            ui.push_id(index, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(format!(
+                        "{} → track {} / {}",
+                        binding.parameter,
+                        binding.child + 1,
+                        binding.property_path
+                    ));
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut binding.scale)
+                                .speed(0.01)
+                                .prefix("Scale "),
+                        )
+                        .changed();
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut binding.offset)
+                                .speed(0.01)
+                                .prefix("Offset "),
+                        )
+                        .changed();
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                })
+            });
+        }
+        if let Some(index) = remove {
+            group.bindings.remove(index);
+            changed = true;
+        }
+        ui.menu_button("Add parameter binding", |ui| {
+            for parameter in group.parameters.keys() {
+                ui.menu_button(parameter, |ui| {
+                    for (child, effect) in tracks.iter().enumerate() {
+                        ui.menu_button(
+                            format!("Track {} · {}", child + 1, effect.kind.name()),
+                            |ui| {
+                                let mut paths = Vec::new();
+                                binding_paths(
+                                    &serde_json::to_value(effect).unwrap_or(Value::Null),
+                                    "",
+                                    &mut paths,
+                                );
+                                for path in paths {
+                                    let binding = GroupParameterBinding {
+                                        parameter: parameter.clone(),
+                                        child: u32::try_from(child).unwrap_or_default(),
+                                        property_path: path.clone(),
+                                        scale: 1.0,
+                                        offset: 0.0,
+                                    };
+                                    if validate_group_bindings(
+                                        &group.parameters,
+                                        std::slice::from_ref(&binding),
+                                        tracks,
+                                    )
+                                    .is_ok()
+                                        && ui.button(&path).clicked()
+                                    {
+                                        group.bindings.push(binding);
+                                        changed = true;
+                                        ui.close();
+                                    }
+                                }
+                            },
+                        );
+                    }
+                });
+            }
+        });
+    });
+    ui.collapsing("Event links", |ui| {
+        let mut remove = None;
+        for (index, binding) in group.trigger_bindings.iter_mut().enumerate() {
+            ui.push_id(index, |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut binding.source_child)
+                                .range(
+                                    0..=u32::try_from(tracks.len().saturating_sub(1))
+                                        .unwrap_or_default(),
+                                )
+                                .prefix("Source track index "),
+                        )
+                        .changed();
+                    egui::ComboBox::from_id_salt("event")
+                        .selected_text(format!("{:?}", binding.event))
+                        .show_ui(ui, |ui| {
+                            for event in [
+                                engine_world::effects::CompositeTriggerEvent::Birth,
+                                engine_world::effects::CompositeTriggerEvent::Collision,
+                                engine_world::effects::CompositeTriggerEvent::Death,
+                                engine_world::effects::CompositeTriggerEvent::Completed,
+                            ] {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut binding.event,
+                                        event,
+                                        format!("{event:?}"),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    changed |= ui
+                        .add(
+                            egui::DragValue::new(&mut binding.target_child)
+                                .range(
+                                    0..=u32::try_from(tracks.len().saturating_sub(1))
+                                        .unwrap_or_default(),
+                                )
+                                .prefix("Target track index "),
+                        )
+                        .changed();
+                    egui::ComboBox::from_id_salt("action")
+                        .selected_text(format!("{:?}", binding.action))
+                        .show_ui(ui, |ui| {
+                            for action in [
+                                engine_world::effects::CompositeTriggerAction::Play,
+                                engine_world::effects::CompositeTriggerAction::Pause,
+                                engine_world::effects::CompositeTriggerAction::Resume,
+                                engine_world::effects::CompositeTriggerAction::Stop,
+                                engine_world::effects::CompositeTriggerAction::Restart,
+                                engine_world::effects::CompositeTriggerAction::Reset,
+                            ] {
+                                changed |= ui
+                                    .selectable_value(
+                                        &mut binding.action,
+                                        action,
+                                        format!("{action:?}"),
+                                    )
+                                    .changed();
+                            }
+                        });
+                    if ui.small_button("Remove").clicked() {
+                        remove = Some(index);
+                    }
+                })
+            });
+        }
+        if let Some(index) = remove {
+            group.trigger_bindings.remove(index);
+            changed = true;
+        }
+        if !tracks.is_empty() && ui.button("Add event link").clicked() {
+            group.trigger_bindings.push(GroupTriggerBinding::default());
+            changed = true;
+        }
+    });
+    changed
+}
+
+fn effect_handle_name(handle: u8) -> &'static str {
+    match handle {
+        1 => "Emission / volume size",
+        2 => "Beam start",
+        3 => "Beam end",
+        4 => "Force / wind direction",
+        _ => "Entity transform",
+    }
+}
+fn effect_dimensions(kind: &engine_world::effects::EffectKind) -> Option<[f32; 3]> {
+    use engine_world::effects::EffectKind;
+    match kind {
+        EffectKind::Particle(value) | EffectKind::MeshParticle(value) => Some(value.dimensions),
+        EffectKind::Weather(value) => Some(value.emitter.dimensions),
+        EffectKind::ForceField(value) | EffectKind::Wind(value) => Some(value.dimensions),
+        EffectKind::CollisionVolume(value) => Some(value.dimensions),
+        EffectKind::Fog(value) => Some(value.dimensions),
+        EffectKind::Decal(value) => Some(value.dimensions),
+        EffectKind::FoliageScatter(value) => Some(value.dimensions),
+        EffectKind::PostProcess(value) => Some(value.dimensions),
+        EffectKind::ReflectionProbe(value) => Some(value.dimensions),
+        _ => None,
+    }
+}
+fn set_effect_dimensions(kind: &mut engine_world::effects::EffectKind, dimensions: [f32; 3]) {
+    use engine_world::effects::EffectKind;
+    match kind {
+        EffectKind::Particle(value) | EffectKind::MeshParticle(value) => {
+            value.dimensions = dimensions
+        }
+        EffectKind::Weather(value) => value.emitter.dimensions = dimensions,
+        EffectKind::ForceField(value) | EffectKind::Wind(value) => value.dimensions = dimensions,
+        EffectKind::CollisionVolume(value) => value.dimensions = dimensions,
+        EffectKind::Fog(value) => value.dimensions = dimensions,
+        EffectKind::Decal(value) => value.dimensions = dimensions,
+        EffectKind::FoliageScatter(value) => value.dimensions = dimensions,
+        EffectKind::PostProcess(value) => value.dimensions = dimensions,
+        EffectKind::ReflectionProbe(value) => value.dimensions = dimensions,
+        _ => {}
+    }
+}
+#[derive(Clone)]
+struct EffectHandleDrag {
+    entity: engine_world::EntityId,
+    before: engine_world::effects::EffectComponent,
+    after: engine_world::effects::EffectComponent,
+}
+impl crate::EditorViewer<'_> {
+    #[allow(
+        clippy::too_many_lines,
+        reason = "standard transform-gizmo gesture previews and commits one effect property transaction"
+    )]
+    pub(super) fn effect_handle_gizmo(
+        &mut self,
+        ui: &mut egui::Ui,
+        rect: egui::Rect,
+        snapshot: &engine_world::EntitySnapshot,
+        world: glam::Mat4,
+    ) -> bool {
+        use engine_world::effects::EffectKind;
+        use glam::{Mat4, Vec3};
+        let drag_key = egui::Id::new("effect-handle-drag");
+        let mut drag = ui
+            .ctx()
+            .data_mut(|data| data.get_temp::<EffectHandleDrag>(drag_key));
+        let escape = ui.input(|input| input.key_pressed(egui::Key::Escape));
+        if drag.as_ref().is_some_and(|drag| {
+            drag.entity != snapshot.id || !ui.input(|input| input.pointer.primary_down()) || escape
+        }) {
+            let finished = drag.take().unwrap();
+            let result = if escape {
+                self.document
+                    .preview_effect(finished.entity, finished.before)
+            } else {
+                self.document.edit_transaction(
+                    "Edit effect handle",
+                    vec![engine_world::SceneEdit::Effect {
+                        entity: finished.entity,
+                        before: Some(finished.before),
+                        after: Some(finished.after),
+                    }],
+                )
+            };
+            if let Err(error) = result {
+                self.effect_error(error.to_string());
+            }
+            self.request_preview = true;
+            ui.ctx()
+                .data_mut(|data| data.remove::<EffectHandleDrag>(drag_key));
+            if escape {
+                self.gizmo_widget.reset();
+                return true;
+            }
+        }
+        let handle = ui
+            .ctx()
+            .data_mut(|data| data.get_temp::<u8>(egui::Id::new(("effect-handle", snapshot.id))))
+            .unwrap_or_default();
+        let Some(effect) = &snapshot.effect else {
+            return false;
+        };
+        if handle == 0 {
+            return false;
+        }
+        let mut parent = world;
+        let point = match (handle, &effect.kind) {
+            (1, _) => effect
+                .common
+                .bounds
+                .as_ref()
+                .map(|bounds| {
+                    Vec3::from_array(bounds.center) + Vec3::from_array(bounds.half_extents)
+                })
+                .or_else(|| {
+                    effect_dimensions(&effect.kind)
+                        .map(|dimensions| Vec3::from_array(dimensions) * 0.5)
+                }),
+            (2 | 3, EffectKind::Beam(beam)) => {
+                let target = if handle == 2 {
+                    beam.start_target
+                } else {
+                    beam.end_target
+                };
+                parent = target
+                    .and_then(|target| self.document.world().world_transform(target).ok())
+                    .map_or(world, |target| target.0);
+                Some(Vec3::from_array(if handle == 2 {
+                    beam.start
+                } else {
+                    beam.end
+                }))
+            }
+            (4, EffectKind::Wind(field) | EffectKind::ForceField(field)) => Some(
+                Vec3::from_array(field.direction).normalize_or_zero()
+                    * Vec3::from_array(field.dimensions).max_element().max(1.0)
+                    * 0.5,
+            ),
+            _ => None,
+        };
+        let Some(point) = point else {
+            return false;
+        };
+        let mut settings = *self.gizmo;
+        settings.operation = engine_editor::GizmoOperation::Translate;
+        if let Some(after) = self.gizmo_widget.interact(
+            ui,
+            rect,
+            *self.camera,
+            crate::transform_widget::Target {
+                entity: snapshot.id,
+                world: parent * Mat4::from_translation(point),
+                parent,
+            },
+            settings,
+        ) {
+            let mut edited = effect.clone();
+            match (handle, &mut edited.kind) {
+                (1, kind) => {
+                    if let Some(bounds) = &mut edited.common.bounds {
+                        bounds.half_extents = (after.translation - Vec3::from_array(bounds.center))
+                            .abs()
+                            .max(Vec3::splat(0.001))
+                            .to_array();
+                    } else {
+                        set_effect_dimensions(
+                            kind,
+                            (after.translation.abs() * 2.0)
+                                .max(Vec3::splat(0.001))
+                                .to_array(),
+                        );
+                    }
+                }
+                (2, EffectKind::Beam(beam)) => beam.start = after.translation.to_array(),
+                (3, EffectKind::Beam(beam)) => beam.end = after.translation.to_array(),
+                (4, EffectKind::Wind(field) | EffectKind::ForceField(field)) => {
+                    field.direction = after.translation.normalize_or_zero().to_array()
+                }
+                _ => {}
+            }
+            if edited != *effect
+                && self
+                    .document
+                    .preview_effect(snapshot.id, edited.clone())
+                    .is_ok()
+            {
+                let active = drag.get_or_insert(EffectHandleDrag {
+                    entity: snapshot.id,
+                    before: effect.clone(),
+                    after: effect.clone(),
+                });
+                active.after = edited;
+                self.request_preview = true;
+            }
+        }
+        if let Some(drag) = drag {
+            ui.ctx().data_mut(|data| data.insert_temp(drag_key, drag));
+        }
+        true
+    }
 }

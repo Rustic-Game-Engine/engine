@@ -217,6 +217,25 @@ static class Rustic {
         public static Gameplay.Handle followSpeed(string? e,Curve path,double speed,string easing="Linear",bool loop=false,bool pingPong=false,bool orientToPath=false)=>Gameplay.Start(new{kind="path",entity=Gameplay.Entity(e),path,speed,easing,orient_to_path=orientToPath},loop,0,pingPong);
     }
     public static class Effects {
+        public static JsonElement types()=>Query(new{op="effect_types"});
+        public static JsonElement create(string? entity,string kind)=>Query(new{op="effect_create",entity=Gameplay.Entity(entity),kind});
+        public static JsonElement get(string? entity)=>Query(new{op="effect_get",entity=Gameplay.Entity(entity)});
+        public static JsonElement group(string? entity)=>Query(new{op="effect_group_get",entity=Gameplay.Entity(entity)});
+        public static JsonElement configure(string? entity,object settings)=>Query(new{op="effect_configure",entity=Gameplay.Entity(entity),settings});
+        public static JsonElement configureGroup(string? entity,object settings)=>Query(new{op="effect_group_configure",entity=Gameplay.Entity(entity),settings});
+        public static ulong refreshProbe(string? entity)=>Query(new{op="effect_refresh_probe",entity=Gameplay.Entity(entity)}).GetUInt64();
+        public static string state(string? entity)=>Query(new{op="effect_state",entity=Gameplay.Entity(entity)}).GetString()!;
+        public static string instantiate(string asset,string? parent=null,double[]? position=null)=>Query(new{op="effect_instantiate",asset,parent=parent==null?null:Gameplay.Entity(parent),position=position??new double[]{0,0,0}}).GetString()!;
+        public static string spawn(string asset,double[] position,double lifetime,string? parent=null)=>Query(new{op="effect_spawn",asset,parent=parent==null?null:Gameplay.Entity(parent),position,lifetime}).GetString()!;
+        public static JsonElement sampleWind(double[] position,double time,uint layers=uint.MaxValue)=>Query(new{op="effect_wind",position,time,layers});
+        public static void play(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="play"});
+        public static void pause(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="pause"});
+        public static void resume(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="resume"});
+        public static void stop(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="stop"});
+        public static void restart(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="restart"});
+        public static void reset(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="reset"});
+        public static void dispose(string? entity)=>Query(new{op="effect_control",entity=Gameplay.Entity(entity),action="dispose"});
+
         public static Gameplay.Handle flash(string? e,double[] color,double d,string ease="Linear")=>Gameplay.Start(Tween.Action(e,"Color",color,d,ease),false,1,true);
         public static Gameplay.Handle pulse(string? e,double[] scale,double d,string ease="Linear")=>Gameplay.Start(Tween.Action(e,"Scale",scale,d,ease),false,1,true);
         public static Gameplay.Handle shake(string? e,double strength,double duration,string easing="Linear")=>Gameplay.Start(new{kind="shake",entity=Gameplay.Entity(e),strength,duration,easing});

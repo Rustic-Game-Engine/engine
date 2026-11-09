@@ -35,11 +35,17 @@ impl WaterDisturbance {
         if elapsed > self.duration {
             return WaterSample::default();
         }
-        let speed = (p.final_radius - p.initial_radius) / self.duration.max(0.001);
+        let speed = p.expansion_speed.map_or(
+            (p.final_radius - p.initial_radius) / self.duration.max(0.001),
+            |speed| speed * (p.final_radius - p.initial_radius).signum(),
+        );
         let relative = world_position - self.source;
         let radial = Vec2::new(relative.x, relative.z);
         let distance = radial.length();
-        let radius = p.initial_radius + speed * elapsed;
+        let radius = (p.initial_radius + speed * elapsed).clamp(
+            p.initial_radius.min(p.final_radius),
+            p.initial_radius.max(p.final_radius),
+        );
         let band = ((distance - radius) / p.thickness.max(0.01)).abs();
         let envelope = (-band * band * 2.0).exp() * (-elapsed * p.damping.max(0.0)).exp();
         let k = std::f32::consts::TAU / p.wavelength.max(0.01);

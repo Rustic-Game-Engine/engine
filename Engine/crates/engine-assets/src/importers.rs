@@ -131,6 +131,16 @@ impl ImporterRegistry {
                 version: 1,
                 kind: AssetKind::Font,
             }),
+            "cubemap" => Ok(ImporterContract {
+                id: "rustic.cubemap",
+                version: 1,
+                kind: AssetKind::Cubemap,
+            }),
+            "material" => Ok(ImporterContract {
+                id: "rustic.material",
+                version: 1,
+                kind: AssetKind::Material,
+            }),
             "effect" => Ok(ImporterContract {
                 id: "rustic.effect",
                 version: 1,
@@ -158,6 +168,10 @@ impl ImporterRegistry {
                 "rustic.image" => import_image(request).map(DerivedArtifact::Texture),
                 "rustic.audio" => import_audio(request).map(DerivedArtifact::Audio),
                 "rustic.font" => import_font(request).map(DerivedArtifact::Font),
+                "rustic.cubemap" => crate::CubemapAsset::from_bytes(&request.source_bytes)
+                    .map(DerivedArtifact::Cubemap),
+                "rustic.material" => crate::MaterialAsset::from_bytes(&request.source_bytes)
+                    .map(DerivedArtifact::Material),
                 "rustic.effect" => {
                     engine_world::effects::EffectAsset::from_bytes(&request.source_bytes)
                         .map(DerivedArtifact::Effect)

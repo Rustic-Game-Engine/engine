@@ -1,6 +1,7 @@
 use super::{
-    BlendMode, EffectFrame, EffectInput, EffectKind, LightModifier, RenderDecal, RenderFogVolume,
-    RenderLensFlare, RenderLightShaft, RenderOutline, RenderReflectionProbe, SurfaceModifier,
+    BlendMode, EffectFrame, EffectInput, EffectKind, LightModifier, QualityLevel, RenderDecal,
+    RenderDistortion, RenderFogVolume, RenderLensFlare, RenderLightShaft, RenderOutline,
+    RenderReflectionProbe, RenderScreenOverlay, SurfaceModifier, VolumeShape,
 };
 use glam::Vec3;
 
@@ -18,9 +19,10 @@ pub(super) fn extract_modifier(
     let center = input.transform.transform_point3(Vec3::ZERO);
     match &input.effect.kind {
         EffectKind::PostProcess(p) => {
-            let local = input.transform.inverse().transform_point3(camera).abs()
-                - Vec3::from_array(p.dimensions) * 0.5;
-            let distance = local.max(Vec3::ZERO).length();
+            if p.layers & frame.camera_visibility_layers.unwrap_or(u32::MAX) == 0 {
+                return;
+            }
+            let distance = volume_distance(input.transform, p.shape, p.dimensions, camera);
             let weight = if p.global {
                 p.weight
             } else {
@@ -41,17 +43,34 @@ pub(super) fn extract_modifier(
             );
             mix(&mut out.film_grain, p.grain, weight);
             mix(&mut out.depth_of_field, p.depth_of_field, weight);
+            mix(&mut out.motion_blur, p.motion_blur, weight);
+            mix(&mut out.focus_distance, p.focus_distance, weight);
+            mix(&mut out.focus_range, p.focus_range, weight);
+            mix(&mut out.bloom_threshold, p.bloom_threshold, weight);
+            mix(&mut out.bloom_radius, p.bloom_radius, weight);
+            mix(&mut out.temporal_weight, p.temporal_weight, weight);
+            if weight >= 0.5 {
+                out.motion_blur_samples = p.motion_blur_samples;
+            }
             for i in 0..3 {
                 mix(&mut out.tint[i], p.tint[i], weight);
             }
         }
         EffectKind::HeatHaze(p) => {
-            let attenuation = (1.0 - center.distance(camera) / p.radius.max(0.001))
-                .clamp(0.0, 1.0)
-                .powf(p.edge_falloff.max(0.001));
-            frame.post.distortion += p.strength * attenuation;
-            frame.post.distortion_scale = p.noise_scale;
-            frame.post.distortion_speed = p.speed;
+            frame.distortions.push(RenderDistortion {
+                entity: input.entity,
+                inverse_transform: input.transform.inverse(),
+                radius: p.radius,
+                strength: p.strength,
+                noise_scale: p.noise_scale,
+                speed: p.speed,
+                edge_falloff: p.edge_falloff,
+                noise_texture: p.noise_texture,
+                refraction_offset: p.refraction_offset,
+                depth_masking: p.depth_masking,
+                screen_space: p.screen_space,
+                time,
+            });
         }
         EffectKind::ScreenFlash(p) => {
             let attack = if p.fade_in > 0.0 {
@@ -65,19 +84,26 @@ pub(super) fn extract_modifier(
                 1.0
             };
             let alpha = (p.opacity * p.color[3] * attack * release).clamp(0.0, 1.0);
+            frame.overlays.push(RenderScreenOverlay {
+                entity: input.entity,
+                color: p.color,
+                opacity: alpha,
+                vignette: p.vignette,
+                blend: p.blend,
+                screen_mask: p.screen_mask,
+                stacking: p.stacking,
+            });
             match p.blend {
                 BlendMode::Additive => {
                     for i in 0..3 {
                         frame.post.overlay_add[i] += p.color[i] * alpha;
                     }
-                    frame.post.vignette += p.vignette * alpha;
                     return;
                 }
                 BlendMode::Multiply => {
                     for i in 0..3 {
                         frame.post.overlay_multiply[i] *= 1.0 + (p.color[i] - 1.0) * alpha;
                     }
-                    frame.post.vignette += p.vignette * alpha;
                     return;
                 }
                 BlendMode::Alpha => {}
@@ -90,7 +116,6 @@ pub(super) fn extract_modifier(
                 }
             }
             frame.post.overlay[3] = a;
-            frame.post.vignette += p.vignette * alpha;
         }
         EffectKind::CameraShake(p) => {
             let attenuation = if p.radius > 0.0 {
@@ -125,12 +150,22 @@ pub(super) fn extract_modifier(
             }
         }
         EffectKind::AnimatedSurface(p) => {
-            if let Some(target) = p.target {
+            if let Some(target) = p.target.or_else(|| p.target_material.map(|_| input.entity)) {
                 frame.surfaces.push(SurfaceModifier {
+                    is_dissolve: false,
+                    source: input.entity,
                     target,
+                    target_material: p.target_material,
+                    noise_texture: None,
+                    mask_texture: p.mask_texture,
+                    distortion_texture: p.distortion_map,
+                    distortion_strength: p.distortion_strength,
+                    direction: [0.0; 3],
+                    phase: p.phase + time * p.speed,
+                    particle_density: 0.0,
                     uv_offset: [
-                        p.uv_scroll[0] * time * p.speed,
-                        p.uv_scroll[1] * time * p.speed,
+                        p.uv_scroll[0] * (time * p.speed + p.phase),
+                        p.uv_scroll[1] * (time * p.speed + p.phase),
                     ],
                     uv_scale: p.uv_scale,
                     uv_rotation: p.uv_rotation,
@@ -144,16 +179,26 @@ pub(super) fn extract_modifier(
             }
         }
         EffectKind::Dissolve(p) => {
-            if let Some(target) = p.target {
+            if let Some(target) = p.target.or_else(|| p.target_material.map(|_| input.entity)) {
                 frame.surfaces.push(SurfaceModifier {
+                    is_dissolve: true,
+                    source: input.entity,
                     target,
+                    target_material: p.target_material,
+                    noise_texture: p.noise_texture,
+                    mask_texture: p.direction_mask,
+                    distortion_texture: None,
+                    distortion_strength: 0.0,
+                    direction: p.direction,
+                    phase: time,
+                    particle_density: p.particle_density,
                     uv_offset: [0.0; 2],
                     uv_scale: [1.0; 2],
                     uv_rotation: 0.0,
                     dissolve_noise_scale: p.noise_scale,
                     color: [1.0; 4],
                     emission: p.edge_emission,
-                    dissolve: (p.progress + p.curve.sample(progress)).clamp(0.0, 1.0),
+                    dissolve: (p.progress + p.threshold + p.curve.sample(progress)).clamp(0.0, 1.0),
                     edge_width: p.edge_width,
                     edge_color: p.edge_color,
                 });
@@ -170,26 +215,62 @@ pub(super) fn extract_modifier(
             edge_falloff: p.edge_falloff,
             noise_scale: p.noise_scale,
             noise_speed: p.noise_speed,
-            steps: p.steps.clamp(4, 128),
+            noise_texture: p.noise_texture,
+            anisotropy: p.anisotropy,
+            light_scattering: p.light_scattering,
+            max_distance: p.max_distance,
+            temporal_filtering: p.temporal_filtering,
+            time,
+            steps: quality_samples(p.steps, input.effect.common.quality),
         }),
         EffectKind::LightShaft(p) => frame.shafts.push(RenderLightShaft {
+            entity: input.entity,
             light: p.light,
             position: center,
             color: p.color,
             intensity: p.intensity,
             density: p.density,
-            samples: p.samples.clamp(4, 128),
+            samples: quality_samples(p.samples, input.effect.common.quality),
             max_distance: p.max_distance,
+            anisotropy: p.anisotropy,
+            occlusion: p.occlusion,
+            temporal_filtering: p.temporal_filtering,
+            localized: p.localized,
+            inverse_transform: input.transform.inverse(),
+            shape: p.shape,
+            dimensions: p.dimensions,
         }),
         EffectKind::ReflectionProbe(p) => {
-            if let Some(cubemap) = p.cubemap {
+            if p.cubemap.is_some()
+                || p.refresh != super::ProbeRefresh::Baked
+                || p.refresh_revision > 0
+            {
                 frame.probes.push(RenderReflectionProbe {
                     entity: input.entity,
                     position: center,
+                    capture_position: input
+                        .transform
+                        .transform_point3(Vec3::from_array(p.capture_position)),
+                    inverse_transform: input.transform.inverse(),
+                    shape: p.shape,
                     dimensions: p.dimensions,
-                    cubemap,
+                    cubemap: if p.refresh == super::ProbeRefresh::Baked && p.refresh_revision == 0 {
+                        p.cubemap
+                            .unwrap_or_else(|| crate::AssetId::from(*input.entity.as_uuid()))
+                    } else {
+                        crate::AssetId::from(*input.entity.as_uuid())
+                    },
                     blend_distance: p.blend_distance,
                     priority: input.effect.common.priority,
+                    resolution: p.resolution,
+                    refresh: p.refresh,
+                    update_interval: p.update_interval,
+                    parallax_correction: p.parallax_correction,
+                    visibility_layers: p.visibility_layers,
+                    receiver_layers: input.effect.common.visibility_layers,
+                    quality: p.quality,
+                    refresh_revision: p.refresh_revision,
+                    time,
                 });
             }
         }
@@ -219,18 +300,59 @@ pub(super) fn extract_modifier(
             });
         }
         EffectKind::LensFlare(p) => frame.flares.push(RenderLensFlare {
+            entity: input.entity,
             light: p.light,
             position: center,
-            intensity: p.intensity * (time * p.fade_speed.max(0.0)).clamp(0.0, 1.0),
+            intensity: p.intensity,
             scale: p.scale,
             color: p.color,
             ghosts: p.ghosts.min(16),
             ghost_spacing: p.ghost_spacing,
             streak_length: p.streak_length,
+            streak_orientation: p.streak_orientation,
+            texture: p.texture,
+            occlusion: p.occlusion,
+            max_distance: p.max_distance,
+            fade_speed: p.fade_speed,
         }),
         _ => {}
     }
     frame.post.time = time;
+}
+fn quality_samples(samples: u32, quality: QualityLevel) -> u32 {
+    match quality {
+        QualityLevel::Low => samples.div_ceil(2),
+        QualityLevel::Medium => samples,
+        QualityLevel::High => samples.saturating_mul(3) / 2,
+    }
+    .clamp(4, 128)
+}
+fn volume_distance(
+    transform: glam::Mat4,
+    shape: VolumeShape,
+    dimensions: [f32; 3],
+    point: Vec3,
+) -> f32 {
+    let local = transform.inverse().transform_point3(point);
+    let half = Vec3::from_array(dimensions) * 0.5;
+    let closest = match shape {
+        VolumeShape::Sphere => {
+            let radius = (local / half).length();
+            if radius <= 1. { local } else { local / radius }
+        }
+        VolumeShape::Cylinder => {
+            let radius = glam::Vec2::new(local.x / half.x, local.z / half.z)
+                .length()
+                .max(1.);
+            Vec3::new(
+                local.x / radius,
+                local.y.clamp(-half.y, half.y),
+                local.z / radius,
+            )
+        }
+        VolumeShape::Box | VolumeShape::Plane => local.clamp(-half, half),
+    };
+    transform.transform_vector3(local - closest).length()
 }
 fn mix(a: &mut f32, b: f32, w: f32) {
     *a += (b - *a) * w;

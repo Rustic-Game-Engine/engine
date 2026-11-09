@@ -13,7 +13,7 @@ glam.workspace = true
 image.workspace = true
 half = "2.7.1"
 engine-rhi = { path = "../engine-rhi", version = "0.1.0" }
-naga.workspace = true
+naga = { workspace = true, features = ["glsl-out"] }
 pollster.workspace = true
 sha2.workspace = true
 thiserror.workspace = true

@@ -10,7 +10,7 @@ Configuration type: `EffectCommon`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
-| `parameters` | `std::collections::BTreeMap<String, EffectParameter>` | `Default::default()` | parameters |
+| `parameters` | `std::collections::BTreeMap<String, EffectParameter>` | `std::collections::BTreeMap::default()` | parameters |
 | `bounds` | `Option<EffectBounds>` | `None` | bounds |
 | `enabled` | `bool` | `true` | enabled |
 | `visible` | `bool` | `true` | visible |
@@ -61,6 +61,11 @@ Configuration type: `TrailRenderer`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `start_width` | `Option<f32>` | `None` | start width |
+| `end_width` | `Option<f32>` | `None` | end width |
+| `corner_vertices` | `u32` | `0` | corner vertices |
+| `cap_vertices` | `u32` | `0` | cap vertices |
+| `smoothing` | `u32` | `0` | smoothing |
 | `emitting` | `bool` | `true` | emitting |
 | `lifetime` | `f32` | `1.0` | seconds or [minimum, maximum] seconds |
 | `width` | `f32` | `0.2` | scene units |
@@ -76,6 +81,23 @@ Configuration type: `ParticleEmitter`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `soft_particle_distance` | `f32` | `0.0` | soft particle distance |
+| `cast_shadows` | `bool` | `true` | cast shadows |
+| `receive_shadows` | `bool` | `true` | receive shadows |
+| `sorting` | `ParticleSortMode` | `ParticleSortMode::Distance` | sorting |
+| `turbulence` | `f32` | `0.0` | turbulence |
+| `simulation_mode` | `super::ParticleSimulationMode` | `super::ParticleSimulationMode::Cpu` | simulation mode |
+| `initial_velocity` | `[f32; 3]` | `[0.0; 3]` | initial velocity |
+| `start_scale` | `[[f32; 3]; 2]` | `[[1.0; 3]; 2]` | start scale |
+| `start_rotation` | `[[f32; 3]; 2]` | `[[0.0; 3], [0.0, 0.0, std::f32::consts::TAU]]` | start rotation |
+| `angular_velocity_range` | `[[f32; 3]; 2]` | `[[0.0; 3]; 2]` | angular velocity range |
+| `velocity_over_lifetime` | `[Curve; 3]` | `std::array::from_fn(&#124;_&#124; Curve::constant(0.0))` | velocity over lifetime |
+| `rotation_over_lifetime` | `Curve` | `Curve::constant(0.0)` | rotation over lifetime |
+| `mesh_variants` | `Vec<WeightedParticleMesh>` | `Vec::new()` | mesh variants |
+| `sub_emitters` | `Vec<ParticleSubEmitter>` | `Vec::new()` | sub emitters |
+| `offscreen_behavior` | `ParticleOffscreenBehavior` | `ParticleOffscreenBehavior::Simulate` | offscreen behavior |
+| `collision_quality` | `ParticleCollisionQuality` | `ParticleCollisionQuality::Swept` | collision quality |
+| `generate_events` | `bool` | `true` | generate events |
 | `prewarm` | `bool` | `false` | prewarm |
 | `prewarm_time` | `f32` | `5.0` | prewarm time |
 | `max_particles` | `u32` | `1000` | max particles |
@@ -118,6 +140,11 @@ Configuration type: `BeamRenderer`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `branch_probability` | `f32` | `1.0` | branch probability |
+| `branch_width_scale` | `f32` | `0.5` | branch width scale |
+| `pulse_speed` | `f32` | `0.0` | pulse speed |
+| `endpoint_collision` | `bool` | `false` | endpoint collision |
+| `collision_layers` | `u32` | `u32::MAX` | collision layers |
 | `start_target` | `Option<EntityId>` | `None` | start target |
 | `end_target` | `Option<EntityId>` | `None` | end target |
 | `start` | `[f32; 3]` | `[0.0; 3]` | start |
@@ -136,6 +163,13 @@ Configuration type: `RingEffect`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `expansion_speed` | `Option<f32>` | `None` | optional scene units / second |
+| `edge_softness` | `f32` | `0.0` | edge softness |
+| `align_to_surface` | `bool` | `false` | align to surface |
+| `surface_layers` | `u32` | `u32::MAX` | surface layers |
+| `displacement_strength` | `f32` | `0.0` | displacement strength |
+| `displacement_frequency` | `f32` | `4.0` | displacement frequency |
+| `screen_distortion` | `f32` | `0.0` | screen distortion |
 | `target` | `Option<EntityId>` | `None` | target |
 | `source_velocity` | `[f32; 3]` | `[0.0; 3]` | source velocity |
 | `wake_angle` | `f32` | `0.6` | wake angle |
@@ -158,6 +192,23 @@ Configuration type: `ParticleEmitter`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `soft_particle_distance` | `f32` | `0.0` | soft particle distance |
+| `cast_shadows` | `bool` | `true` | cast shadows |
+| `receive_shadows` | `bool` | `true` | receive shadows |
+| `sorting` | `ParticleSortMode` | `ParticleSortMode::Distance` | sorting |
+| `turbulence` | `f32` | `0.0` | turbulence |
+| `simulation_mode` | `super::ParticleSimulationMode` | `super::ParticleSimulationMode::Cpu` | simulation mode |
+| `initial_velocity` | `[f32; 3]` | `[0.0; 3]` | initial velocity |
+| `start_scale` | `[[f32; 3]; 2]` | `[[1.0; 3]; 2]` | start scale |
+| `start_rotation` | `[[f32; 3]; 2]` | `[[0.0; 3], [0.0, 0.0, std::f32::consts::TAU]]` | start rotation |
+| `angular_velocity_range` | `[[f32; 3]; 2]` | `[[0.0; 3]; 2]` | angular velocity range |
+| `velocity_over_lifetime` | `[Curve; 3]` | `std::array::from_fn(&#124;_&#124; Curve::constant(0.0))` | velocity over lifetime |
+| `rotation_over_lifetime` | `Curve` | `Curve::constant(0.0)` | rotation over lifetime |
+| `mesh_variants` | `Vec<WeightedParticleMesh>` | `Vec::new()` | mesh variants |
+| `sub_emitters` | `Vec<ParticleSubEmitter>` | `Vec::new()` | sub emitters |
+| `offscreen_behavior` | `ParticleOffscreenBehavior` | `ParticleOffscreenBehavior::Simulate` | offscreen behavior |
+| `collision_quality` | `ParticleCollisionQuality` | `ParticleCollisionQuality::Swept` | collision quality |
+| `generate_events` | `bool` | `true` | generate events |
 | `prewarm` | `bool` | `false` | prewarm |
 | `prewarm_time` | `f32` | `5.0` | prewarm time |
 | `max_particles` | `u32` | `1000` | max particles |
@@ -200,6 +251,7 @@ Configuration type: `RibbonRenderer`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `animation_speed` | `f32` | `0.0` | path units / second |
 | `points` | `Vec<[f32; 3]>` | `vec![[0.0; 3], [1.0, 1.0, 0.0], [2.0, 0.0, 0.0]]` | points |
 | `width` | `f32` | `0.2` | scene units |
 | `tube` | `bool` | `false` | tube |
@@ -214,6 +266,14 @@ Configuration type: `ForceField`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `vortex_speed` | `f32` | `1.0` | dimensionless angular multiplier |
+| `drag_influence` | `f32` | `0.0` | drag influence |
+| `gust_strength` | `f32` | `0.0` | acceleration / wind-strength units |
+| `gust_frequency` | `f32` | `1.0` | Hz |
+| `noise_scale` | `f32` | `1.0` | world-space noise divisor |
+| `affect_particles` | `bool` | `true` | affect particles |
+| `affect_foliage` | `bool` | `true` | affect foliage |
+| `affect_materials` | `bool` | `true` | affect materials |
 | `shape` | `VolumeShape` | `VolumeShape::Sphere` | shape |
 | `dimensions` | `[f32; 3]` | `[5.0; 3]` | scene units, XYZ |
 | `force_type` | `ForceType` | `ForceType::Directional` | force type |
@@ -231,6 +291,7 @@ Configuration type: `CollisionVolume`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `quality` | `ParticleCollisionQuality` | `ParticleCollisionQuality::Swept` | quality |
 | `shape` | `VolumeShape` | `VolumeShape::Plane` | shape |
 | `dimensions` | `[f32; 3]` | `[10.0; 3]` | scene units, XYZ |
 | `layers` | `u32` | `u32::MAX` | unsigned bit mask |
@@ -245,6 +306,11 @@ Configuration type: `ProjectileTracer`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `start_position` | `[f32; 3]` | `[0.0; 3]` | start position |
+| `end_position` | `Option<[f32; 3]>` | `None` | end position |
+| `end_target` | `Option<EntityId>` | `None` | end target |
+| `tail_fade` | `f32` | `1.0` | tail fade |
+| `velocity_stretch` | `f32` | `0.0` | velocity stretch |
 | `velocity` | `[f32; 3]` | `[0.0, 0.0, 10.0]` | velocity |
 | `length` | `f32` | `2.0` | length |
 | `width` | `f32` | `0.05` | scene units |
@@ -262,10 +328,14 @@ Configuration type: `FogVolume`.
 | `color` | `[f32; 3]` | `[0.6, 0.7, 0.8]` | RGBA linear color |
 | `height_falloff` | `f32` | `0.5` | height falloff |
 | `edge_falloff` | `f32` | `1.0` | edge falloff |
-| `noise_scale` | `f32` | `1.0` | noise scale |
+| `noise_scale` | `f32` | `1.0` | world-space noise divisor |
 | `noise_speed` | `f32` | `0.1` | noise speed |
 | `anisotropy` | `f32` | `0.0` | anisotropy |
 | `steps` | `u32` | `32` | steps |
+| `noise_texture` | `Option<AssetId>` | `None` | noise texture |
+| `light_scattering` | `f32` | `1.0` | light scattering |
+| `max_distance` | `f32` | `1000.0` | scene units |
+| `temporal_filtering` | `f32` | `0.85` | temporal filtering |
 
 ## 11. Decal
 
@@ -289,8 +359,13 @@ Configuration type: `WeatherVolume`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `splash_effect` | `Option<AssetId>` | `None` | splash effect |
+| `accumulation` | `f32` | `0.0` | accumulation |
+| `accumulation_lifetime` | `f32` | `30.0` | accumulation lifetime |
+| `max_accumulation` | `u32` | `1024` | max accumulation |
+| `density_falloff` | `f32` | `0.0` | density falloff |
 | `weather` | `WeatherType` | `WeatherType::Rain` | weather |
-| `emitter` | `ParticleEmitter` | `Box, [20,10,20], downward [8,10], rate 200, lifetime [2,3]` | emitter |
+| `emitter` | `ParticleEmitter` | `emitter` | emitter |
 | `intensity` | `f32` | `1.0` | intensity |
 | `camera_follow` | `bool` | `false` | camera follow |
 
@@ -300,6 +375,13 @@ Configuration type: `RingEffect`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `expansion_speed` | `Option<f32>` | `None` | optional scene units / second |
+| `edge_softness` | `f32` | `0.0` | edge softness |
+| `align_to_surface` | `bool` | `false` | align to surface |
+| `surface_layers` | `u32` | `u32::MAX` | surface layers |
+| `displacement_strength` | `f32` | `0.0` | displacement strength |
+| `displacement_frequency` | `f32` | `4.0` | displacement frequency |
+| `screen_distortion` | `f32` | `0.0` | screen distortion |
 | `target` | `Option<EntityId>` | `None` | target |
 | `source_velocity` | `[f32; 3]` | `[0.0; 3]` | source velocity |
 | `wake_angle` | `f32` | `0.6` | wake angle |
@@ -322,6 +404,14 @@ Configuration type: `ForceField`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `vortex_speed` | `f32` | `1.0` | dimensionless angular multiplier |
+| `drag_influence` | `f32` | `0.0` | drag influence |
+| `gust_strength` | `f32` | `0.0` | acceleration / wind-strength units |
+| `gust_frequency` | `f32` | `1.0` | Hz |
+| `noise_scale` | `f32` | `1.0` | world-space noise divisor |
+| `affect_particles` | `bool` | `true` | affect particles |
+| `affect_foliage` | `bool` | `true` | affect foliage |
+| `affect_materials` | `bool` | `true` | affect materials |
 | `shape` | `VolumeShape` | `VolumeShape::Sphere` | shape |
 | `dimensions` | `[f32; 3]` | `[5.0; 3]` | scene units, XYZ |
 | `force_type` | `ForceType` | `ForceType::Directional` | force type |
@@ -340,10 +430,14 @@ Configuration type: `DistortionEffect`.
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
 | `strength` | `f32` | `0.01` | strength |
-| `noise_scale` | `f32` | `10.0` | noise scale |
+| `noise_scale` | `f32` | `10.0` | world-space noise divisor |
 | `speed` | `f32` | `1.0` | scene units/second |
 | `radius` | `f32` | `3.0` | scene units |
 | `edge_falloff` | `f32` | `1.0` | edge falloff |
+| `noise_texture` | `Option<AssetId>` | `None` | noise texture |
+| `refraction_offset` | `[f32; 2]` | `[0.0; 2]` | refraction offset |
+| `depth_masking` | `bool` | `true` | depth masking |
+| `screen_space` | `bool` | `false` | screen space |
 
 ## 16. LightShaft
 
@@ -356,8 +450,13 @@ Configuration type: `LightShaft`.
 | `color` | `[f32; 3]` | `[1.0, 0.9, 0.6]` | RGBA linear color |
 | `density` | `f32` | `0.1` | density |
 | `anisotropy` | `f32` | `0.5` | anisotropy |
-| `max_distance` | `f32` | `100.0` | max distance |
+| `max_distance` | `f32` | `100.0` | scene units |
 | `samples` | `u32` | `32` | samples |
+| `occlusion` | `bool` | `true` | occlusion |
+| `temporal_filtering` | `f32` | `0.85` | temporal filtering |
+| `localized` | `bool` | `false` | localized |
+| `shape` | `VolumeShape` | `VolumeShape::Box` | shape |
+| `dimensions` | `[f32; 3]` | `[10.0; 3]` | dimensions |
 
 ## 17. FoliageScatter
 
@@ -365,6 +464,16 @@ Configuration type: `FoliageScatter`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `weighted_meshes` | `Vec<WeightedParticleMesh>` | `Vec::new()` | weighted meshes |
+| `surface_target` | `Option<EntityId>` | `None` | surface target |
+| `surface_triangles` | `Vec<[[f32; 3]; 3]>` | `Vec::new()` | surface triangles |
+| `slope` | `[f32; 2]` | `[0.0, 90.0]` | slope |
+| `height` | `[f32; 2]` | `[-1.0e8, 1.0e8]` | height |
+| `rotation` | `[f32; 2]` | `[0.0, std::f32::consts::TAU]` | rotation |
+| `align_to_surface` | `bool` | `true` | align to surface |
+| `lod` | `Vec<ScatterLod>` | `Vec::new()` | lod |
+| `cast_shadows` | `bool` | `true` | cast shadows |
+| `receive_shadows` | `bool` | `true` | receive shadows |
 | `meshes` | `Vec<AssetId>` | `vec![]` | meshes |
 | `density` | `f32` | `1.0` | density |
 | `dimensions` | `[f32; 3]` | `[10.0, 1.0, 10.0]` | scene units, XYZ |
@@ -380,11 +489,17 @@ Configuration type: `DissolveEffect`.
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
 | `target` | `Option<EntityId>` | `None` | target |
+| `target_material` | `Option<AssetId>` | `None` | target material |
+| `noise_texture` | `Option<AssetId>` | `None` | noise texture |
+| `direction_mask` | `Option<AssetId>` | `None` | direction mask |
+| `direction` | `[f32; 3]` | `[0.0; 3]` | direction |
+| `threshold` | `f32` | `0.0` | threshold |
+| `particle_density` | `f32` | `0.0` | particle density |
 | `progress` | `f32` | `0.0` | progress |
 | `edge_width` | `f32` | `0.05` | edge width |
 | `edge_color` | `[f32; 3]` | `[1.0, 0.4, 0.0]` | edge color |
 | `edge_emission` | `f32` | `3.0` | edge emission |
-| `noise_scale` | `f32` | `10.0` | noise scale |
+| `noise_scale` | `f32` | `10.0` | world-space noise divisor |
 | `curve` | `Curve` | `Curve::linear(0.0, 1.0)` | curve |
 
 ## 19. AnimatedSurface
@@ -394,12 +509,17 @@ Configuration type: `AnimatedSurface`.
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
 | `target` | `Option<EntityId>` | `None` | target |
+| `target_material` | `Option<AssetId>` | `None` | target material |
 | `uv_scroll` | `[f32; 2]` | `[0.2, 0.0]` | UV units/second |
 | `uv_scale` | `[f32; 2]` | `[1.0; 2]` | uv scale |
 | `uv_rotation` | `f32` | `0.0` | uv rotation |
 | `color` | `Gradient` | `Gradient::default()` | RGBA linear color |
 | `emission` | `f32` | `1.0` | emission |
 | `speed` | `f32` | `1.0` | scene units/second |
+| `phase` | `f32` | `0.0` | phase |
+| `distortion_map` | `Option<AssetId>` | `None` | distortion map |
+| `distortion_strength` | `f32` | `0.0` | distortion strength |
+| `mask_texture` | `Option<AssetId>` | `None` | mask texture |
 
 ## 20. LensFlare
 
@@ -416,6 +536,9 @@ Configuration type: `LensFlare`.
 | `streak_length` | `f32` | `0.3` | streak length |
 | `fade_speed` | `f32` | `5.0` | fade speed |
 | `texture` | `Option<AssetId>` | `None` | texture |
+| `streak_orientation` | `f32` | `0.0` | radians |
+| `occlusion` | `bool` | `true` | occlusion |
+| `max_distance` | `f32` | `1000.0` | scene units |
 
 ## 21. LightPulse
 
@@ -450,6 +573,16 @@ Configuration type: `PostProcessVolume`.
 | `chromatic_aberration` | `f32` | `0.0` | chromatic aberration |
 | `grain` | `f32` | `0.0` | grain |
 | `depth_of_field` | `f32` | `0.0` | depth of field |
+| `motion_blur` | `f32` | `0.0` | motion blur |
+| `motion_blur_samples` | `u32` | `12` | motion blur samples |
+| `focus_distance` | `f32` | `0.0` | focus distance |
+| `focus_range` | `f32` | `5.0` | focus range |
+| `bloom_threshold` | `f32` | `1.0` | bloom threshold |
+| `bloom_radius` | `f32` | `4.0` | bloom radius |
+| `temporal_weight` | `f32` | `0.0` | temporal weight |
+| `shape` | `VolumeShape` | `VolumeShape::Box` | shape |
+| `camera` | `Option<EntityId>` | `None` | camera |
+| `layers` | `u32` | `u32::MAX` | layers |
 
 ## 23. Outline
 
@@ -489,6 +622,8 @@ Configuration type: `ScreenFlash`.
 | `fade_out` | `f32` | `0.4` | fade out |
 | `vignette` | `f32` | `0.5` | vignette |
 | `blend` | `BlendMode` | `BlendMode::Alpha` | blend |
+| `screen_mask` | `Option<AssetId>` | `None` | screen mask |
+| `stacking` | `OverlayStacking` | `OverlayStacking::Composite` | stacking |
 
 ## 26. ReflectionProbe
 
@@ -496,13 +631,18 @@ Configuration type: `ReflectionProbe`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `shape` | `VolumeShape` | `VolumeShape::Box` | shape |
 | `dimensions` | `[f32; 3]` | `[10.0; 3]` | scene units, XYZ |
+| `capture_position` | `[f32; 3]` | `[0.0; 3]` | capture position |
 | `cubemap` | `Option<AssetId>` | `None` | cubemap |
 | `resolution` | `u32` | `128` | resolution |
 | `refresh` | `ProbeRefresh` | `ProbeRefresh::Baked` | refresh |
 | `blend_distance` | `f32` | `1.0` | blend distance |
 | `update_interval` | `f32` | `1.0` | update interval |
 | `parallax_correction` | `bool` | `false` | parallax correction |
+| `visibility_layers` | `u32` | `u32::MAX` | visibility layers |
+| `quality` | `QualityLevel` | `QualityLevel::Medium` | quality |
+| `refresh_revision` | `u64` | `0` | refresh revision |
 
 ## Source asset identity
 
@@ -515,3 +655,71 @@ Effect assets support version 1, one to 128 children, and at most 4 MiB. Duratio
 ## Composite child metadata
 
 EffectAsset version 1 optionally stores `entity_ids` and `transforms`, each empty or the same length as `effects`. IDs must be unique; transforms are column-major finite nonsingular TRS matrices relative to the group. `instances_with_ids(asset_id)` creates independent child snapshots, remaps internal targets to fresh IDs and records the remapped source baseline. Missing metadata preserves legacy identity transforms.
+
+
+## ParticleSubEmitter
+
+Configuration type: `ParticleSubEmitter`.
+
+| Field | Type | Default | Units / interpretation |
+| --- | --- | --- | --- |
+| `trigger` | `ParticleTrigger` | `ParticleTrigger::Birth` | trigger |
+| `effect` | `AssetId` | `AssetId::default()` | effect |
+| `probability` | `f32` | `1.0` | probability |
+| `inherit_velocity` | `f32` | `0.0` | inherit velocity |
+
+
+## GroupParameterBinding
+
+Configuration type: `GroupParameterBinding`.
+
+| Field | Type | Default | Units / interpretation |
+| --- | --- | --- | --- |
+| `parameter` | `String` | `"power".into()` | parameter |
+| `child` | `u32` | `0` | child |
+| `property_path` | `String` | `"kind.Particle.rate".into()` | property path |
+| `scale` | `f32` | `1.0` | scale |
+| `offset` | `f32` | `0.0` | offset |
+
+
+## GroupTriggerBinding
+
+Configuration type: `GroupTriggerBinding`.
+
+| Field | Type | Default | Units / interpretation |
+| --- | --- | --- | --- |
+| `source_child` | `u32` | `0` | source child |
+| `event` | `CompositeTriggerEvent` | `Completed` | event |
+| `target_child` | `u32` | `0` | target child |
+| `action` | `CompositeTriggerAction` | `Play` | action |
+
+
+## EffectGroupSettings
+
+Configuration type: `EffectGroupSettings`.
+
+| Field | Type | Default | Units / interpretation |
+| --- | --- | --- | --- |
+| `auto_play` | `bool` | `true` | auto play |
+| `looping` | `bool` | `false` | looping |
+| `duration` | `f32` | `5.0` | seconds |
+| `time_scale` | `f32` | `1.0` | clock multiplier |
+
+
+## EffectGroup
+
+Configuration type: `EffectGroup`.
+
+| Field | Type | Default | Units / interpretation |
+| --- | --- | --- | --- |
+| `source` | `Option<AssetId>` | `None` | source |
+| `sound_cues` | `Vec<EffectSoundCue>` | `Vec::new()` | sound cues |
+| `auto_play` | `bool` | `true` | auto play |
+| `looping` | `bool` | `false` | looping |
+| `duration` | `f32` | `5.0` | seconds |
+| `time_scale` | `f32` | `1.0` | clock multiplier |
+| `parameters` | `BTreeMap<String, super::EffectParameter>` | `BTreeMap::new()` | parameters |
+| `bindings` | `Vec<super::GroupParameterBinding>` | `Vec::new()` | bindings |
+| `trigger_bindings` | `Vec<super::GroupTriggerBinding>` | `Vec::new()` | trigger bindings |
+| `child_entities` | `Vec<EntityId>` | `Vec::new()` | child entities |
+| `source_baseline` | `Option<Box<EffectGroupDefaults>>` | `None` | source baseline |

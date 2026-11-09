@@ -1201,8 +1201,74 @@ mod tests {
             Err("not declared".into())
         }
         fn set_enabled(&mut self, _enabled: bool) {}
+        #[allow(
+            clippy::too_many_lines,
+            reason = "shared conformance host validates complete native service request shapes"
+        )]
         fn gameplay_query(&mut self, query: Value) -> Result<Value, String> {
             match query["op"].as_str().unwrap_or("") {
+                op if op.starts_with("effect_") => {
+                    let result = match op {
+                        "effect_types" => json!(["ReflectionProbe"]),
+                        "effect_create" | "effect_get" | "effect_configure" => {
+                            assert_eq!(query["entity"], self.entity.to_string());
+                            if op == "effect_create" {
+                                assert_eq!(query["kind"], "ReflectionProbe");
+                            }
+                            if op == "effect_configure" {
+                                assert_eq!(
+                                    query["settings"]["common"]["parameters"]["power"]["Scalar"],
+                                    3
+                                );
+                            }
+                            json!({"kind":{"ReflectionProbe":{}},"common":{"enabled":true}})
+                        }
+                        "effect_group_get" | "effect_group_configure" => {
+                            assert_eq!(query["entity"], self.entity.to_string());
+                            if op == "effect_group_configure" {
+                                assert_eq!(query["settings"]["duration"], 2);
+                            }
+                            json!({"duration":2})
+                        }
+                        "effect_refresh_probe" => json!(7),
+                        "effect_state" => json!("Playing"),
+                        "effect_instantiate" | "effect_spawn" => {
+                            assert_eq!(
+                                query["position"]
+                                    .as_array()
+                                    .unwrap()
+                                    .iter()
+                                    .map(|value| value.as_f64().unwrap())
+                                    .collect::<Vec<_>>(),
+                                vec![1., 2., 3.]
+                            );
+                            assert!(query["parent"].is_null());
+                            if op == "effect_spawn" {
+                                assert_eq!(query["lifetime"].as_f64(), Some(1.));
+                            }
+                            json!(self.entity.to_string())
+                        }
+                        "effect_wind" => {
+                            assert_eq!(query["layers"], 4);
+                            assert_eq!(query["time"].as_f64(), Some(2.));
+                            json!([1, 2, 3])
+                        }
+                        "effect_control" => {
+                            assert_eq!(query["entity"], self.entity.to_string());
+                            assert!(
+                                [
+                                    "play", "pause", "resume", "stop", "restart", "reset",
+                                    "dispose"
+                                ]
+                                .contains(&query["action"].as_str().unwrap())
+                            );
+                            Value::Null
+                        }
+                        _ => return Err("unknown effect query".into()),
+                    };
+                    self.translation[0] += 1.0;
+                    Ok(result)
+                }
                 "test_delay" => {
                     std::thread::sleep(Duration::from_millis(
                         query["milliseconds"].as_u64().unwrap(),
@@ -1244,6 +1310,51 @@ mod tests {
                 _ => Err("unsupported gameplay query".into()),
             }
         }
+    }
+
+    #[test]
+    fn scene_effect_native_facades_preserve_queries_json_and_owned_results() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::C,"effects.c",br#"#include "rustic.h"
+#include <assert.h>
+void start(void){assert(strstr(Effects.types(),"ReflectionProbe"));Effects.create(NULL,"ReflectionProbe");const char *retained=Effects.get(NULL);Effects.configure(NULL,"{\"common\":{\"parameters\":{\"power\":{\"Scalar\":3}}}}");assert(strstr(retained,"ReflectionProbe"));assert(strstr(Effects.group(NULL),"duration"));Effects.configureGroup(NULL,"{\"duration\":2}");assert(Effects.refreshProbe(NULL)==7);assert(!strcmp(Effects.state(NULL),"Playing"));Effects.instantiate("asset",NULL,(RusticVector3){1,2,3});Effects.spawn("asset",(RusticVector3){1,2,3},1,NULL);assert(Effects.sampleWind((RusticVector3){1,2,3},2,4).z==3);Effects.play(NULL);Effects.pause(NULL);Effects.resume(NULL);Effects.stop(NULL);Effects.restart(NULL);Effects.reset(NULL);Effects.dispose(NULL);}
+int main(void){return rustic_run((RusticBehavior){.on_start=start});}"#),
+            (ScriptLanguage::Cpp,"effects.cpp",br#"#include "rustic.hpp"
+#include <cassert>
+void start(){assert(Effects::types().array().size()==1);Effects::create("","ReflectionProbe");auto retained=Effects::get();Effects::configure("",rustic_detail::object({{"common",rustic_detail::object({{"parameters",rustic_detail::object({{"power",rustic_detail::object({{"Scalar",3}})}})}})}}));assert(retained.at("common").at("enabled").boolean());Effects::group();Effects::configureGroup("",rustic_detail::object({{"duration",2}}));assert(Effects::refreshProbe().number()==7);assert(Effects::state()=="Playing");Effects::instantiate("asset","",{1,2,3});Effects::spawn("asset",{1,2,3},1);assert(Effects::sampleWind({1,2,3},2,4).z==3);Effects::play();Effects::pause();Effects::resume();Effects::stop();Effects::restart();Effects::reset();Effects::dispose();}
+int main(){return rustic_run(RusticBehavior{.on_start=start});}"#),
+            (ScriptLanguage::CSharp,"effects.cs",br#"using static Rustic;
+class Program{static void Main()=>Rustic.Run((c,dt)=>{if(c!="on_start")return;Effects.types();Effects.create(null,"ReflectionProbe");var retained=Effects.get(null);Effects.configure(null,new{common=new{parameters=new{power=new{Scalar=3}}}});if(!retained.GetProperty("common").GetProperty("enabled").GetBoolean())throw new System.Exception("owned result");Effects.group(null);Effects.configureGroup(null,new{duration=2});if(Effects.refreshProbe(null)!=7||Effects.state(null)!="Playing")throw new System.Exception("state");Effects.instantiate("asset",position:new double[]{1,2,3});Effects.spawn("asset",new double[]{1,2,3},1);Effects.sampleWind(new double[]{1,2,3},2,4);Effects.play(null);Effects.pause(null);Effects.resume(null);Effects.stop(null);Effects.restart(null);Effects.reset(null);Effects.dispose(null);});}"#),
+            (ScriptLanguage::Java,"effects.java",br#"class RusticBehavior extends Rustic{public static void main(String[]args)throws Exception{run((c,dt)->{if(!c.equals("on_start"))return;Effects.types();Effects.create(null,"ReflectionProbe");var retained=(java.util.Map<?,?>)Effects.get(null);Effects.configure(null,java.util.Map.of("common",java.util.Map.of("parameters",java.util.Map.of("power",java.util.Map.of("Scalar",3)))));if(!((java.util.Map<?,?>)retained.get("common")).get("enabled").equals(true))throw new AssertionError("owned result");Effects.group(null);Effects.configureGroup(null,java.util.Map.of("duration",2));if(Effects.refreshProbe(null)!=7||!Effects.state(null).equals("Playing"))throw new AssertionError("state");Effects.instantiate("asset",null,new double[]{1,2,3});Effects.spawn("asset",new double[]{1,2,3},1,null);Effects.sampleWind(new double[]{1,2,3},2,4);Effects.play(null);Effects.pause(null);Effects.resume(null);Effects.stop(null);Effects.restart(null);Effects.reset(null);Effects.dispose(null);});}}"#),
+            (ScriptLanguage::Php,"effects.php",br#"<?php require_once 'rustic.php';
+rustic_run(['on_start'=>function(){Effects::types();Effects::create(null,'ReflectionProbe');$retained=Effects::get(null);Effects::configure(null,['common'=>['parameters'=>['power'=>['Scalar'=>3]]]]);if(!$retained['common']['enabled'])throw new Exception('owned result');Effects::group(null);Effects::configureGroup(null,['duration'=>2]);if(Effects::refreshProbe(null)!==7||Effects::state(null)!=='Playing')throw new Exception('state');Effects::instantiate('asset',null,[1,2,3]);Effects::spawn('asset',[1,2,3],1);Effects::sampleWind([1,2,3],2,4);Effects::play(null);Effects::pause(null);Effects::resume(null);Effects::stop(null);Effects::restart(null);Effects::reset(null);Effects::dispose(null);}]);"#),
+        ];
+        let mut available = 0;
+        for &(language, name, source) in fixtures {
+            if !probe_language_toolchain(language).available {
+                assert!(
+                    std::env::var_os("RUSTIC_REQUIRE_ALL_API_ADAPTERS").is_none(),
+                    "{} toolchain required for scene effects conformance",
+                    language.display_name()
+                );
+                continue;
+            }
+            available += 1;
+            let host: Box<dyn GameplayHost> = Box::new(Host {
+                entity: EntityId::new(),
+                translation: [0.; 3],
+            });
+            let mut behavior =
+                ExternalBehavior::load(ScriptId::new(), language, source, name, host).unwrap();
+            behavior.on_start().unwrap();
+            assert_eq!(
+                behavior.host().lock().unwrap().translation(),
+                [18., 0., 0.],
+                "{}",
+                language.display_name()
+            );
+        }
+        assert!(available > 0, "at least one native SDK adapter must run");
     }
 
     #[test]

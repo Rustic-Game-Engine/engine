@@ -336,9 +336,9 @@ fn paused_slow_sub_effect_uses_playback_time_and_cleans_up_after_resume() {
     world.update_effects(0.01);
     let child_id = world
         .entity_ids()
-        .find(|entity| *entity != source_id)
-        .expect("birth spawns child");
-    assert_eq!(world.entity_count(), 2);
+        .find(|entity| world.effect_group(*entity).unwrap().is_some())
+        .expect("birth spawns composite child root");
+    assert_eq!(world.entity_count(), 3);
     world
         .control_effect(source_id, PlaybackCommand::Pause)
         .unwrap();
@@ -413,7 +413,6 @@ fn completed_sub_effect_cleanup_preserves_other_post_and_light_modifiers() {
         ))),
         ..EntitySnapshot::default()
     };
-    let source_id = source.id;
     world
         .apply_commands(
             &[light, post, pulse, source]
@@ -424,10 +423,9 @@ fn completed_sub_effect_cleanup_preserves_other_post_and_light_modifiers() {
         .unwrap();
     world.propagate_transforms();
     world.update_effects(0.01);
-    assert_eq!(world.entity_count(), 5);
-    world
-        .control_effect(source_id, PlaybackCommand::Pause)
-        .unwrap();
+    assert_eq!(world.entity_count(), 6);
+    // A sub-emitter now preserves its group root as well as its effect child.
+    // The source emits only its single configured burst, so no stop is needed.
     world.update_effects(0.1);
     assert_eq!(world.entity_count(), 4);
     assert!((world.effect_frame().post.exposure - 2.0).abs() < f32::EPSILON);

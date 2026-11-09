@@ -120,6 +120,58 @@ impl Gradient {
         }
     }
 }
+/// A component-wise vector curve with the same portable wire format as three curves.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct VectorCurve(pub [Curve; 3]);
+impl Default for VectorCurve {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| Curve::constant(0.0)))
+    }
+}
+impl VectorCurve {
+    pub fn sample(&self, time: f32) -> [f32; 3] {
+        self.0.each_ref().map(|curve| curve.sample(time))
+    }
+}
+impl std::ops::Deref for VectorCurve {
+    type Target = [Curve; 3];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for VectorCurve {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl<'a> IntoIterator for &'a VectorCurve {
+    type Item = &'a Curve;
+    type IntoIter = std::slice::Iter<'a, Curve>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+/// Deterministic per-instance interpolation between authored color gradients.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub enum GradientParameter {
+    Gradient(Gradient),
+    BetweenGradients { min: Gradient, max: Gradient },
+}
+impl GradientParameter {
+    pub fn sample(&self, time: f32, random: f32) -> [f32; 4] {
+        match self {
+            Self::Gradient(gradient) => gradient.sample(time),
+            Self::BetweenGradients { min, max } => {
+                let a = min.sample(time);
+                let b = max.sample(time);
+                std::array::from_fn(|channel| {
+                    a[channel] + (b[channel] - a[channel]) * random.clamp(0., 1.)
+                })
+            }
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ScalarParameter {
     Constant(f32),
@@ -187,6 +239,7 @@ impl Default for EffectCommon {
 #[serde(default)]
 pub struct EffectAppearance {
     pub color: Gradient,
+    pub color_parameter: Option<GradientParameter>,
     pub opacity: Curve,
     pub size: Curve,
     pub material: Option<AssetId>,
@@ -196,10 +249,19 @@ pub struct EffectAppearance {
     pub uv_scale: [f32; 2],
     pub uv_scroll: [f32; 2],
 }
+impl EffectAppearance {
+    pub fn sample_color(&self, time: f32, random: f32) -> [f32; 4] {
+        self.color_parameter.as_ref().map_or_else(
+            || self.color.sample(time),
+            |gradient| gradient.sample(time, random),
+        )
+    }
+}
 impl Default for EffectAppearance {
     fn default() -> Self {
         Self {
             color: Gradient::default(),
+            color_parameter: None,
             opacity: Curve::linear(1.0, 0.0),
             size: Curve::constant(1.0),
             material: None,
@@ -250,9 +312,95 @@ pub enum CollisionResponse {
     Stick,
     Kill,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParticleOffscreenBehavior {
+    #[default]
+    Simulate,
+    Pause,
+    Clear,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParticleCollisionQuality {
+    Discrete,
+    #[default]
+    Swept,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParticleSortMode {
+    #[default]
+    Distance,
+    OldestFirst,
+    YoungestFirst,
+    None,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ParticleTrigger {
+    #[default]
+    Birth,
+    Collision,
+    Death,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct WeightedParticleMesh {
+    pub mesh: AssetId,
+    pub weight: f32,
+    pub material: Option<AssetId>,
+}
+impl Default for WeightedParticleMesh {
+    fn default() -> Self {
+        Self {
+            mesh: AssetId::default(),
+            weight: 1.0,
+            material: None,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ParticleSubEmitter {
+    pub trigger: ParticleTrigger,
+    pub effect: AssetId,
+    pub probability: f32,
+    pub inherit_velocity: f32,
+}
+impl Default for ParticleSubEmitter {
+    fn default() -> Self {
+        Self {
+            trigger: ParticleTrigger::Birth,
+            effect: AssetId::default(),
+            probability: 1.0,
+            inherit_velocity: 0.0,
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent authored particle modules have independent enable switches"
+)]
 pub struct ParticleEmitter {
+    pub soft_particle_distance: f32,
+    pub cast_shadows: bool,
+    pub receive_shadows: bool,
+    pub sorting: ParticleSortMode,
+    pub turbulence: f32,
+    pub simulation_mode: super::ParticleSimulationMode,
+    pub initial_velocity: [f32; 3],
+    pub start_scale: [[f32; 3]; 2],
+    /// Local XYZ Euler angles in radians, sampled independently at birth.
+    pub start_rotation: [[f32; 3]; 2],
+    /// Local XYZ angular speed in radians per second; legacy Z speed is added.
+    pub angular_velocity_range: [[f32; 3]; 2],
+    pub velocity_over_lifetime: VectorCurve,
+    /// Additive Z rotation in radians indexed by normalized particle age.
+    pub rotation_over_lifetime: Curve,
+    pub mesh_variants: Vec<WeightedParticleMesh>,
+    pub sub_emitters: Vec<ParticleSubEmitter>,
+    pub offscreen_behavior: ParticleOffscreenBehavior,
+    pub collision_quality: ParticleCollisionQuality,
+    pub generate_events: bool,
     pub prewarm: bool,
     pub prewarm_time: f32,
     pub max_particles: u32,
@@ -294,6 +442,23 @@ pub struct ParticleEmitter {
 impl Default for ParticleEmitter {
     fn default() -> Self {
         Self {
+            soft_particle_distance: 0.0,
+            cast_shadows: true,
+            receive_shadows: true,
+            sorting: ParticleSortMode::Distance,
+            turbulence: 0.0,
+            simulation_mode: super::ParticleSimulationMode::Cpu,
+            initial_velocity: [0.0; 3],
+            start_scale: [[1.0; 3]; 2],
+            start_rotation: [[0.0; 3], [0.0, 0.0, std::f32::consts::TAU]],
+            angular_velocity_range: [[0.0; 3]; 2],
+            velocity_over_lifetime: VectorCurve::default(),
+            rotation_over_lifetime: Curve::constant(0.0),
+            mesh_variants: Vec::new(),
+            sub_emitters: Vec::new(),
+            offscreen_behavior: ParticleOffscreenBehavior::Simulate,
+            collision_quality: ParticleCollisionQuality::Swept,
+            generate_events: true,
             prewarm: false,
             prewarm_time: 5.0,
             max_particles: 1000,
@@ -335,6 +500,11 @@ impl Default for ParticleEmitter {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TrailRenderer {
+    pub start_width: Option<f32>,
+    pub end_width: Option<f32>,
+    pub corner_vertices: u32,
+    pub cap_vertices: u32,
+    pub smoothing: u32,
     pub emitting: bool,
     pub lifetime: f32,
     pub width: f32,
@@ -347,6 +517,11 @@ pub struct TrailRenderer {
 impl Default for TrailRenderer {
     fn default() -> Self {
         Self {
+            start_width: None,
+            end_width: None,
+            corner_vertices: 0,
+            cap_vertices: 0,
+            smoothing: 0,
             emitting: true,
             lifetime: 1.0,
             width: 0.2,
@@ -361,6 +536,11 @@ impl Default for TrailRenderer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BeamRenderer {
+    pub branch_probability: f32,
+    pub branch_width_scale: f32,
+    pub pulse_speed: f32,
+    pub endpoint_collision: bool,
+    pub collision_layers: u32,
     pub start_target: Option<EntityId>,
     pub end_target: Option<EntityId>,
     pub start: [f32; 3],
@@ -376,6 +556,11 @@ pub struct BeamRenderer {
 impl Default for BeamRenderer {
     fn default() -> Self {
         Self {
+            branch_probability: 1.0,
+            branch_width_scale: 0.5,
+            pulse_speed: 0.0,
+            endpoint_collision: false,
+            collision_layers: u32::MAX,
             start_target: None,
             end_target: None,
             start: [0.0; 3],
@@ -393,6 +578,13 @@ impl Default for BeamRenderer {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RingEffect {
+    pub expansion_speed: Option<f32>,
+    pub edge_softness: f32,
+    pub align_to_surface: bool,
+    pub surface_layers: u32,
+    pub displacement_strength: f32,
+    pub displacement_frequency: f32,
+    pub screen_distortion: f32,
     pub target: Option<EntityId>,
     pub source_velocity: [f32; 3],
     pub wake_angle: f32,
@@ -412,6 +604,13 @@ pub struct RingEffect {
 impl Default for RingEffect {
     fn default() -> Self {
         Self {
+            expansion_speed: None,
+            edge_softness: 0.0,
+            align_to_surface: false,
+            surface_layers: u32::MAX,
+            displacement_strength: 0.0,
+            displacement_frequency: 4.0,
+            screen_distortion: 0.0,
             target: None,
             source_velocity: [0.0; 3],
             wake_angle: 0.6,
@@ -433,6 +632,7 @@ impl Default for RingEffect {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct RibbonRenderer {
+    pub animation_speed: f32,
     pub points: Vec<[f32; 3]>,
     pub width: f32,
     pub tube: bool,
@@ -444,6 +644,7 @@ pub struct RibbonRenderer {
 impl Default for RibbonRenderer {
     fn default() -> Self {
         Self {
+            animation_speed: 0.0,
             points: vec![[0.0; 3], [1.0, 1.0, 0.0], [2.0, 0.0, 0.0]],
             width: 0.2,
             tube: false,
@@ -473,7 +674,19 @@ pub enum ForceType {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent recipient masks and global mode are authored switches"
+)]
 pub struct ForceField {
+    pub vortex_speed: f32,
+    pub drag_influence: f32,
+    pub gust_strength: f32,
+    pub gust_frequency: f32,
+    pub noise_scale: f32,
+    pub affect_particles: bool,
+    pub affect_foliage: bool,
+    pub affect_materials: bool,
     pub shape: VolumeShape,
     pub dimensions: [f32; 3],
     pub force_type: ForceType,
@@ -488,6 +701,14 @@ pub struct ForceField {
 impl Default for ForceField {
     fn default() -> Self {
         Self {
+            vortex_speed: 1.0,
+            drag_influence: 0.0,
+            gust_strength: 0.0,
+            gust_frequency: 1.0,
+            noise_scale: 1.0,
+            affect_particles: true,
+            affect_foliage: true,
+            affect_materials: true,
             shape: VolumeShape::Sphere,
             dimensions: [5.0; 3],
             force_type: ForceType::Directional,
@@ -504,6 +725,7 @@ impl Default for ForceField {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CollisionVolume {
+    pub quality: ParticleCollisionQuality,
     pub shape: VolumeShape,
     pub dimensions: [f32; 3],
     pub layers: u32,
@@ -515,6 +737,7 @@ pub struct CollisionVolume {
 impl Default for CollisionVolume {
     fn default() -> Self {
         Self {
+            quality: ParticleCollisionQuality::Swept,
             shape: VolumeShape::Plane,
             dimensions: [10.0; 3],
             layers: u32::MAX,
@@ -528,6 +751,11 @@ impl Default for CollisionVolume {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ProjectileTracer {
+    pub start_position: [f32; 3],
+    pub end_position: Option<[f32; 3]>,
+    pub end_target: Option<EntityId>,
+    pub tail_fade: f32,
+    pub velocity_stretch: f32,
     pub velocity: [f32; 3],
     pub length: f32,
     pub width: f32,
@@ -536,6 +764,11 @@ pub struct ProjectileTracer {
 impl Default for ProjectileTracer {
     fn default() -> Self {
         Self {
+            start_position: [0.0; 3],
+            end_position: None,
+            end_target: None,
+            tail_fade: 1.0,
+            velocity_stretch: 0.0,
             velocity: [0.0, 0.0, 10.0],
             length: 2.0,
             width: 0.05,
@@ -556,6 +789,10 @@ pub struct FogVolume {
     pub noise_speed: f32,
     pub anisotropy: f32,
     pub steps: u32,
+    pub noise_texture: Option<AssetId>,
+    pub light_scattering: f32,
+    pub max_distance: f32,
+    pub temporal_filtering: f32,
 }
 impl Default for FogVolume {
     fn default() -> Self {
@@ -570,6 +807,10 @@ impl Default for FogVolume {
             noise_speed: 0.1,
             anisotropy: 0.0,
             steps: 32,
+            noise_texture: None,
+            light_scattering: 1.0,
+            max_distance: 1000.0,
+            temporal_filtering: 0.85,
         }
     }
 }
@@ -614,6 +855,11 @@ pub enum WeatherType {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WeatherVolume {
+    pub splash_effect: Option<AssetId>,
+    pub accumulation: f32,
+    pub accumulation_lifetime: f32,
+    pub max_accumulation: u32,
+    pub density_falloff: f32,
     pub weather: WeatherType,
     pub emitter: ParticleEmitter,
     pub intensity: f32,
@@ -632,6 +878,11 @@ impl Default for WeatherVolume {
             ..ParticleEmitter::default()
         };
         Self {
+            splash_effect: None,
+            accumulation: 0.0,
+            accumulation_lifetime: 30.0,
+            max_accumulation: 1024,
+            density_falloff: 0.0,
             weather: WeatherType::Rain,
             emitter,
             intensity: 1.0,
@@ -647,6 +898,11 @@ pub struct DistortionEffect {
     pub speed: f32,
     pub radius: f32,
     pub edge_falloff: f32,
+    pub noise_texture: Option<AssetId>,
+    /// Additional screen UV displacement, independent from procedural noise strength.
+    pub refraction_offset: [f32; 2],
+    pub depth_masking: bool,
+    pub screen_space: bool,
 }
 impl Default for DistortionEffect {
     fn default() -> Self {
@@ -656,6 +912,10 @@ impl Default for DistortionEffect {
             speed: 1.0,
             radius: 3.0,
             edge_falloff: 1.0,
+            noise_texture: None,
+            refraction_offset: [0.0; 2],
+            depth_masking: true,
+            screen_space: false,
         }
     }
 }
@@ -669,6 +929,11 @@ pub struct LightShaft {
     pub anisotropy: f32,
     pub max_distance: f32,
     pub samples: u32,
+    pub occlusion: bool,
+    pub temporal_filtering: f32,
+    pub localized: bool,
+    pub shape: VolumeShape,
+    pub dimensions: [f32; 3],
 }
 impl Default for LightShaft {
     fn default() -> Self {
@@ -680,12 +945,44 @@ impl Default for LightShaft {
             anisotropy: 0.5,
             max_distance: 100.0,
             samples: 32,
+            occlusion: true,
+            temporal_filtering: 0.85,
+            localized: false,
+            shape: VolumeShape::Box,
+            dimensions: [10.0; 3],
         }
     }
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct ScatterLod {
+    pub distance: f32,
+    pub density_scale: f32,
+    pub meshes: Vec<AssetId>,
+}
+impl Default for ScatterLod {
+    fn default() -> Self {
+        Self {
+            distance: 50.0,
+            density_scale: 0.5,
+            meshes: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct FoliageScatter {
+    pub weighted_meshes: Vec<WeightedParticleMesh>,
+    pub surface_target: Option<EntityId>,
+    pub surface_triangles: Vec<[[f32; 3]; 3]>,
+    pub slope: [f32; 2],
+    pub height: [f32; 2],
+    pub rotation: [f32; 2],
+    pub align_to_surface: bool,
+    pub lod: Vec<ScatterLod>,
+    pub cast_shadows: bool,
+    pub receive_shadows: bool,
     pub meshes: Vec<AssetId>,
     pub density: f32,
     pub dimensions: [f32; 3],
@@ -697,6 +994,16 @@ pub struct FoliageScatter {
 impl Default for FoliageScatter {
     fn default() -> Self {
         Self {
+            weighted_meshes: Vec::new(),
+            surface_target: None,
+            surface_triangles: Vec::new(),
+            slope: [0.0, 90.0],
+            height: [-1.0e8, 1.0e8],
+            rotation: [0.0, std::f32::consts::TAU],
+            align_to_surface: true,
+            lod: Vec::new(),
+            cast_shadows: true,
+            receive_shadows: true,
             meshes: vec![],
             density: 1.0,
             dimensions: [10.0, 1.0, 10.0],
@@ -711,6 +1018,14 @@ impl Default for FoliageScatter {
 #[serde(default)]
 pub struct DissolveEffect {
     pub target: Option<EntityId>,
+    pub target_material: Option<AssetId>,
+    pub noise_texture: Option<AssetId>,
+    pub direction_mask: Option<AssetId>,
+    /// World-space burn direction; a zero vector uses noise only.
+    pub direction: [f32; 3],
+    pub threshold: f32,
+    /// Boundary particles per square world unit over a full dissolve transition.
+    pub particle_density: f32,
     pub progress: f32,
     pub edge_width: f32,
     pub edge_color: [f32; 3],
@@ -722,6 +1037,12 @@ impl Default for DissolveEffect {
     fn default() -> Self {
         Self {
             target: None,
+            target_material: None,
+            noise_texture: None,
+            direction_mask: None,
+            direction: [0.0; 3],
+            threshold: 0.0,
+            particle_density: 0.0,
             progress: 0.0,
             edge_width: 0.05,
             edge_color: [1.0, 0.4, 0.0],
@@ -735,23 +1056,33 @@ impl Default for DissolveEffect {
 #[serde(default)]
 pub struct AnimatedSurface {
     pub target: Option<EntityId>,
+    pub target_material: Option<AssetId>,
     pub uv_scroll: [f32; 2],
     pub uv_scale: [f32; 2],
     pub uv_rotation: f32,
     pub color: Gradient,
     pub emission: f32,
     pub speed: f32,
+    pub phase: f32,
+    pub distortion_map: Option<AssetId>,
+    pub distortion_strength: f32,
+    pub mask_texture: Option<AssetId>,
 }
 impl Default for AnimatedSurface {
     fn default() -> Self {
         Self {
             target: None,
+            target_material: None,
             uv_scroll: [0.2, 0.0],
             uv_scale: [1.0; 2],
             uv_rotation: 0.0,
             color: Gradient::default(),
             emission: 1.0,
             speed: 1.0,
+            phase: 0.0,
+            distortion_map: None,
+            distortion_strength: 0.0,
+            mask_texture: None,
         }
     }
 }
@@ -767,6 +1098,10 @@ pub struct LensFlare {
     pub streak_length: f32,
     pub fade_speed: f32,
     pub texture: Option<AssetId>,
+    /// Streak rotation in radians.
+    pub streak_orientation: f32,
+    pub occlusion: bool,
+    pub max_distance: f32,
 }
 impl Default for LensFlare {
     fn default() -> Self {
@@ -780,6 +1115,9 @@ impl Default for LensFlare {
             streak_length: 0.3,
             fade_speed: 5.0,
             texture: None,
+            streak_orientation: 0.0,
+            occlusion: true,
+            max_distance: 1000.0,
         }
     }
 }
@@ -822,6 +1160,19 @@ pub struct PostProcessVolume {
     pub chromatic_aberration: f32,
     pub grain: f32,
     pub depth_of_field: f32,
+    /// Shutter length in frame intervals; zero disables motion blur.
+    pub motion_blur: f32,
+    pub motion_blur_samples: u32,
+    /// Camera focus distance in metres; zero enables centre-pixel autofocus.
+    pub focus_distance: f32,
+    pub focus_range: f32,
+    pub bloom_threshold: f32,
+    pub bloom_radius: f32,
+    /// Reprojected history weight; zero disables temporal antialiasing.
+    pub temporal_weight: f32,
+    pub shape: VolumeShape,
+    pub camera: Option<EntityId>,
+    pub layers: u32,
 }
 impl Default for PostProcessVolume {
     fn default() -> Self {
@@ -840,6 +1191,16 @@ impl Default for PostProcessVolume {
             chromatic_aberration: 0.0,
             grain: 0.0,
             depth_of_field: 0.0,
+            motion_blur: 0.0,
+            motion_blur_samples: 12,
+            focus_distance: 0.0,
+            focus_range: 5.0,
+            bloom_threshold: 1.0,
+            bloom_radius: 4.0,
+            temporal_weight: 0.0,
+            shape: VolumeShape::Box,
+            camera: None,
+            layers: u32::MAX,
         }
     }
 }
@@ -895,6 +1256,16 @@ pub struct ScreenFlash {
     pub fade_out: f32,
     pub vignette: f32,
     pub blend: BlendMode,
+    pub screen_mask: Option<AssetId>,
+    /// Replace supersedes lower-priority overlays; Maximum selects the strongest opacity.
+    pub stacking: OverlayStacking,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverlayStacking {
+    #[default]
+    Composite,
+    Replace,
+    Maximum,
 }
 impl Default for ScreenFlash {
     fn default() -> Self {
@@ -906,6 +1277,8 @@ impl Default for ScreenFlash {
             fade_out: 0.4,
             vignette: 0.5,
             blend: BlendMode::Alpha,
+            screen_mask: None,
+            stacking: OverlayStacking::Composite,
         }
     }
 }
@@ -919,24 +1292,36 @@ pub enum ProbeRefresh {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ReflectionProbe {
+    pub shape: VolumeShape,
     pub dimensions: [f32; 3],
+    /// Offset in the probe entity's local space.
+    pub capture_position: [f32; 3],
     pub cubemap: Option<AssetId>,
     pub resolution: u32,
     pub refresh: ProbeRefresh,
     pub blend_distance: f32,
     pub update_interval: f32,
     pub parallax_correction: bool,
+    pub visibility_layers: u32,
+    pub quality: QualityLevel,
+    /// Increment to request an explicit recapture through the public effect API.
+    pub refresh_revision: u64,
 }
 impl Default for ReflectionProbe {
     fn default() -> Self {
         Self {
+            shape: VolumeShape::Box,
             dimensions: [10.0; 3],
+            capture_position: [0.0; 3],
             cubemap: None,
             resolution: 128,
             refresh: ProbeRefresh::Baked,
             blend_distance: 1.0,
             update_interval: 1.0,
             parallax_correction: false,
+            visibility_layers: u32::MAX,
+            quality: QualityLevel::Medium,
+            refresh_revision: 0,
         }
     }
 }
@@ -1152,6 +1537,7 @@ impl EffectComponent {
         }
         remap(&mut self.common.attachment_target, map);
         match &mut self.kind {
+            EffectKind::ProjectileTracer(p) => remap(&mut p.end_target, map),
             EffectKind::Beam(p) => {
                 remap(&mut p.start_target, map);
                 remap(&mut p.end_target, map);
@@ -1160,8 +1546,10 @@ impl EffectComponent {
             EffectKind::Dissolve(p) => remap(&mut p.target, map),
             EffectKind::AnimatedSurface(p) => remap(&mut p.target, map),
             EffectKind::LightPulse(p) => remap(&mut p.target, map),
+            EffectKind::FoliageScatter(p) => remap(&mut p.surface_target, map),
             EffectKind::CameraShake(p) => remap(&mut p.target, map),
             EffectKind::ScreenFlash(p) => remap(&mut p.target, map),
+            EffectKind::PostProcess(p) => remap(&mut p.camera, map),
             EffectKind::LightShaft(p) => remap(&mut p.light, map),
             EffectKind::LensFlare(p) => remap(&mut p.light, map),
             EffectKind::Outline(p) => {
@@ -1220,6 +1608,14 @@ impl EffectComponent {
         }
         fn appearance(a: &EffectAppearance) -> Result<(), String> {
             gradient(&a.color)?;
+            match &a.color_parameter {
+                Some(GradientParameter::Gradient(value)) => gradient(value)?,
+                Some(GradientParameter::BetweenGradients { min, max }) => {
+                    gradient(min)?;
+                    gradient(max)?;
+                }
+                None => {}
+            }
             curve(&a.opacity)?;
             curve(&a.size)?;
             values(&[a.emission])?;
@@ -1264,6 +1660,50 @@ impl EffectComponent {
                 p.flipbook_fps,
                 p.stretch,
             ])?;
+            values(&[p.turbulence, p.soft_particle_distance])?;
+            if p.turbulence < 0.0 || !(0.0..=1000.0).contains(&p.soft_particle_distance) {
+                return Err(
+                    "particle turbulence must be nonnegative and soft intersection distance0..1000"
+                        .into(),
+                );
+            }
+            values(&p.initial_velocity)?;
+            for range in [p.start_scale, p.start_rotation, p.angular_velocity_range] {
+                values(&range[0])?;
+                values(&range[1])?;
+                if (0..3).any(|axis| range[1][axis] < range[0][axis]) {
+                    return Err("particle vector maximum must be >= minimum".into());
+                }
+            }
+            if p.start_scale.iter().flatten().any(|v| *v <= 0.0) {
+                return Err("particle scale components must be positive".into());
+            }
+            for value in &p.velocity_over_lifetime {
+                curve(value)?;
+            }
+            curve(&p.rotation_over_lifetime)?;
+            if p.mesh_variants.len() > 256 || p.sub_emitters.len() > 64 {
+                return Err("particle mesh variants must be <=256 and sub-emitters <=64".into());
+            }
+            for variant in &p.mesh_variants {
+                values(&[variant.weight])?;
+                if variant.weight < 0.0 {
+                    return Err("mesh weights must be nonnegative".into());
+                }
+            }
+            if !p.mesh_variants.is_empty() && !p.mesh_variants.iter().any(|v| v.weight > 0.0) {
+                return Err("at least one mesh variant must have positive weight".into());
+            }
+            for child in &p.sub_emitters {
+                values(&[child.probability, child.inherit_velocity])?;
+                if !(0.0..=1.0).contains(&child.probability)
+                    || !(0.0..=10.0).contains(&child.inherit_velocity)
+                {
+                    return Err(
+                        "sub-emitter probability must be 0..1 and inherited velocity 0..10".into(),
+                    );
+                }
+            }
             appearance(&p.appearance)?;
             if p.lifetime[1] < p.lifetime[0]
                 || p.speed[1] < p.speed[0]
@@ -1309,6 +1749,17 @@ impl EffectComponent {
         }
         match &self.kind {
             EffectKind::Trail(p) => {
+                for width in [p.start_width, p.end_width].into_iter().flatten() {
+                    values(&[width])?;
+                    if width < 0.0 {
+                        return Err("trail endpoint widths must be nonnegative".into());
+                    }
+                }
+                if p.corner_vertices > 8 || p.cap_vertices > 16 || p.smoothing > 16 {
+                    return Err(
+                        "trail corner/smoothing tessellation must be <=8/16 and caps<=16".into(),
+                    );
+                }
                 values(&[
                     p.lifetime,
                     p.width,
@@ -1321,13 +1772,47 @@ impl EffectComponent {
             EffectKind::Beam(p) => {
                 values(&p.start)?;
                 values(&p.end)?;
-                values(&[p.width, p.noise_amplitude, p.noise_frequency, p.noise_speed])?;
+                values(&[
+                    p.width,
+                    p.noise_amplitude,
+                    p.noise_frequency,
+                    p.noise_speed,
+                    p.branch_probability,
+                    p.branch_width_scale,
+                    p.pulse_speed,
+                ])?;
+                if !(0.0..=1.0).contains(&p.branch_probability)
+                    || !(0.0..=4.0).contains(&p.branch_width_scale)
+                {
+                    return Err("beam branch probability must be0..1 and width scale0..4".into());
+                }
                 if p.branch_count > 32 {
                     return Err("beam branches must be <=32".into());
                 }
                 appearance(&p.appearance)
             }
             EffectKind::Shockwave(p) | EffectKind::WaterRipple(p) => {
+                values(&[
+                    p.edge_softness,
+                    p.displacement_strength,
+                    p.displacement_frequency,
+                    p.screen_distortion,
+                ])?;
+                if !(0.0..=1.0).contains(&p.edge_softness)
+                    || p.displacement_strength < 0.0
+                    || p.displacement_frequency < 0.0
+                    || p.screen_distortion < 0.0
+                {
+                    return Err(
+                        "ring softness must be0..1 and displacement/distortion nonnegative".into(),
+                    );
+                }
+                if let Some(speed) = p.expansion_speed {
+                    values(&[speed])?;
+                    if speed < 0.0 {
+                        return Err("ring expansion speed must be nonnegative".into());
+                    }
+                }
                 values(&p.source_velocity)?;
                 values(&[
                     p.wake_angle,
@@ -1355,6 +1840,7 @@ impl EffectComponent {
                 appearance(&p.appearance)
             }
             EffectKind::Ribbon(p) => {
+                values(&[p.animation_speed])?;
                 for v in &p.points {
                     values(v)?;
                 }
@@ -1362,6 +1848,23 @@ impl EffectComponent {
                 appearance(&p.appearance)
             }
             EffectKind::ForceField(p) | EffectKind::Wind(p) => {
+                values(&[
+                    p.vortex_speed,
+                    p.drag_influence,
+                    p.gust_strength,
+                    p.gust_frequency,
+                    p.noise_scale,
+                ])?;
+                if p.drag_influence < 0.0
+                    || p.gust_strength < 0.0
+                    || p.gust_frequency < 0.0
+                    || p.noise_scale <= 0.0
+                {
+                    return Err(
+                        "field drag/gust controls must be nonnegative and noise scale positive"
+                            .into(),
+                    );
+                }
                 dimensions(&p.dimensions)?;
                 values(&p.direction)?;
                 values(&[p.strength, p.falloff, p.turbulence, p.frequency])
@@ -1371,6 +1874,14 @@ impl EffectComponent {
                 values(&[p.bounce, p.friction])
             }
             EffectKind::ProjectileTracer(p) => {
+                values(&p.start_position)?;
+                if let Some(end) = p.end_position {
+                    values(&end)?;
+                }
+                values(&[p.tail_fade, p.velocity_stretch])?;
+                if p.tail_fade < 0.0 || p.velocity_stretch < 0.0 {
+                    return Err("tracer fade and velocity stretch must be nonnegative".into());
+                }
                 values(&p.velocity)?;
                 dimensions(&[p.length, p.width])?;
                 appearance(&p.appearance)
@@ -1385,7 +1896,17 @@ impl EffectComponent {
                     p.noise_scale,
                     p.noise_speed,
                     p.anisotropy,
+                    p.light_scattering,
+                    p.max_distance,
+                    p.temporal_filtering,
                 ])?;
+                if !(-0.95..=0.95).contains(&p.anisotropy)
+                    || !(0.0..=0.98).contains(&p.temporal_filtering)
+                    || p.max_distance <= 0.0
+                    || p.light_scattering < 0.0
+                {
+                    return Err("fog requires anisotropy -0.95..0.95, temporal weight 0..0.98, positive draw distance and nonnegative scattering".into());
+                }
                 if p.steps < 4 || p.steps > 128 || p.density < 0.0 {
                     return Err("fog requires 4..128 steps and nonnegative density".into());
                 }
@@ -1397,22 +1918,95 @@ impl EffectComponent {
                 values(&[p.roughness, p.metallic, p.edge_fade, p.angle_fade])
             }
             EffectKind::Weather(p) => {
+                values(&[p.accumulation, p.accumulation_lifetime, p.density_falloff])?;
+                if !(0.0..=1.0).contains(&p.accumulation)
+                    || p.accumulation_lifetime <= 0.0
+                    || p.max_accumulation > 8192
+                    || p.density_falloff < 0.0
+                {
+                    return Err("weather accumulation must be0..1 with positive lifetime, <=8192 deposits and nonnegative falloff".into());
+                }
                 values(&[p.intensity])?;
                 validate_particles(&p.emitter)?;
                 particles(&p.emitter)
             }
             EffectKind::HeatHaze(p) => {
-                values(&[p.strength, p.noise_scale, p.speed, p.radius, p.edge_falloff])
+                values(&[p.strength, p.noise_scale, p.speed, p.radius, p.edge_falloff])?;
+                values(&p.refraction_offset)?;
+                if p.radius <= 0. || p.noise_scale <= 0. || p.edge_falloff <= 0. {
+                    return Err(
+                        "distortion radius, noise scale and falloff must be positive".into(),
+                    );
+                }
+                Ok(())
             }
             EffectKind::LightShaft(p) => {
+                dimensions(&p.dimensions)?;
                 values(&p.color)?;
-                values(&[p.intensity, p.density, p.anisotropy, p.max_distance])?;
+                values(&[
+                    p.intensity,
+                    p.density,
+                    p.anisotropy,
+                    p.max_distance,
+                    p.temporal_filtering,
+                ])?;
+                if !(-0.95..=0.95).contains(&p.anisotropy)
+                    || !(0.0..=0.98).contains(&p.temporal_filtering)
+                    || p.max_distance <= 0.0
+                {
+                    return Err("light shafts require valid anisotropy, temporal weight and positive distance".into());
+                }
                 if p.samples < 4 || p.samples > 128 {
                     return Err("light shaft samples must be 4..128".into());
                 }
                 Ok(())
             }
             EffectKind::FoliageScatter(p) => {
+                values(&p.slope)?;
+                values(&p.height)?;
+                values(&p.rotation)?;
+                if p.slope[0] < 0.0
+                    || p.slope[1] > 180.0
+                    || p.slope[1] < p.slope[0]
+                    || p.height[1] < p.height[0]
+                    || p.rotation[1] < p.rotation[0]
+                    || p.lod.len() > 16
+                    || p.weighted_meshes.len() > 256
+                    || p.surface_triangles.len() > 100_000
+                {
+                    return Err("invalid scatter slope,height,rotation,surface orLOD limits".into());
+                }
+                if p.surface_target.is_some() && p.surface_triangles.is_empty() {
+                    return Err("scatter surface target requires loaded surface_triangles".into());
+                }
+                for triangle in &p.surface_triangles {
+                    for point in triangle {
+                        values(point)?;
+                    }
+                }
+                for variant in &p.weighted_meshes {
+                    values(&[variant.weight])?;
+                    if variant.weight < 0.0 {
+                        return Err("scatter weights must be nonnegative".into());
+                    }
+                }
+                if !p.weighted_meshes.is_empty()
+                    && !p.weighted_meshes.iter().any(|v| v.weight > 0.0)
+                {
+                    return Err("scatter needs one positive mesh weight".into());
+                }
+                for lod in &p.lod {
+                    values(&[lod.distance, lod.density_scale])?;
+                    if lod.distance < 0.0
+                        || !(0.0..=1.0).contains(&lod.density_scale)
+                        || lod.meshes.len() > 256
+                    {
+                        return Err(
+                            "scatterLOD needs nonnegative distance, density0..1 and <=256 meshes"
+                                .into(),
+                        );
+                    }
+                }
                 dimensions(&p.dimensions)?;
                 values(&p.scale)?;
                 values(&[p.density, p.wind_response])?;
@@ -1423,13 +2017,40 @@ impl EffectComponent {
             }
             EffectKind::Dissolve(p) => {
                 values(&p.edge_color)?;
-                values(&[p.progress, p.edge_width, p.edge_emission, p.noise_scale])?;
+                values(&p.direction)?;
+                values(&[
+                    p.progress,
+                    p.edge_width,
+                    p.edge_emission,
+                    p.noise_scale,
+                    p.threshold,
+                    p.particle_density,
+                ])?;
+                if !(0.0..=10000.0).contains(&p.particle_density)
+                    || !(-1.0..=1.0).contains(&p.threshold)
+                    || p.edge_width < 0.0
+                    || p.edge_emission < 0.0
+                    || p.noise_scale <= 0.0
+                {
+                    return Err(
+                        "invalid dissolve density, threshold, edge or noise controls".into(),
+                    );
+                }
                 curve(&p.curve)
             }
             EffectKind::AnimatedSurface(p) => {
                 values(&p.uv_scroll)?;
                 values(&p.uv_scale)?;
-                values(&[p.uv_rotation, p.emission, p.speed])?;
+                values(&[
+                    p.uv_rotation,
+                    p.emission,
+                    p.speed,
+                    p.phase,
+                    p.distortion_strength,
+                ])?;
+                if !(0.0..=2.0).contains(&p.distortion_strength) || p.emission < 0.0 {
+                    return Err("invalid animated-surface distortion or emission".into());
+                }
                 gradient(&p.color)
             }
             EffectKind::LensFlare(p) => {
@@ -1440,8 +2061,15 @@ impl EffectComponent {
                     p.ghost_spacing,
                     p.streak_length,
                     p.fade_speed,
+                    p.streak_orientation,
+                    p.max_distance,
                 ])?;
-                if p.ghosts > 16 {
+                if p.ghosts > 16
+                    || p.max_distance <= 0.
+                    || p.fade_speed < 0.
+                    || p.intensity < 0.
+                    || p.scale < 0.
+                {
                     return Err("lens flare ghosts must be <=16".into());
                 }
                 Ok(())
@@ -1466,7 +2094,25 @@ impl EffectComponent {
                     p.chromatic_aberration,
                     p.grain,
                     p.depth_of_field,
-                ])
+                    p.motion_blur,
+                    p.focus_distance,
+                    p.focus_range,
+                    p.bloom_threshold,
+                    p.bloom_radius,
+                    p.temporal_weight,
+                ])?;
+                if p.motion_blur < 0.0
+                    || p.motion_blur > 2.0
+                    || !(2..=32).contains(&p.motion_blur_samples)
+                    || p.focus_distance < 0.0
+                    || p.focus_range <= 0.0
+                    || p.bloom_threshold < 0.0
+                    || p.bloom_radius < 0.0
+                    || !(0.0..=0.98).contains(&p.temporal_weight)
+                {
+                    return Err("invalid post processing shutter, sample count, focus, bloom or temporal controls".into());
+                }
+                Ok(())
             }
             EffectKind::Outline(p) => {
                 values(&p.color)?;
@@ -1487,11 +2133,15 @@ impl EffectComponent {
                 values(&[p.opacity, p.fade_in, p.fade_out, p.vignette])
             }
             EffectKind::ReflectionProbe(p) => {
-                if p.refresh != ProbeRefresh::Baked {
-                    return Err("dynamic reflection probe capture is unsupported; select Baked and assign a panorama asset".into());
-                }
                 dimensions(&p.dimensions)?;
+                values(&p.capture_position)?;
                 values(&[p.blend_distance, p.update_interval])?;
+                if p.blend_distance < 0.0 || p.update_interval <= 0.0 {
+                    return Err(
+                        "probe blend distance must be nonnegative and update interval positive"
+                            .into(),
+                    );
+                }
                 if !(16..=2048).contains(&p.resolution) || !p.resolution.is_power_of_two() {
                     return Err("probe resolution must be power-of-two 16..2048".into());
                 }
@@ -1578,40 +2228,8 @@ mod tests {
         }
     }
 }
-/// A reusable gradient source with a stable per-particle random factor.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ColorParameter {
-    Gradient(Gradient),
-    BetweenGradients { min: Gradient, max: Gradient },
-}
-impl ColorParameter {
-    pub fn sample(&self, time: f32, random: f32) -> [f32; 4] {
-        match self {
-            Self::Gradient(g) => g.sample(time),
-            Self::BetweenGradients { min, max } => {
-                let a = min.sample(time);
-                let b = max.sample(time);
-                std::array::from_fn(|i| a[i] + (b[i] - a[i]) * random.clamp(0.0, 1.0))
-            }
-        }
-    }
-}
-/// Independent, normalized curves for all three vector channels.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct VectorCurve {
-    pub x: Curve,
-    pub y: Curve,
-    pub z: Curve,
-}
-impl VectorCurve {
-    pub fn sample(&self, time: f32) -> [f32; 3] {
-        [
-            self.x.sample(time),
-            self.y.sample(time),
-            self.z.sample(time),
-        ]
-    }
-}
+/// Compatibility name for reusable authored gradient parameters.
+pub type ColorParameter = GradientParameter;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum EffectParameter {
     Scalar(f32),
@@ -1734,6 +2352,56 @@ impl EffectComponent {
 #[allow(clippy::float_cmp)] // Exact parameter transfer is part of the API.
 mod parameter_tests {
     use super::*;
+    #[test]
+    fn dual_gradient_evaluation_and_vector_curve_wire_compatibility_are_validated() {
+        let gradient = GradientParameter::BetweenGradients {
+            min: Gradient {
+                keys: vec![
+                    GradientKey {
+                        time: 0.,
+                        color: [0.; 4],
+                    },
+                    GradientKey {
+                        time: 1.,
+                        color: [1.; 4],
+                    },
+                ],
+            },
+            max: Gradient::constant([1.; 4]),
+        };
+        assert_eq!(gradient.sample(0.5, 0.25), [0.625; 4]);
+        let source = [
+            Curve::constant(1.),
+            Curve::constant(2.),
+            Curve::constant(3.),
+        ];
+        let wire = serde_json::to_value(&source).unwrap();
+        let curve: VectorCurve = serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(curve.sample(0.5), [1., 2., 3.]);
+        assert_eq!(serde_json::to_value(&curve).unwrap(), wire);
+        let mut effect = EffectComponent::default();
+        if let EffectKind::Particle(p) = &mut effect.kind {
+            p.appearance.color_parameter = Some(GradientParameter::BetweenGradients {
+                min: Gradient::default(),
+                max: Gradient {
+                    keys: vec![GradientKey {
+                        time: 2.,
+                        color: [1.; 4],
+                    }],
+                },
+            });
+        }
+        assert!(effect.validate().is_err());
+        if let EffectKind::Particle(p) = &mut effect.kind {
+            p.appearance.color_parameter = Some(gradient);
+            p.velocity_over_lifetime = curve;
+        }
+        effect.validate().unwrap();
+        let restored: EffectComponent =
+            serde_json::from_value(serde_json::to_value(&effect).unwrap()).unwrap();
+        assert_eq!(effect, restored);
+    }
+
     #[test]
     fn named_parameters_modify_instances_and_preserve_binding_values() {
         let mut effect = EffectComponent::default();

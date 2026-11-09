@@ -289,13 +289,18 @@ return {
         let light_id = light.id;
         match &mut kind {
             EffectKind::Particle(v) => {
-                v.rate = 70.0;
+                v.rate = 5000.0;
+                v.max_particles = 10_000;
+                v.simulation_mode = engine_world::effects::ParticleSimulationMode::Auto;
+                v.generate_events = false;
+                v.sorting = engine_world::effects::ParticleSortMode::None;
+                v.wind_influence = 0.0;
                 v.dimensions = [0.4; 3];
                 v.lifetime = [0.5, 1.3];
                 v.speed = [1.2, 2.8];
                 v.start_size = [0.06, 0.16];
                 v.gravity = [0.0, -0.4, 0.0];
-                v.noise = 0.18;
+                v.noise = 0.0;
                 v.appearance = appearance([1.0, 0.32, 0.035, 0.9], 1.5, BlendMode::Additive);
             }
             EffectKind::Trail(v) => {
@@ -566,6 +571,7 @@ return {
     }
     let asset_directory = project.directory(VirtualDirectory::Assets)?.join("effects");
     std::fs::create_dir_all(&asset_directory)?;
+    engine_assets::install_builtin_effect_resources(&destination)?;
     for asset in presets() {
         let slug = asset.name.to_lowercase().replace([' ', '/'], "-");
         let source = asset_directory.join(format!("{slug}.effect"));

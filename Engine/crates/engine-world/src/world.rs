@@ -92,6 +92,10 @@ pub enum WorldCommand {
         entity: EntityId,
         value: Option<Box<crate::EffectComponent>>,
     },
+    SetEffectGroup {
+        entity: EntityId,
+        value: Option<Box<crate::effects::EffectGroup>>,
+    },
     SetPartAttributes {
         entity: EntityId,
         value: PartAttributes,
@@ -169,11 +173,23 @@ struct Slot {
     stable: Option<EntityId>,
 }
 
+#[derive(Default)]
+struct GpuFeedback {
+    context: Option<u64>,
+    acknowledgements: BTreeMap<EntityId, u64>,
+    last_context: u64,
+    pending: bool,
+}
+
 /// Live ECS world with stable identities, generational references, and a scene graph.
 pub struct SceneWorld {
+    effect_groups: crate::effects::EffectGroupRuntime,
+    gpu_feedback: std::sync::Mutex<Option<GpuFeedback>>,
     effects_runtime: crate::effects::EffectRuntime,
     effect_assets: BTreeMap<crate::AssetId, crate::effects::EffectAsset>,
     temporary_effects: BTreeMap<EntityId, (u8, f32)>,
+    // Runtime ownership preserves source clocks without inheriting transform shear.
+    temporary_effect_owners: BTreeMap<EntityId, EntityId>,
     completed_effect_groups: BTreeSet<EntityId>,
     pub(crate) services: crate::foundations::EntityServices,
     environment: crate::SceneEnvironment,
@@ -212,9 +228,12 @@ impl Default for SceneWorld {
 impl SceneWorld {
     pub fn new() -> Self {
         Self {
+            effect_groups: crate::effects::EffectGroupRuntime::default(),
+            gpu_feedback: std::sync::Mutex::new(None),
             effects_runtime: crate::effects::EffectRuntime::default(),
             effect_assets: BTreeMap::new(),
             temporary_effects: BTreeMap::new(),
+            temporary_effect_owners: BTreeMap::new(),
             completed_effect_groups: BTreeSet::new(),
             services: crate::foundations::EntityServices::default(),
             environment: crate::SceneEnvironment::default(),
@@ -386,6 +405,59 @@ impl SceneWorld {
         if commands.is_empty() {
             return Ok(());
         }
+        let removed: BTreeSet<_> = commands
+            .iter()
+            .filter_map(|command| {
+                if let WorldCommand::Despawn(entity) = command {
+                    Some(*entity)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let mut normalized = commands.to_vec();
+        if !removed.is_empty() {
+            let mut groups: BTreeMap<_, _> = self
+                .entity_ids()
+                .filter_map(|entity| {
+                    self.effect_group(entity)
+                        .ok()
+                        .flatten()
+                        .map(|group| (entity, group))
+                })
+                .collect();
+            for command in commands {
+                match command {
+                    WorldCommand::Spawn(snapshot) => {
+                        if let Some(group) = &snapshot.effect_group {
+                            groups.insert(snapshot.id, group.clone());
+                        }
+                    }
+                    WorldCommand::SetEffectGroup { entity, value } => {
+                        groups.remove(entity);
+                        if let Some(group) = value {
+                            groups.insert(*entity, group.as_ref().clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for (entity, mut group) in groups {
+                if !removed.contains(&entity)
+                    && group
+                        .child_entities
+                        .iter()
+                        .any(|child| removed.contains(child))
+                {
+                    group.remove_children(&removed);
+                    normalized.push(WorldCommand::SetEffectGroup {
+                        entity,
+                        value: Some(Box::new(group)),
+                    });
+                }
+            }
+        }
+        let commands = normalized.as_slice();
         for command in commands {
             if let WorldCommand::SetEnvironment(value) = command
                 && !value.is_valid()
@@ -458,6 +530,12 @@ impl SceneWorld {
         }
 
         for command in commands {
+            if let WorldCommand::SetEffectGroup {
+                value: Some(value), ..
+            } = command
+            {
+                value.validate().map_err(WorldError::InvalidArgument)?;
+            }
             if let WorldCommand::SetEffect {
                 value: Some(value), ..
             } = command
@@ -482,6 +560,7 @@ impl SceneWorld {
                 | WorldCommand::SetLight { entity, .. }
                 | WorldCommand::SetPrimitive { entity, .. }
                 | WorldCommand::SetEffect { entity, .. }
+                | WorldCommand::SetEffectGroup { entity, .. }
                 | WorldCommand::SetPartAttributes { entity, .. }
                 | WorldCommand::SetScripts { entity, .. } => Some(*entity),
                 WorldCommand::SetParent { child, .. } => Some(*child),
@@ -509,6 +588,77 @@ impl SceneWorld {
             }
         }
         validate_acyclic(&entities, &parents)?;
+        // Validate bindings against the final transaction, including new children.
+        // No ECS mutation occurs before all typed values and track references pass.
+        let mut prospective_effects: BTreeMap<_, _> = self
+            .entity_ids()
+            .filter_map(|id| self.effect(id).ok().flatten().map(|effect| (id, effect)))
+            .collect();
+        let mut prospective_groups: BTreeMap<_, _> = self
+            .entity_ids()
+            .filter_map(|id| {
+                self.effect_group(id)
+                    .ok()
+                    .flatten()
+                    .map(|group| (id, group))
+            })
+            .collect();
+        for command in commands {
+            match command {
+                WorldCommand::Spawn(snapshot) => {
+                    if let Some(effect) = &snapshot.effect {
+                        prospective_effects.insert(snapshot.id, effect.clone());
+                    }
+                    if let Some(group) = &snapshot.effect_group {
+                        prospective_groups.insert(snapshot.id, group.clone());
+                    }
+                }
+                WorldCommand::SetEffect { entity, value } => {
+                    prospective_effects.remove(entity);
+                    if let Some(value) = value {
+                        prospective_effects.insert(*entity, value.as_ref().clone());
+                    }
+                }
+                WorldCommand::SetEffectGroup { entity, value } => {
+                    prospective_groups.remove(entity);
+                    if let Some(value) = value {
+                        prospective_groups.insert(*entity, value.as_ref().clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (entity, group) in prospective_groups
+            .iter()
+            .filter(|(entity, _)| entities.contains(entity))
+        {
+            group.validate().map_err(WorldError::InvalidArgument)?;
+            let mut children = Vec::with_capacity(group.child_entities.len());
+            let mut seen = BTreeSet::new();
+            for child in &group.child_entities {
+                if !seen.insert(*child) || !entities.contains(child) {
+                    return Err(WorldError::InvalidArgument(
+                        "composite track is missing or duplicated".into(),
+                    ));
+                }
+                let mut ancestor = parents.get(child).copied().flatten();
+                while ancestor.is_some() && ancestor != Some(*entity) {
+                    ancestor = ancestor.and_then(|id| parents.get(&id).copied().flatten());
+                }
+                if ancestor != Some(*entity) {
+                    return Err(WorldError::InvalidArgument(
+                        "composite tracks must belong to its subtree".into(),
+                    ));
+                }
+                children.push(prospective_effects.get(child).cloned().ok_or_else(|| {
+                    WorldError::InvalidArgument("composite track has no effect".into())
+                })?);
+            }
+            crate::effects::validate_group_bindings(&group.parameters, &group.bindings, &children)
+                .map_err(WorldError::InvalidArgument)?;
+            crate::effects::validate_group_triggers(&group.trigger_bindings, children.len())
+                .map_err(WorldError::InvalidArgument)?;
+        }
 
         for command in commands {
             if let WorldCommand::Spawn(snapshot) = command {
@@ -545,6 +695,12 @@ impl SceneWorld {
                         self.effects_runtime.remove(*entity);
                     }
                 }
+                WorldCommand::SetEffectGroup { entity, value } => {
+                    self.insert_or_remove(*entity, value.as_deref().cloned());
+                    if value.is_none() {
+                        self.effect_groups.remove(*entity);
+                    }
+                }
                 WorldCommand::SetPartAttributes { entity, value } => {
                     self.insert_or_remove(*entity, Some(*value));
                 }
@@ -568,7 +724,9 @@ impl SceneWorld {
         for command in commands {
             if let WorldCommand::Despawn(entity) = command {
                 self.effects_runtime.remove(*entity);
+                self.effect_groups.remove(*entity);
                 self.temporary_effects.remove(entity);
+                self.temporary_effect_owners.remove(entity);
                 self.completed_effect_groups.remove(entity);
                 self.despawn_now(*entity);
             }
@@ -684,6 +842,7 @@ impl SceneWorld {
             light: self.ecs.get::<Light>(entity).copied(),
             primitive: self.ecs.get::<Primitive>(entity).cloned(),
             effect: self.ecs.get::<crate::EffectComponent>(entity).cloned(),
+            effect_group: self.ecs.get::<crate::effects::EffectGroup>(entity).cloned(),
             part_attributes: self
                 .ecs
                 .get::<PartAttributes>(entity)
@@ -716,6 +875,68 @@ impl SceneWorld {
         Ok(self.ecs.get::<crate::EffectComponent>(entity).cloned())
     }
 
+    /// Returns the persisted composite timeline without exposing its playback state.
+    /// # Errors
+    /// Returns an error when the entity does not exist.
+    pub fn effect_group(
+        &self,
+        id: EntityId,
+    ) -> Result<Option<crate::effects::EffectGroup>, WorldError> {
+        let entity = self.ecs_entity(id)?;
+        Ok(self.ecs.get::<crate::effects::EffectGroup>(entity).cloned())
+    }
+
+    /// Returns a composite's own timeline state, independently of its children.
+    /// # Errors
+    /// Returns an error when the entity does not exist.
+    pub fn effect_group_state(
+        &self,
+        id: EntityId,
+    ) -> Result<Option<crate::effects::PlaybackState>, WorldError> {
+        Ok(self
+            .effect_group(id)?
+            .map(|group| self.effect_groups.state(id, &group)))
+    }
+
+    /// Drains bounded composite cues into the engine's existing audio mixer.
+    pub fn take_effect_audio_events(&mut self) -> Vec<crate::effects::EffectAudioEvent> {
+        self.effect_groups.take_events()
+    }
+
+    /// Submits successful renderer progress; the simulation consumes it at its next tick.
+    /// The interior mailbox lets immutable render callbacks acknowledge GPU work.
+    pub fn submit_gpu_particle_feedback(
+        &self,
+        context: Option<u64>,
+        acknowledgements: &[(EntityId, u64)],
+    ) {
+        if let Ok(mut mailbox) = self.gpu_feedback.lock() {
+            let feedback = mailbox.get_or_insert_with(GpuFeedback::default);
+            if context.is_some_and(|context| context < feedback.last_context) {
+                return;
+            }
+            if feedback.context != context {
+                feedback.acknowledgements.clear();
+            }
+            feedback.context = context;
+            if let Some(context) = context {
+                feedback.last_context = feedback.last_context.max(context);
+            }
+            feedback.pending = true;
+            for &(entity, sequence) in acknowledgements.iter().take(4096) {
+                if feedback.acknowledgements.len() < 4096
+                    || feedback.acknowledgements.contains_key(&entity)
+                {
+                    feedback
+                        .acknowledgements
+                        .entry(entity)
+                        .and_modify(|last| *last = (*last).max(sequence))
+                        .or_insert(sequence);
+                }
+            }
+        }
+    }
+
     /// Advances cosmetic effects after transforms and physics. Authored data is unchanged.
     pub fn update_effects(&mut self, delta: f32) {
         let camera_entity = self
@@ -740,6 +961,7 @@ impl SceneWorld {
         camera: glam::Vec3,
         camera_entity: Option<EntityId>,
     ) {
+        self.consume_gpu_particle_feedback();
         let transforms: BTreeMap<_, _> = self
             .entity_ids()
             .filter_map(|entity| {
@@ -748,25 +970,229 @@ impl SceneWorld {
                     .map(|transform| (entity, transform.0))
             })
             .collect();
-        let inputs: Vec<_> = self
+        let groups: Vec<_> = self
             .entity_ids()
             .filter_map(|entity| {
-                Some(crate::effects::EffectInput {
+                let mut group = self.effect_group(entity).ok()??;
+                let ancestors = self.composite_ancestors(entity);
+                group.time_scale = ancestors.iter().fold(1.0_f32, |scale, (_, group)| {
+                    (scale * group.time_scale).min(1000.0)
+                });
+                if ancestors.iter().any(|(id, ancestor)| {
+                    *id != entity
+                        && self.effect_groups.state(*id, ancestor)
+                            != crate::effects::PlaybackState::Playing
+                }) {
+                    group.time_scale = 0.0;
+                }
+                Some((
                     entity,
-                    transform: self.world_transform(entity).ok()?.0,
-                    effect: self.effect(entity).ok()??,
-                })
+                    transforms.get(&entity)?.w_axis.truncate().to_array(),
+                    group,
+                ))
             })
             .collect();
+        self.effect_groups.update(delta, &groups);
+        let restarted = self.effect_groups.take_restarted();
+        let completed = self.effect_groups.take_completed();
+        for group in restarted.keys() {
+            self.completed_effect_groups.remove(group);
+            for entity in self.descendants(*group).unwrap_or_default() {
+                if let Some(child_group) = self.effect_group(entity).ok().flatten() {
+                    let position = transforms
+                        .get(&entity)
+                        .map_or([0.0; 3], |transform| transform.w_axis.truncate().to_array());
+                    let relative_scale = self
+                        .composite_ancestors(entity)
+                        .iter()
+                        .take_while(|(id, _)| id != group)
+                        .fold(1.0_f32, |scale, (_, group)| {
+                            (scale * group.time_scale).min(1000.0)
+                        });
+                    let elapsed = restarted.get(group).copied().unwrap_or(0.0) * relative_scale;
+                    self.effect_groups
+                        .restart_at(entity, &child_group, position, elapsed);
+                }
+                if let Some(effect) = self.effect(entity).ok().flatten() {
+                    let transform = transforms
+                        .get(&entity)
+                        .copied()
+                        .unwrap_or(glam::Mat4::IDENTITY);
+                    self.effects_runtime.ensure(&crate::effects::EffectInput {
+                        entity,
+                        transform,
+                        effect,
+                    });
+                    self.effects_runtime
+                        .control(entity, crate::effects::PlaybackCommand::Restart);
+                }
+            }
+        }
+        let inputs = self.composite_effect_inputs(delta, &transforms, &restarted, &completed);
         self.effects_runtime.set_camera_target(camera_entity);
+        let layers = camera_entity
+            .and_then(|entity| self.camera(entity).ok().flatten())
+            .map_or(u32::MAX, |camera| camera.visibility_layers);
+        self.effects_runtime.set_visibility_layers(layers);
+        let parents: BTreeMap<_, _> = inputs
+            .iter()
+            .map(|input| {
+                let transform = self
+                    .parent(input.entity)
+                    .ok()
+                    .flatten()
+                    .and_then(|parent| transforms.get(&parent).copied())
+                    .unwrap_or(glam::Mat4::IDENTITY);
+                (input.entity, transform)
+            })
+            .collect();
+        self.effects_runtime.set_parent_transforms(&parents);
         self.effects_runtime
             .update_with_targets(delta, &inputs, camera, &transforms);
+        for group in &completed {
+            for entity in self.descendants(*group).unwrap_or_default() {
+                self.effects_runtime
+                    .control(entity, crate::effects::PlaybackCommand::Stop);
+            }
+        }
         self.update_effect_children(delta);
+        let events = self.effects_runtime.frame().events.clone();
+        for (entity, _, group) in &groups {
+            if self.effect_groups.state(*entity, group) == crate::effects::PlaybackState::Playing {
+                for (target, command) in crate::effects::group_trigger_commands(group, &events) {
+                    let _ = self.control_effect(target, command);
+                }
+            }
+        }
         self.update_effect_group_events();
     }
 
+    fn consume_gpu_particle_feedback(&mut self) {
+        let feedback = self.gpu_feedback.lock().ok().and_then(|mut mailbox| {
+            let feedback = mailbox.as_mut()?;
+            if !feedback.pending {
+                return None;
+            }
+            feedback.pending = false;
+            Some((
+                feedback.context,
+                std::mem::take(&mut feedback.acknowledgements),
+            ))
+        });
+        if let Some((context, acknowledgements)) = feedback {
+            self.effects_runtime.set_gpu_particle_context(context);
+            let acknowledgements: Vec<_> = acknowledgements.into_iter().collect();
+            self.effects_runtime
+                .acknowledge_gpu_particles(&acknowledgements);
+        }
+    }
+
+    fn composite_effect_inputs(
+        &self,
+        delta: f32,
+        transforms: &BTreeMap<EntityId, glam::Mat4>,
+        restarted: &BTreeMap<EntityId, f32>,
+        completed: &BTreeSet<EntityId>,
+    ) -> Vec<crate::effects::EffectInput> {
+        let mut inputs = Vec::new();
+        for entity in self.entity_ids() {
+            let Some(mut effect) = self.effect(entity).ok().flatten() else {
+                continue;
+            };
+            let mut ancestors = self.composite_ancestors(entity);
+            ancestors.reverse();
+            let mut speed = 1.0_f32;
+            for (group_id, group) in &ancestors {
+                speed = (speed * group.time_scale).min(1000.0);
+                let state = self.effect_groups.state(*group_id, group);
+                if state == crate::effects::PlaybackState::Paused {
+                    speed = 0.0;
+                }
+                if matches!(
+                    state,
+                    crate::effects::PlaybackState::Stopped
+                        | crate::effects::PlaybackState::Disposed
+                ) || (state == crate::effects::PlaybackState::Completed
+                    && !completed.contains(group_id))
+                {
+                    effect.common.enabled = false;
+                }
+                if let Some(elapsed) = restarted.get(group_id) {
+                    let scale_delta = delta.max(0.0) * group.time_scale;
+                    if scale_delta > 0.0 {
+                        speed *= (*elapsed / scale_delta).clamp(0.0, 1.0);
+                    }
+                }
+                // Group edits and assets are validated before mutation. Re-check
+                // the cloned result defensively when loading recovered scenes.
+                if crate::effects::apply_group_bindings(group, entity, &mut effect).is_err() {
+                    effect.common.enabled = false;
+                }
+                if group.trigger_bindings.iter().any(|binding| {
+                    group.child_entities.get(binding.source_child as usize) == Some(&entity)
+                }) {
+                    match &mut effect.kind {
+                        crate::effects::EffectKind::Particle(p)
+                        | crate::effects::EffectKind::MeshParticle(p) => p.generate_events = true,
+                        crate::effects::EffectKind::Weather(w) => w.emitter.generate_events = true,
+                        _ => {}
+                    }
+                }
+            }
+            effect.common.time_scale = (effect.common.time_scale * speed).min(1000.0);
+            let Some(transform) = transforms.get(&entity).copied() else {
+                continue;
+            };
+            inputs.push(crate::effects::EffectInput {
+                entity,
+                transform,
+                effect,
+            });
+        }
+        inputs
+    }
+
+    fn composite_ancestors(
+        &self,
+        entity: EntityId,
+    ) -> Vec<(EntityId, crate::effects::EffectGroup)> {
+        let mut current = Some(entity);
+        let mut groups = Vec::new();
+        let mut visited = BTreeSet::new();
+        while let Some(entity) = current {
+            if !visited.insert(entity) {
+                break;
+            }
+            if let Some(group) = self.effect_group(entity).ok().flatten() {
+                groups.push((entity, group));
+            }
+            current = self
+                .parent(entity)
+                .ok()
+                .flatten()
+                .or_else(|| self.temporary_effect_owners.get(&entity).copied());
+        }
+        groups
+    }
+
+    /// Returns local composite playback scaling, excluding the global scene clock.
+    /// # Errors
+    /// Returns an error when the entity is absent.
+    pub fn effective_effect_time_scale(&self, entity: EntityId) -> Result<f32, WorldError> {
+        self.ecs_entity(entity)?;
+        Ok(self
+            .composite_ancestors(entity)
+            .iter()
+            .fold(1.0_f32, |scale, (_, group)| {
+                (scale * group.time_scale).min(1000.0)
+            }))
+    }
+
     fn update_effect_group_events(&mut self) {
-        let mut groups = BTreeSet::new();
+        let mut groups: BTreeSet<_> = self
+            .entity_ids()
+            .filter(|entity| self.effect_group(*entity).ok().flatten().is_some())
+            .collect();
         for event in &self.effects_runtime.frame().events {
             if event.kind != crate::effects::EffectEventKind::Completed {
                 continue;
@@ -796,6 +1222,7 @@ impl SceneWorld {
                         kind: crate::effects::EffectEventKind::Completed,
                         position,
                         child_effect: None,
+                        velocity: glam::Vec3::ZERO,
                     });
             }
         }
@@ -813,6 +1240,48 @@ impl SceneWorld {
         asset.validate().map_err(WorldError::InvalidArgument)?;
         let mut commands = Vec::new();
         for entity in self.entity_ids() {
+            if let Some(group) = self.effect_group(entity)?
+                && group.source == Some(id)
+            {
+                let mut defaults = asset.clone();
+                let mapping: BTreeMap<_, _> = group
+                    .child_entities
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, child)| {
+                        let source = self.effect(*child).ok()??.source?;
+                        (source.asset == id).then_some((source.child, u32::try_from(index).ok()?))
+                    })
+                    .collect();
+                defaults.bindings.retain_mut(|binding| {
+                    if let Some(child) = mapping.get(&binding.child) {
+                        binding.child = *child;
+                        true
+                    } else {
+                        false
+                    }
+                });
+                defaults.trigger_bindings.retain_mut(|binding| {
+                    match (
+                        mapping.get(&binding.source_child),
+                        mapping.get(&binding.target_child),
+                    ) {
+                        (Some(source), Some(target)) => {
+                            binding.source_child = *source;
+                            binding.target_child = *target;
+                            true
+                        }
+                        _ => false,
+                    }
+                });
+                let updated = group.refresh_defaults(&defaults);
+                if updated != group {
+                    commands.push(WorldCommand::SetEffectGroup {
+                        entity,
+                        value: Some(Box::new(updated)),
+                    });
+                }
+            }
             let Some(instance) = self.effect(entity)? else {
                 continue;
             };
@@ -884,16 +1353,22 @@ impl SceneWorld {
         let asset = self.effect_assets.get(&asset_id).ok_or_else(|| {
             WorldError::InvalidArgument(format!("effect asset {asset_id} is unavailable"))
         })?;
+        let children = asset.instances_with_ids(Some(asset_id));
         let root = EntitySnapshot {
             name: Some(asset.name.clone()),
             folder: true,
             parent,
             local_transform: transform,
+            effect_group: Some(crate::effects::EffectGroup::from_asset_with_children(
+                Some(asset_id),
+                asset,
+                &children,
+            )),
             ..Default::default()
         };
         let root_id = root.id;
         let mut commands = vec![WorldCommand::Spawn(Box::new(root))];
-        for mut snapshot in asset.instances_with_ids(Some(asset_id)) {
+        for mut snapshot in children {
             snapshot.parent = Some(root_id);
             commands.push(WorldCommand::Spawn(Box::new(snapshot)));
         }
@@ -917,47 +1392,69 @@ impl SceneWorld {
         crate::effects::sample_wind(&inputs, position, time, layers)
     }
 
-    fn update_effect_children(&mut self, delta: f32) {
-        // Cosmetic child effects cannot recursively grow without a hard bound.
-        const MAX_CHILDREN: usize = 1024;
-        const MAX_SPAWNS_PER_TICK: usize = 128;
-        // This fallback budget uses the same clock as simulation. Paused,
-        // disabled or zero-speed children retain their remaining authored time.
+    fn expired_effect_children(&mut self, delta: f32) -> BTreeSet<EntityId> {
         let clocks: BTreeMap<_, _> = self
             .temporary_effects
             .keys()
             .filter_map(|entity| {
-                let mut effect = self.effect(*entity).ok()??;
-                effect.resolve_parameters();
-                Some((*entity, (effect.common.enabled, effect.common.time_scale)))
+                let state = self.effect_state(*entity).ok().flatten()?;
+                let scale = self.effective_effect_time_scale(*entity).ok()?;
+                let enabled = self.composite_ancestors(*entity).iter().all(|(id, group)| {
+                    self.effect_groups.state(*id, group) == crate::effects::PlaybackState::Playing
+                });
+                Some((*entity, (state, scale, enabled)))
             })
             .collect();
+        let mut expired = BTreeSet::new();
+        for (entity, (_, remaining)) in &mut self.temporary_effects {
+            let Some((state, scale, enabled)) = clocks.get(entity) else {
+                expired.insert(*entity);
+                continue;
+            };
+            if matches!(
+                state,
+                crate::effects::PlaybackState::Completed | crate::effects::PlaybackState::Disposed
+            ) {
+                expired.insert(*entity);
+            } else if *state == crate::effects::PlaybackState::Playing && *enabled {
+                *remaining -= delta * scale;
+                if *remaining <= 0.0 {
+                    expired.insert(*entity);
+                }
+            }
+        }
+        for (root, owner) in &self.temporary_effect_owners {
+            if !self.contains(*owner)
+                || expired.contains(root)
+                || self.composite_ancestors(*owner).iter().any(|(id, group)| {
+                    matches!(
+                        self.effect_groups.state(*id, group),
+                        crate::effects::PlaybackState::Completed
+                            | crate::effects::PlaybackState::Stopped
+                            | crate::effects::PlaybackState::Disposed
+                    )
+                })
+            {
+                expired.insert(*root);
+                expired.extend(self.descendants(*root).unwrap_or_default());
+            }
+        }
+        expired
+    }
+
+    fn update_effect_children(&mut self, delta: f32) {
+        const MAX_CHILDREN: usize = 1024;
+        const MAX_SPAWNS_PER_TICK: usize = 128;
         let delta = if delta.is_finite() {
             delta.clamp(0.0, 1.0)
         } else {
             0.0
         };
-        let mut expired = Vec::new();
-        for (entity, (_, remaining)) in &mut self.temporary_effects {
-            use crate::effects::PlaybackState;
-            let state = self.effects_runtime.state(*entity);
-            let Some((enabled, time_scale)) = clocks.get(entity) else {
-                expired.push(*entity);
-                continue;
-            };
-            if matches!(state, PlaybackState::Completed | PlaybackState::Disposed) {
-                expired.push(*entity);
-            } else if state == PlaybackState::Playing && *enabled {
-                *remaining -= delta * time_scale;
-                if *remaining <= 0.0 {
-                    expired.push(*entity);
-                }
-            }
-        }
-        // Preserve this frame's death/collision triggers until their source
-        // identity and generation have been resolved, even when it completes.
+        let expired = self.expired_effect_children(delta);
         let events = self.effects_runtime.frame().events.clone();
         let mut commands = Vec::new();
+        let mut pending = Vec::new();
+        let mut owners = Vec::new();
         for event in events {
             let Some(asset_id) = event.child_effect else {
                 continue;
@@ -983,34 +1480,66 @@ impl SceneWorld {
             let Some(asset) = self.effect_assets.get(&asset_id) else {
                 continue;
             };
-            if commands.len() + asset.effects.len() > MAX_SPAWNS_PER_TICK
-                || self.temporary_effects.len() + asset.effects.len() > MAX_CHILDREN
+            let count = asset.effects.len() + 1;
+            if commands.len() + count > MAX_SPAWNS_PER_TICK
+                || self.temporary_effects.len() + pending.len() + count > MAX_CHILDREN
             {
                 continue;
             }
-            for mut snapshot in asset.instances_with_ids(Some(asset_id)) {
-                let Some(effect) = &mut snapshot.effect else {
-                    continue;
-                };
-                effect.common.looping = false;
-                let tail = match &effect.kind {
-                    crate::effects::EffectKind::Particle(p)
-                    | crate::effects::EffectKind::MeshParticle(p) => p.lifetime[1],
-                    crate::effects::EffectKind::Weather(w) => w.emitter.lifetime[1],
-                    crate::effects::EffectKind::Trail(t) => t.lifetime,
-                    _ => 0.0,
-                };
-                let lifetime = effect.common.delay + effect.common.duration + tail;
-                snapshot.name = Some(format!("{} (sub-emitter)", asset.name));
-                snapshot.local_transform.translation += event.position;
-                self.temporary_effects
-                    .insert(snapshot.id, (generation + 1, lifetime));
-                commands.push(WorldCommand::Spawn(Box::new(snapshot)));
+            let mut children = asset.instances_with_ids(Some(asset_id));
+            let mut group = crate::effects::EffectGroup::from_asset_with_children(
+                Some(asset_id),
+                asset,
+                &children,
+            );
+            group.looping = false;
+            group.auto_play = true;
+            let root = EntitySnapshot {
+                name: Some(format!("{} (sub-emitter)", asset.name)),
+                folder: true,
+                local_transform: LocalTransform {
+                    translation: event.position,
+                    ..Default::default()
+                },
+                effect_group: Some(group.clone()),
+                ..Default::default()
+            };
+            let root_id = root.id;
+            owners.push((root_id, event.entity));
+            pending.push((root_id, (generation + 1, group.duration)));
+            commands.push(WorldCommand::Spawn(Box::new(root)));
+            for child in &mut children {
+                child.parent = Some(root_id);
+                // Event velocity is already scaled by the sub-emitter inheritance control.
+                let inverse = child.local_transform.matrix().inverse();
+                let inherited = inverse.transform_vector3(event.velocity).to_array();
+                if let Some(effect) = &mut child.effect {
+                    let emitter = match &mut effect.kind {
+                        crate::effects::EffectKind::Particle(p)
+                        | crate::effects::EffectKind::MeshParticle(p) => Some(p),
+                        crate::effects::EffectKind::Weather(w) => Some(&mut w.emitter),
+                        _ => None,
+                    };
+                    if let Some(emitter) = emitter {
+                        for (value, inherited) in emitter.initial_velocity.iter_mut().zip(inherited)
+                        {
+                            *value += inherited;
+                        }
+                    }
+                }
+                pending.push((child.id, (generation + 1, group.duration)));
+                commands.push(WorldCommand::Spawn(Box::new(child.clone())));
             }
         }
-        commands.extend(expired.into_iter().map(WorldCommand::Despawn));
-        if !commands.is_empty() {
-            let _ = self.apply_commands(&commands);
+        commands.extend(
+            expired
+                .into_iter()
+                .filter(|entity| self.contains(*entity))
+                .map(WorldCommand::Despawn),
+        );
+        if !commands.is_empty() && self.apply_commands(&commands).is_ok() {
+            self.temporary_effects.extend(pending);
+            self.temporary_effect_owners.extend(owners);
             self.propagate_transforms();
         }
     }
@@ -1031,6 +1560,22 @@ impl SceneWorld {
     ) -> Result<(), WorldError> {
         let mut targets = self.descendants(id)?;
         targets.insert(0, id);
+        loop {
+            let roots: Vec<_> = self
+                .temporary_effect_owners
+                .iter()
+                .filter_map(|(root, owner)| {
+                    (targets.contains(owner) && !targets.contains(root)).then_some(*root)
+                })
+                .collect();
+            if roots.is_empty() {
+                break;
+            }
+            for root in roots {
+                targets.push(root);
+                targets.extend(self.descendants(root)?);
+            }
+        }
         let mut found = false;
         for entity in targets {
             if matches!(
@@ -1040,6 +1585,13 @@ impl SceneWorld {
                     | crate::effects::PlaybackCommand::Reset
             ) {
                 self.completed_effect_groups.remove(&entity);
+            }
+            if let Some(group) = self.effect_group(entity)? {
+                found = true;
+                self.effect_groups.control(entity, &group, command);
+                if command == crate::effects::PlaybackCommand::Dispose {
+                    self.insert_or_remove::<crate::effects::EffectGroup>(entity, None);
+                }
             }
             let Some(effect) = self.effect(entity)? else {
                 continue;
@@ -1070,15 +1622,23 @@ impl SceneWorld {
         id: EntityId,
     ) -> Result<Option<crate::effects::PlaybackState>, WorldError> {
         use crate::effects::PlaybackState;
-        if self.effect(id)?.is_some() {
-            return Ok(Some(self.effects_runtime.state(id)));
+        if let Some(group) = self.effect_group(id)? {
+            return Ok(Some(self.effect_groups.state(id, &group)));
         }
-        let states: Vec<_> = self
-            .descendants(id)?
-            .into_iter()
-            .filter(|entity| self.effect(*entity).ok().flatten().is_some())
-            .map(|entity| self.effects_runtime.state(entity))
-            .collect();
+        let mut targets = self.descendants(id)?;
+        targets.insert(0, id);
+        let mut states = Vec::new();
+        for entity in targets {
+            if self
+                .effect(entity)?
+                .is_some_and(|effect| effect.common.enabled)
+            {
+                states.push(self.effects_runtime.state(entity));
+            }
+            if let Some(group) = self.effect_group(entity)? {
+                states.push(self.effect_groups.state(entity, &group));
+            }
+        }
         Ok(if states.is_empty() {
             None
         } else if states.contains(&PlaybackState::Playing) {
@@ -1316,6 +1876,9 @@ impl SceneWorld {
         }
         if let Some(effect) = snapshot.effect {
             entity.insert(effect);
+        }
+        if let Some(group) = snapshot.effect_group {
+            entity.insert(group);
         }
         if !snapshot.scripts.is_empty() {
             entity.insert(ScriptComponents(snapshot.scripts));
@@ -1645,6 +2208,7 @@ mod tests {
             can_collide: true,
             anchored: true,
             friction: 0.5,
+            visibility_layers: u32::MAX,
         };
         world
             .apply_commands(&[WorldCommand::SetPartAttributes {
@@ -1653,5 +2217,212 @@ mod tests {
             }])
             .unwrap();
         assert_eq!(world.snapshot(child).unwrap().part_attributes, attributes);
+    }
+    #[test]
+    fn composite_parameters_are_atomic_and_survive_track_deletion_and_reload() {
+        use crate::effects::*;
+        let id = crate::AssetId::new();
+        let mut asset = EffectAsset::new(
+            "bound",
+            vec![EffectComponent::default(), EffectComponent::default()],
+        );
+        asset
+            .parameters
+            .insert("power".into(), EffectParameter::Scalar(2.0));
+        asset.bindings.push(GroupParameterBinding {
+            parameter: "power".into(),
+            child: 1,
+            property_path: "common.time_scale".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+        let mut world = SceneWorld::new();
+        world.register_effect_asset(id, asset.clone()).unwrap();
+        let root = world
+            .instantiate_effect_asset(id, None, LocalTransform::default())
+            .unwrap();
+        let group = world.effect_group(root).unwrap().unwrap();
+        assert_eq!(group.child_entities.len(), 2);
+        let before = world.snapshot(root).unwrap();
+        let mut invalid = group.clone();
+        invalid.bindings[0].property_path = "kind.nonexistent".into();
+        assert!(
+            world
+                .apply_commands(&[
+                    WorldCommand::SetEffectGroup {
+                        entity: root,
+                        value: Some(Box::new(invalid))
+                    },
+                    WorldCommand::SetName {
+                        entity: root,
+                        value: Some("must not commit".into())
+                    }
+                ])
+                .is_err()
+        );
+        assert_eq!(world.snapshot(root).unwrap(), before);
+        world
+            .apply_commands(&[WorldCommand::Despawn(group.child_entities[0])])
+            .unwrap();
+        let group = world.effect_group(root).unwrap().unwrap();
+        assert_eq!(group.child_entities.len(), 1);
+        assert_eq!(group.bindings[0].child, 0);
+        asset
+            .parameters
+            .insert("power".into(), EffectParameter::Scalar(3.0));
+        world.register_effect_asset(id, asset).unwrap();
+        let group = world.effect_group(root).unwrap().unwrap();
+        assert_eq!(group.bindings[0].child, 0);
+        assert_eq!(group.parameters["power"], EffectParameter::Scalar(3.0));
+        assert!(
+            (world
+                .effect(group.child_entities[0])
+                .unwrap()
+                .unwrap()
+                .common
+                .time_scale
+                - 1.0)
+                .abs()
+                < f32::EPSILON
+        );
+    }
+
+    #[test]
+    fn composite_timeline_loops_pause_and_complete_with_canonical_state() {
+        use crate::effects::*;
+        let mut effect = EffectComponent::default();
+        effect.common.looping = false;
+        effect.common.duration = 0.05;
+        let mut asset = EffectAsset::new("clock", vec![effect]);
+        asset.group_settings = Some(EffectGroupSettings {
+            auto_play: true,
+            looping: true,
+            duration: 0.25,
+            time_scale: 2.0,
+        });
+        let asset_id = crate::AssetId::new();
+        let mut world = SceneWorld::new();
+        world.register_effect_asset(asset_id, asset).unwrap();
+        let root = world
+            .instantiate_effect_asset(asset_id, None, LocalTransform::default())
+            .unwrap();
+        world.update_effects(0.05);
+        assert_eq!(
+            world.effect_state(root).unwrap(),
+            Some(PlaybackState::Playing)
+        );
+        world.control_effect(root, PlaybackCommand::Pause).unwrap();
+        world.update_effects(0.5);
+        assert_eq!(
+            world.effect_state(root).unwrap(),
+            Some(PlaybackState::Paused)
+        );
+        world.control_effect(root, PlaybackCommand::Resume).unwrap();
+        world.update_effects(0.1);
+        assert_eq!(
+            world.effect_state(root).unwrap(),
+            Some(PlaybackState::Playing)
+        );
+        let mut group = world.effect_group(root).unwrap().unwrap();
+        group.looping = false;
+        world
+            .apply_commands(&[WorldCommand::SetEffectGroup {
+                entity: root,
+                value: Some(Box::new(group)),
+            }])
+            .unwrap();
+        world.update_effects(0.2);
+        assert_eq!(
+            world.effect_state(root).unwrap(),
+            Some(PlaybackState::Completed)
+        );
+        world
+            .control_effect(root, PlaybackCommand::Restart)
+            .unwrap();
+        assert_eq!(
+            world.effect_state(root).unwrap(),
+            Some(PlaybackState::Playing)
+        );
+    }
+    #[test]
+    fn sub_emitter_retains_composite_audio_light_bindings_and_owner_controls() {
+        use crate::effects::*;
+        let mut world = SceneWorld::new();
+        let source = EntitySnapshot {
+            effect: Some(EffectComponent::default()),
+            ..Default::default()
+        };
+        let source_id = source.id;
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(source))])
+            .unwrap();
+        let asset_id = crate::AssetId::new();
+        let sound = crate::AssetId::new();
+        let mut asset = EffectAsset::new("child", vec![EffectComponent::default()]);
+        asset.transforms =
+            vec![glam::Mat4::from_rotation_z(std::f32::consts::FRAC_PI_2).to_cols_array()];
+        asset.lights = vec![Some(Light::default())];
+        asset.sound_cues.push(EffectSoundCue {
+            asset: sound,
+            delay: 0.0,
+            volume: 1.0,
+            pitch: 1.0,
+            spatial: true,
+            looping: false,
+        });
+        asset
+            .parameters
+            .insert("speed".into(), EffectParameter::Scalar(2.0));
+        asset.bindings.push(GroupParameterBinding {
+            parameter: "speed".into(),
+            child: 0,
+            property_path: "common.time_scale".into(),
+            scale: 1.0,
+            offset: 0.0,
+        });
+        world.register_effect_asset(asset_id, asset).unwrap();
+        world.effects_runtime.emit_event(EffectEvent {
+            entity: source_id,
+            kind: EffectEventKind::Birth,
+            position: Vec3::new(3.0, 4.0, 5.0),
+            velocity: Vec3::X * 4.0,
+            child_effect: Some(asset_id),
+        });
+        world.update_effect_children(0.0);
+        let root = *world.temporary_effect_owners.keys().next().unwrap();
+        let group = world.effect_group(root).unwrap().unwrap();
+        assert_eq!(group.sound_cues[0].asset, sound);
+        assert_eq!(group.bindings.len(), 1);
+        let child = group.child_entities[0];
+        assert!(world.light(child).unwrap().is_some());
+        let EffectKind::Particle(emitter) = world.effect(child).unwrap().unwrap().kind else {
+            panic!("particle child")
+        };
+        assert!(
+            (glam::Vec3::from_array(emitter.initial_velocity) - Vec3::NEG_Y * 4.0).length()
+                < 0.0001
+        );
+        world.update_effects(0.0);
+        assert!(world.take_effect_audio_events().iter().any(|event| event.group == root && matches!(event.command, EffectAudioCommand::Play { asset, .. } if asset == sound)));
+        world
+            .control_effect(source_id, PlaybackCommand::Pause)
+            .unwrap();
+        assert_eq!(
+            world.effect_group_state(root).unwrap(),
+            Some(PlaybackState::Paused)
+        );
+        world
+            .control_effect(source_id, PlaybackCommand::Resume)
+            .unwrap();
+        assert_eq!(
+            world.effect_group_state(root).unwrap(),
+            Some(PlaybackState::Playing)
+        );
+        world
+            .apply_commands(&[WorldCommand::Despawn(source_id)])
+            .unwrap();
+        world.update_effect_children(0.0);
+        assert!(!world.contains(root));
+        assert!(!world.contains(child));
     }
 }

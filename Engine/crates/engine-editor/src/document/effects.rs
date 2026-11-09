@@ -55,6 +55,14 @@ pub(super) fn refresh_sources(world: &mut SceneWorld, root: &Path) -> Vec<SceneD
             }
             let bytes = std::fs::read(&path).map_err(|error| error.to_string())?;
             let asset = engine_world::effects::EffectAsset::from_bytes(&bytes)?;
+            if asset
+                .sound_cues
+                .iter()
+                .any(|cue| cue.asset == engine_world::effects::explosion_sound_asset())
+            {
+                engine_assets::install_builtin_effect_resources(root)
+                    .map_err(|error| error.to_string())?;
+            }
             world
                 .register_effect_asset(meta.asset_id, asset)
                 .map_err(|error| error.to_string())

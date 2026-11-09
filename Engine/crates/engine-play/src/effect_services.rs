@@ -39,8 +39,14 @@ enum Query {
     Get { entity: EntityId },
     #[serde(rename = "effect_configure")]
     Configure { entity: EntityId, settings: Value },
+    #[serde(rename = "effect_group_get")]
+    GroupGet { entity: EntityId },
+    #[serde(rename = "effect_group_configure")]
+    GroupConfigure { entity: EntityId, settings: Value },
     #[serde(rename = "effect_control")]
     Control { entity: EntityId, action: String },
+    #[serde(rename = "effect_refresh_probe")]
+    RefreshProbe { entity: EntityId },
     #[serde(rename = "effect_state")]
     State { entity: EntityId },
 }
@@ -109,6 +115,13 @@ pub(crate) fn query(world: &mut SceneWorld, value: Value) -> Result<Value, Strin
             serde_json::to_value(world.effect(entity).map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())
         }
+        Query::GroupGet { entity } => serde_json::to_value(
+            world
+                .effect_group(entity)
+                .map_err(|error| error.to_string())?,
+        )
+        .map_err(|error| error.to_string()),
+        Query::GroupConfigure { entity, settings } => configure_group(world, entity, settings),
         Query::Create { entity, kind } => {
             if world.effect(entity).map_err(|e| e.to_string())?.is_some() {
                 return Err(
@@ -135,6 +148,10 @@ pub(crate) fn query(world: &mut SceneWorld, value: Value) -> Result<Value, Strin
             save(world, entity, effect)
         }
         Query::Control { entity, action } => control(world, entity, &action),
+        Query::RefreshProbe { entity } => world
+            .request_reflection_probe_refresh(entity)
+            .map(|revision| json!(revision))
+            .map_err(|e| e.to_string()),
         Query::State { entity } => Ok(world
             .effect_state(entity)
             .map_err(|e| e.to_string())?
@@ -222,6 +239,42 @@ fn save(
 }
 
 /// Merge only known fields, rejecting typos before mutating the world.
+fn configure_group(
+    world: &mut SceneWorld,
+    entity: EntityId,
+    settings: Value,
+) -> Result<Value, String> {
+    if settings.as_object().is_some_and(|fields| {
+        ["source", "source_baseline", "child_entities"]
+            .iter()
+            .any(|name| fields.contains_key(*name))
+    }) {
+        return Err("composite source and child identities are read-only; instantiate or reassign the asset through the scene authoring API".into());
+    }
+    let group = world
+        .effect_group(entity)
+        .map_err(|error| error.to_string())?
+        .ok_or("entity has no composite effect timeline; instantiate an effect asset first")?;
+    let mut value = serde_json::to_value(group).map_err(|error| error.to_string())?;
+    patch(&mut value, &settings, "group")?;
+    let group: engine_world::effects::EffectGroup = serde_json::from_value(value)
+        .map_err(|error| format!("invalid composite settings: {error}"))?;
+    group.validate()?;
+    if let Some(source) = group.source
+        && !world.has_effect_asset(source)
+    {
+        return Err(format!("effect asset `{source}` is not loaded"));
+    }
+    let output = serde_json::to_value(&group).map_err(|error| error.to_string())?;
+    world
+        .apply_commands(&[WorldCommand::SetEffectGroup {
+            entity,
+            value: Some(Box::new(group)),
+        }])
+        .map_err(|error| error.to_string())?;
+    Ok(output)
+}
+
 fn patch(target: &mut Value, settings: &Value, path: &str) -> Result<(), String> {
     let fields = settings
         .as_object()
@@ -230,6 +283,14 @@ fn patch(target: &mut Value, settings: &Value, path: &str) -> Result<(), String>
         .as_object_mut()
         .ok_or_else(|| format!("`{path}` is not an object"))?;
     for (name, value) in fields {
+        if path.ends_with(".parameters") {
+            if value.is_null() {
+                slots.remove(name);
+            } else {
+                slots.insert(name.clone(), value.clone());
+            }
+            continue;
+        }
         let slot = slots
             .get_mut(name)
             .ok_or_else(|| format!("unknown effect property `{path}.{name}`"))?;
@@ -383,6 +444,74 @@ mod tests {
             patch(&mut value, &json!({"common":{"duraton":1}}), "effect")
                 .unwrap_err()
                 .contains("duraton")
+        );
+    }
+
+    #[test]
+    fn group_queries_preserve_identity_and_validate_parameter_updates_before_commit() {
+        let mut world = SceneWorld::new();
+        let snapshot = engine_world::EntitySnapshot {
+            effect_group: Some(engine_world::effects::EffectGroup::default()),
+            ..Default::default()
+        };
+        let entity = snapshot.id;
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(snapshot))])
+            .unwrap();
+        let updated = query(&mut world, json!({"op":"effect_group_configure","entity":entity,"settings":{"duration":2.0,"parameters":{"strength":{"Scalar":3.0}}}})).unwrap();
+        assert_eq!(updated["duration"], 2.0);
+        assert_eq!(updated["parameters"]["strength"]["Scalar"], 3.0);
+        assert_eq!(
+            query(&mut world, json!({"op":"effect_group_get","entity":entity})).unwrap(),
+            updated
+        );
+        for settings in [
+            json!({"duration":-2.0}),
+            json!({"parameters":{"strength":{"Scalar":"bad"}}}),
+            json!({"child_entities":[]}),
+            json!({"source":null}),
+            json!({"source_baseline":null}),
+        ] {
+            assert!(
+                query(
+                    &mut world,
+                    json!({"op":"effect_group_configure","entity":entity,"settings":settings})
+                )
+                .is_err()
+            );
+            assert_eq!(
+                query(&mut world, json!({"op":"effect_group_get","entity":entity})).unwrap(),
+                updated
+            );
+        }
+        let cleared = query(&mut world, json!({"op":"effect_group_configure","entity":entity,"settings":{"parameters":{"strength":null}}})).unwrap();
+        assert_eq!(cleared["parameters"], json!({}));
+    }
+
+    #[test]
+    fn script_parameter_maps_accept_new_keys_and_drive_the_existing_simulation() {
+        let mut world = SceneWorld::new();
+        let snapshot = engine_world::EntitySnapshot {
+            effect: Some(EffectComponent::default()),
+            ..Default::default()
+        };
+        let entity = snapshot.id;
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(snapshot))])
+            .unwrap();
+        query(&mut world, json!({"op":"effect_configure","entity":entity,"settings":{"common":{"parameters":{"emission_rate":{"Scalar":100.0}}}}})).unwrap();
+        world.propagate_transforms();
+        world.update_effects(0.1);
+        assert_eq!(world.effect_frame().particles.len(), 10);
+        query(&mut world, json!({"op":"effect_configure","entity":entity,"settings":{"common":{"parameters":{"emission_rate":null}}}})).unwrap();
+        assert!(
+            world
+                .effect(entity)
+                .unwrap()
+                .unwrap()
+                .common
+                .parameters
+                .is_empty()
         );
     }
 }

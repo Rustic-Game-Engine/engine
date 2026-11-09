@@ -1,5 +1,6 @@
 use super::{
-    RendererError, VIEWPORT_SAMPLE_COUNT, ViewportScene, f32_bytes, validate_and_reflect_wgsl,
+    RendererError, VIEWPORT_COLOR_FORMAT, VIEWPORT_SAMPLE_COUNT, ViewportScene, f32_bytes,
+    validate_and_reflect_wgsl,
 };
 use std::path::{Path, PathBuf};
 
@@ -48,11 +49,13 @@ fn texel(p: vec2<i32>, size: vec2<i32>) -> vec3<f32> {
         let f = fract(position);
         color = mix(mix(texel(p, size), texel(p + vec2<i32>(1, 0), size), f.x), mix(texel(p + vec2<i32>(0, 1), size), texel(p + vec2<i32>(1, 1), size), f.x), f.y);
         color *= exp2(uniforms.options.z);
-        if uniforms.options.w > 0.5 { color = color / (vec3<f32>(1.0) + color); }
+
     }
     let horizon = exp(-abs(direction.y) * 8.0) * (1.0 - exp(-uniforms.haze.w * 100.0));
-    color = mix(color, uniforms.haze.rgb, horizon);
-    return vec4<f32>(linear_to_srgb(color), 1.0);
+    if uniforms.options.w<0.5 {color=color/max(vec3<f32>(1.)-min(color,vec3<f32>(0.999)),vec3<f32>(0.00001));}
+    let haze=uniforms.haze.rgb/max(vec3<f32>(1.)-min(uniforms.haze.rgb,vec3<f32>(0.999)),vec3<f32>(0.00001));
+    color = mix(color, haze, horizon);
+    return vec4<f32>(color, 1.0);
 }
 ";
 
@@ -319,7 +322,7 @@ fn sky_pipeline(
             entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: VIEWPORT_COLOR_FORMAT,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],

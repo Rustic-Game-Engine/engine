@@ -4,12 +4,17 @@ use super::*;
 use engine_world::{SurfaceTextures, TextureMap};
 use std::path::Path;
 
+type SourceStamp = (String, Option<std::time::SystemTime>, u64);
+
 pub(super) struct SurfaceCache {
     pub layout: wgpu::BindGroupLayout,
     groups: HashMap<String, wgpu::BindGroup>,
+    stamps: HashMap<String, Vec<SourceStamp>>,
 }
 fn key(material: &SurfaceTextures) -> String {
-    format!("{material:?}")
+    let mut recipe = material.clone();
+    recipe.effect_source = None;
+    format!("{recipe:?}")
 }
 impl SurfaceCache {
     pub fn new(device: &wgpu::Device) -> Self {
@@ -42,15 +47,27 @@ impl SurfaceCache {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
         });
         Self {
             layout,
             groups: HashMap::new(),
+            stamps: HashMap::new(),
         }
     }
     pub fn clear(&mut self) {
         self.groups.clear();
+        self.stamps.clear();
     }
     pub fn default_group(&self) -> &wgpu::BindGroup {
         self.group(&SurfaceTextures::default())
@@ -70,13 +87,16 @@ impl SurfaceCache {
         for material in std::iter::once(&default).chain(scene.meshes.iter().map(|m| &m.textures)) {
             let key = key(material);
             active.insert(key.clone());
-            if self.groups.contains_key(&key) {
+            let stamp = source_stamps(root, material);
+            if self.groups.contains_key(&key) && self.stamps.get(&key) == Some(&stamp) {
                 continue;
             }
             let group = upload(device, queue, &self.layout, root, material)?;
+            self.stamps.insert(key.clone(), stamp);
             self.groups.insert(key, group);
         }
         self.groups.retain(|key, _| active.contains(key));
+        self.stamps.retain(|key, _| active.contains(key));
         Ok(())
     }
 }
@@ -141,6 +161,27 @@ fn upload(
         mask |= 1 << i;
         images.push((i, image));
     }
+    if let Some(path) = &material.orm_map {
+        let packed = load(root, path)?;
+        for (kind, channel) in [
+            (TextureMap::AmbientOcclusion, 0),
+            (TextureMap::Roughness, 1),
+            (TextureMap::Metallic, 2),
+        ] {
+            if material.maps.contains_key(&kind) {
+                continue;
+            }
+            let layer = TextureMap::ALL
+                .iter()
+                .position(|value| *value == kind)
+                .unwrap_or(0);
+            let image = split_orm_channel(&packed, channel);
+            size[0] = size[0].max(image.width().min(1024));
+            size[1] = size[1].max(image.height().min(1024));
+            mask |= 1 << layer;
+            images.push((layer, image));
+        }
+    }
     let texture = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("surface HDR maps"),
         size: wgpu::Extent3d {
@@ -198,6 +239,7 @@ fn upload(
             },
         );
     }
+    let effect_view = upload_effect_maps(device, queue, root, material)?;
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("surface repeat"),
@@ -214,11 +256,28 @@ fn upload(
         material.uv_offset[1],
         material.height_scale,
         material.emissive_strength,
-        0.0,
-        0.0,
+        material
+            .roughness
+            .unwrap_or(if mask & (1 << 2) != 0 { 1.0 } else { 0.5 }),
+        material
+            .metallic
+            .unwrap_or(if mask & (1 << 3) != 0 { 1.0 } else { 0.0 }),
     ]);
     bytes.extend_from_slice(&mask.to_le_bytes());
     bytes.extend_from_slice(&[0; 12]);
+    bytes.extend(f32_bytes(&material.base_color));
+    bytes.extend(f32_bytes(&[
+        material.emissive_color[0],
+        material.emissive_color[1],
+        material.emissive_color[2],
+        1.0,
+    ]));
+    bytes.extend(f32_bytes(&[
+        material.occlusion_strength,
+        material.normal_scale,
+        if material.pbr { 1.0 } else { 0.0 },
+        material.alpha_cutoff.unwrap_or(-1.0),
+    ]));
     let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("surface settings"),
         contents: &bytes,
@@ -240,6 +299,10 @@ fn upload(
                 binding: 2,
                 resource: uniform.as_entire_binding(),
             },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&effect_view),
+            },
         ],
     }))
 }
@@ -247,8 +310,13 @@ fn upload(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::hash::{Hash, Hasher};
     #[test]
     #[ignore = "requires a physical or software graphics adapter"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one GPU context exercises HDR, UV, stable mask reload and restoration end to end"
+    )]
     fn surface_maps_render_hdr_emission_and_clear_without_reuploading_geometry() {
         let directory = tempfile::tempdir().unwrap();
         let hdr = std::fs::File::create(directory.path().join("emissive.hdr")).unwrap();
@@ -338,5 +406,180 @@ mod tests {
             color[2] > 150 && color[0] < 8,
             "UV offset sample: {color:?}"
         );
+        // A real stable-ID mask controls coverage and source edits invalidate its atlas.
+        let target = engine_world::EntityId::new();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        target.hash(&mut hasher);
+        scene.meshes[0].instance_key = hasher.finish();
+        let mask_path = directory.path().join("coverage.png");
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([0_u8, 0, 0, 255]))
+            .save(&mask_path)
+            .unwrap();
+        let metadata = engine_assets::AssetMeta::new("rustic.image", 1);
+        engine_assets::save_meta(&engine_assets::sidecar_path(&mask_path), &metadata).unwrap();
+        let mut frame = engine_world::effects::EffectFrame::default();
+        frame.surfaces.push(engine_world::effects::SurfaceModifier {
+            target_material: None,
+            is_dissolve: true,
+            source: engine_world::EntityId::new(),
+            target,
+            noise_texture: None,
+            mask_texture: Some(metadata.asset_id),
+            distortion_texture: None,
+            distortion_strength: 0.0,
+            direction: [0.0; 3],
+            phase: 0.0,
+            particle_density: 0.0,
+            uv_offset: [0.0; 2],
+            uv_scale: [1.0; 2],
+            uv_rotation: 0.0,
+            dissolve_noise_scale: 1.0,
+            color: [1.0; 4],
+            emission: 0.0,
+            dissolve: 0.5,
+            edge_width: 0.0,
+            edge_color: [0.0; 3],
+        });
+        renderer.set_effect_frame(&frame).unwrap();
+        assert_eq!(
+            center(&renderer.render(33, 33, &scene).unwrap().unwrap()),
+            vec![0, 0, 0]
+        );
+        image::RgbaImage::from_pixel(1, 1, image::Rgba([255_u8; 4]))
+            .save(&mask_path)
+            .unwrap();
+        let restored = center(&renderer.render(33, 33, &scene).unwrap().unwrap());
+        assert!(
+            restored[2] > 150,
+            "modified dissolve mask did not reload: {restored:?}"
+        );
+        renderer
+            .set_effect_frame(&engine_world::effects::EffectFrame::default())
+            .unwrap();
+        assert_eq!(
+            center(&renderer.render(33, 33, &scene).unwrap().unwrap()),
+            restored
+        );
     }
+}
+
+fn split_orm_channel(image: &image::Rgba32FImage, channel: usize) -> image::Rgba32FImage {
+    image::ImageBuffer::from_fn(image.width(), image.height(), |x, y| {
+        let value = image.get_pixel(x, y).0[channel];
+        image::Rgba([value, value, value, 1.0])
+    })
+}
+
+#[cfg(test)]
+mod packed_orm_tests {
+    use super::*;
+    #[test]
+    fn orm_channels_remain_linear_and_keep_gltf_channel_convention() {
+        let image = image::Rgba32FImage::from_pixel(1, 1, image::Rgba([0.25, 0.5, 0.75, 1.0]));
+        for (channel, expected) in [0.25, 0.5, 0.75].into_iter().enumerate() {
+            let split = split_orm_channel(&image, channel);
+            assert!((split.get_pixel(0, 0).0[0] - expected).abs() < f32::EPSILON);
+        }
+    }
+}
+
+fn source_stamps(root: &Path, material: &SurfaceTextures) -> Vec<SourceStamp> {
+    material
+        .maps
+        .values()
+        .chain(material.orm_map.iter())
+        .chain(material.effect_noise_map.iter())
+        .chain(material.effect_mask_map.iter())
+        .chain(material.effect_distortion_map.iter())
+        .map(|path| {
+            let metadata = std::fs::metadata(root.join(path)).ok();
+            (
+                path.clone(),
+                metadata.as_ref().and_then(|value| value.modified().ok()),
+                metadata.map_or(0, |value| value.len()),
+            )
+        })
+        .collect()
+}
+fn upload_effect_maps(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    root: &Path,
+    material: &SurfaceTextures,
+) -> Result<wgpu::TextureView, RendererError> {
+    const SIZE: u32 = 256;
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("surface effect masks"),
+        size: wgpu::Extent3d {
+            width: SIZE,
+            height: SIZE,
+            depth_or_array_layers: 3,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (layer, path) in [
+        material.effect_noise_map.as_ref(),
+        material.effect_mask_map.as_ref(),
+        material.effect_distortion_map.as_ref(),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source = if let Some(path) = path {
+            load(root, path)?
+        } else {
+            image::Rgba32FImage::from_pixel(
+                1,
+                1,
+                image::Rgba(if layer == 2 {
+                    [0.5, 0.5, 0.0, 1.0]
+                } else {
+                    [1.0; 4]
+                }),
+            )
+        };
+        let resized =
+            image::imageops::resize(&source, SIZE, SIZE, image::imageops::FilterType::Triangle);
+        let bytes: Vec<_> = resized
+            .as_raw()
+            .iter()
+            .flat_map(|v| {
+                half::f16::from_f32(if v.is_finite() {
+                    v.clamp(-65504.0, 65504.0)
+                } else {
+                    0.0
+                })
+                .to_le_bytes()
+            })
+            .collect();
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d {
+                    x: 0,
+                    y: 0,
+                    z: u32::try_from(layer).unwrap_or_default(),
+                },
+                aspect: wgpu::TextureAspect::All,
+            },
+            &bytes,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(SIZE * 8),
+                rows_per_image: Some(SIZE),
+            },
+            wgpu::Extent3d {
+                width: SIZE,
+                height: SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
+    }
+    Ok(texture.create_view(&wgpu::TextureViewDescriptor::default()))
 }

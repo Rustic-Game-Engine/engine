@@ -467,6 +467,23 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// Applies a validated interactive effect preview; finish by recording a `SceneEdit` with the drag's original value.
+    /// # Errors
+    /// Rejects read-only documents, absent entities and invalid effect configuration.
+    pub fn preview_effect(
+        &mut self,
+        entity: EntityId,
+        effect: engine_world::effects::EffectComponent,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        self.world
+            .apply_commands(&[engine_world::WorldCommand::SetEffect {
+                entity,
+                value: Some(Box::new(effect)),
+            }])?;
+        Ok(())
+    }
+
     /// Records one complete interactive transform drag as exactly one undo entry.
     ///
     /// # Errors
@@ -649,6 +666,52 @@ impl AuthoringDocument {
         Ok(())
     }
 
+    /// Reassigns the shared material source without disturbing surface overrides.
+    /// # Errors
+    /// Returns an error for a read-only document or missing entity.
+    pub fn set_material(
+        &mut self,
+        entity: EntityId,
+        after: Option<engine_core::AssetId>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.material(entity)?.map(|material| material.asset);
+        if before != after {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::Material {
+                    entity,
+                    before,
+                    after,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Edits the persistent composite timeline and audio cues as one transaction.
+    /// # Errors
+    /// Returns an error for a read-only document, invalid timeline or missing entity.
+    pub fn set_effect_group(
+        &mut self,
+        entity: EntityId,
+        after: Option<engine_world::effects::EffectGroup>,
+    ) -> Result<(), AuthoringError> {
+        self.ensure_writable()?;
+        let before = self.world.snapshot(entity)?.effect_group;
+        if before != after {
+            self.undo.execute(
+                &mut self.world,
+                SceneEdit::EffectGroup {
+                    entity,
+                    before,
+                    after,
+                },
+            )?;
+        }
+        Ok(())
+    }
+
     /// Instantiates an effect asset as a selectable group of timed child entities.
     /// All children are created or removed together by undo/redo.
     ///
@@ -663,15 +726,34 @@ impl AuthoringDocument {
         asset
             .validate()
             .map_err(AuthoringError::SceneFileOperation)?;
+        if asset
+            .sound_cues
+            .iter()
+            .any(|cue| cue.asset == engine_world::effects::explosion_sound_asset())
+        {
+            engine_assets::install_builtin_effect_resources(self.project.root())
+                .map_err(|error| AuthoringError::SceneFileOperation(error.to_string()))?;
+        }
+        let children = asset.instances_with_ids(None);
         let group = EntitySnapshot {
             name: Some(asset.name.clone()),
             folder: true,
             parent,
+            effect_group: Some(
+                engine_world::effects::EffectGroup::from_asset_with_children(
+                    asset
+                        .effects
+                        .iter()
+                        .find_map(|effect| effect.source.as_ref().map(|source| source.asset)),
+                    asset,
+                    &children,
+                ),
+            ),
             ..EntitySnapshot::default()
         };
         let id = group.id;
         let mut edits = vec![SceneEdit::Create { snapshot: group }];
-        for mut snapshot in asset.instances_with_ids(None) {
+        for mut snapshot in children {
             snapshot.parent = Some(id);
             edits.push(SceneEdit::Create { snapshot });
         }
@@ -823,11 +905,32 @@ impl AuthoringDocument {
     pub fn delete_tree(&mut self, entity: EntityId) -> Result<(), AuthoringError> {
         self.ensure_writable()?;
         let snapshots = self.snapshot_tree(entity)?;
-        let edits = snapshots
-            .iter()
-            .rev()
-            .map(|snapshot| SceneEdit::capture_delete(&self.world, snapshot.id))
-            .collect::<Result<Vec<_>, _>>()?;
+        let mut edits = Vec::new();
+        for survivor in self
+            .world
+            .entity_ids()
+            .filter(|id| !snapshots.iter().any(|snapshot| snapshot.id == *id))
+        {
+            if let Some(before) = self.world.snapshot(survivor)?.effect_group {
+                let mut after = before.clone();
+                let removed = snapshots.iter().map(|snapshot| snapshot.id).collect();
+                after.remove_children(&removed);
+                if before != after {
+                    edits.push(SceneEdit::EffectGroup {
+                        entity: survivor,
+                        before: Some(before),
+                        after: Some(after),
+                    });
+                }
+            }
+        }
+        edits.extend(
+            snapshots
+                .iter()
+                .rev()
+                .map(|snapshot| SceneEdit::capture_delete(&self.world, snapshot.id))
+                .collect::<Result<Vec<_>, _>>()?,
+        );
         self.undo.execute(
             &mut self.world,
             SceneEdit::Transaction {
@@ -864,6 +967,9 @@ impl AuthoringDocument {
                 copy.id = ids[&snapshot.id];
                 if let Some(effect) = &mut copy.effect {
                     effect.remap_entities(&ids);
+                }
+                if let Some(group) = &mut copy.effect_group {
+                    group.remap_entities(&ids);
                 }
                 copy.parent = snapshot
                     .parent
@@ -2007,6 +2113,130 @@ mod effect_authoring_tests {
             assert_eq!(reopened.world().effect(id).unwrap(), Some(effect));
             assert!(reopened.set_effect(id, None).is_err());
         }
+    }
+
+    #[test]
+    fn previewed_effect_handle_commits_and_undoes_as_one_edit() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("game"),
+            "Game",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let id = document
+            .add_effect(EffectKind::Beam(BeamRenderer::default()), None)
+            .unwrap();
+        document.save().unwrap();
+        let before = document.world().effect(id).unwrap().unwrap();
+        let mut after = before.clone();
+        if let EffectKind::Beam(beam) = &mut after.kind {
+            beam.end = [3.0, 2.0, 1.0];
+        }
+        document.preview_effect(id, after.clone()).unwrap();
+        assert!(!document.is_modified());
+        document
+            .edit_transaction(
+                "Edit effect handle",
+                vec![SceneEdit::Effect {
+                    entity: id,
+                    before: Some(before.clone()),
+                    after: Some(after.clone()),
+                }],
+            )
+            .unwrap();
+        assert!(document.is_modified());
+        document.undo().unwrap();
+        assert_eq!(document.world().effect(id).unwrap(), Some(before));
+        document.redo().unwrap();
+        assert_eq!(document.world().effect(id).unwrap(), Some(after));
+    }
+
+    #[test]
+    fn group_metadata_material_and_child_binding_delete_restore_through_undo_and_save() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("game"),
+            "Game",
+            ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project.clone(), false).unwrap();
+        let mut asset = EffectAsset::new(
+            "Bound",
+            vec![EffectComponent::new(EffectKind::Particle(
+                ParticleEmitter::default(),
+            ))],
+        );
+        asset
+            .parameters
+            .insert("power".into(), EffectParameter::Scalar(2.0));
+        asset.bindings.push(GroupParameterBinding::default());
+        let id = document.add_effect_asset(&asset, None).unwrap();
+        let group = document.world().snapshot(id).unwrap().effect_group.unwrap();
+        assert_eq!(group.child_entities.len(), 1);
+        document.delete_tree(group.child_entities[0]).unwrap();
+        assert!(
+            document
+                .world()
+                .snapshot(id)
+                .unwrap()
+                .effect_group
+                .unwrap()
+                .bindings
+                .is_empty()
+        );
+        document.undo().unwrap();
+        assert_eq!(
+            document.world().snapshot(id).unwrap().effect_group,
+            Some(group.clone())
+        );
+        let material = engine_core::AssetId::new();
+        document
+            .set_material(group.child_entities[0], Some(material))
+            .unwrap();
+        document.undo().unwrap();
+        assert!(
+            document
+                .world()
+                .snapshot(group.child_entities[0])
+                .unwrap()
+                .material
+                .is_none()
+        );
+        document.redo().unwrap();
+        let copy = document
+            .paste_tree(&document.snapshot_tree(id).unwrap(), None)
+            .unwrap()
+            .unwrap();
+        let copied = document
+            .world()
+            .snapshot(copy)
+            .unwrap()
+            .effect_group
+            .unwrap();
+        assert_ne!(copied.child_entities, group.child_entities);
+        assert_eq!(
+            document.world().parent(copied.child_entities[0]).unwrap(),
+            Some(copy)
+        );
+        document.save().unwrap();
+        let reopened = AuthoringDocument::open(project, true).unwrap();
+        assert_eq!(
+            reopened.world().snapshot(id).unwrap().effect_group,
+            Some(group)
+        );
+        assert_eq!(
+            reopened
+                .world()
+                .snapshot(copied.child_entities[0])
+                .unwrap()
+                .material
+                .unwrap()
+                .asset,
+            material
+        );
     }
 
     #[test]

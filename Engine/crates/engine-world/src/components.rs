@@ -81,11 +81,16 @@ pub struct PartAttributes {
     /// Coulomb friction coefficient, combined geometrically at contacts.
     #[serde(default = "default_friction")]
     pub friction: f32,
+    /// Scene visibility and receiver layers, independent of collision filtering.
+    #[serde(default = "default_visibility_layers")]
+    pub visibility_layers: u32,
 }
 
 fn default_friction() -> f32 {
     0.5
 }
+
+pub(crate) const fn default_visibility_layers() -> u32 { u32::MAX }
 
 impl Default for PartAttributes {
     fn default() -> Self {
@@ -95,6 +100,7 @@ impl Default for PartAttributes {
             can_collide: true,
             anchored: false,
             friction: default_friction(),
+            visibility_layers: u32::MAX,
         }
     }
 }
@@ -192,6 +198,8 @@ pub struct Camera {
     pub zoom: f32,
     pub active: bool,
     pub order: i32,
+    #[serde(default = "default_visibility_layers")]
+    pub visibility_layers: u32,
 }
 
 impl Default for Camera {
@@ -201,6 +209,7 @@ impl Default for Camera {
             zoom: 1.0,
             active: true,
             order: 0,
+            visibility_layers: u32::MAX,
         }
     }
 }

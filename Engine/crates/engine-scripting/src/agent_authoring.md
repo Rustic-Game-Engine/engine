@@ -171,3 +171,17 @@ authoritative damage or physics forces.
 ## Physics authoring
 
 Built-in primitives use oriented box collision proxies and unit mass in Play. Anchor floors and ramps, enable can_collide on both bodies, and author friction (0..10, default 0.5) through object_update.part_attributes. Rotated planes/boxes provide slope normals; curved primitives remain boxes and sheared transforms use enclosing AABBs. Use Physics.force once per FixedUpdate with dt, impulse to add velocity, and launch to replace it. Raycasts/sphere casts return rotated surface normals. Physics.ground(entity, maxAngle) reads the last completed fixed step and returns null or {entity, normal, angle, walkable}; it does not implement a character controller. Register Physics.onCollisionEnter/Stay/Exit explicitly from Start; callbacks arrive during Update with (other ID, world normal), using native array callbacks in C/C++/C#/Java. Both bodies need can_touch and can_collide; at least one must be unanchored. Defining OnCollisionEnter lifecycle functions alone does not register them. Inspect logs and test sliding, landing and leaving contact.
+
+Composite roots expose `Effects.group(entity)` and `Effects.configureGroup(entity,settings)`.
+Configuration validates the whole update before applying it. Group source identity,
+source defaults and child entity IDs are readonly at runtime; instantiate an asset
+before editing its group settings. Parameters use tagged values such as
+`{strength:{Scalar:2}}`; setting a parameter key to null removes its override.
+Bindings address authored child track indices and validated property paths.
+Use `Effects.refreshProbe(entity)` to request a fresh six-face capture, including a
+baked probe. Probe capture layers and camera layers are independent. Author
+`part_attributes.visibility_layers` for mesh inclusion, and inspect `effect_group`
+and `material_asset` in `editor_status`. `object_update` and `object_create` accept
+validated composite groups and existing project `.material` asset UUIDs; updates
+share the editor transaction and undo history. Validate the actual backend through
+playtest logs and viewport capture.

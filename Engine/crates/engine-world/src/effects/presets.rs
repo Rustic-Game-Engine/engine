@@ -1,20 +1,71 @@
 //! Editable, versioned effect assets. A composite is an ordered set of delayed
 //! effects; every child has the same configuration as an ordinary scene effect.
 use super::{
-    BeamRenderer, BlendMode, Burst, CameraShake, DissolveEffect, EffectAppearance, EffectComponent,
-    EffectDefaults, EffectKind, EffectSource, FogVolume, Gradient, OutlineEffect, ParticleEmitter,
-    RibbonRenderer, RingEffect, ScreenFlash, SpawnShape, TrailRenderer, WeatherType, WeatherVolume,
+    BeamRenderer, BlendMode, Burst, CameraShake, Curve, DissolveEffect, EffectAppearance,
+    EffectComponent, EffectDefaults, EffectKind, EffectSource, FogVolume, Gradient, LightPulse,
+    OutlineEffect, ParticleEmitter, RibbonRenderer, RingEffect, ScreenFlash, SpawnShape,
+    TrailRenderer, WeatherType, WeatherVolume,
 };
-use crate::{EntityId, EntitySnapshot, LocalTransform};
+use crate::{
+    AssetId, EntityId, EntitySnapshot, Light, LightKind, LocalTransform, PartAttributes, Primitive,
+    SurfaceTextures,
+};
 use glam::Mat4;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+
+/// A cue on the composite timeline, resolved through the existing audio asset/mixer path.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EffectSoundCue {
+    pub asset: AssetId,
+    pub delay: f32,
+    pub volume: f32,
+    pub pitch: f32,
+    pub spatial: bool,
+    #[serde(default)]
+    pub looping: bool,
+}
+/// Stable identity of the generated, redistributable built-in explosion sound.
+/// The matching `.rmeta` is installed by `engine_assets::install_builtin_effect_resources`.
+pub fn explosion_sound_asset() -> AssetId {
+    AssetId::from(uuid::Uuid::from_u128(
+        0x7275_7374_6963_5f76_6678_5f73_6e64_5f31,
+    ))
+}
+/// Stable identity of the generated PBR debris source installed with built-in resources.
+pub fn explosion_mesh_asset() -> AssetId {
+    AssetId::from(uuid::Uuid::from_bytes(*b"rustic_vfx_mesh1"))
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectAsset {
     pub version: u32,
     pub name: String,
     pub effects: Vec<EffectComponent>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub parameters: BTreeMap<String, super::EffectParameter>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bindings: Vec<super::GroupParameterBinding>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub trigger_bindings: Vec<super::GroupTriggerBinding>,
+    /// Timed cues use the scene's existing audio service and shared playback clock.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sound_cues: Vec<EffectSoundCue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group_settings: Option<super::EffectGroupSettings>,
+    /// Optional light components belonging to the corresponding effect children.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lights: Vec<Option<Light>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub primitives: Vec<Option<Primitive>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub meshes: Vec<Option<AssetId>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<Option<AssetId>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub textures: Vec<Option<SurfaceTextures>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub part_attributes: Vec<Option<PartAttributes>>,
     /// Original child identities, used only to remap internal entity references.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub entity_ids: Vec<EntityId>,
@@ -28,6 +79,17 @@ impl EffectAsset {
             version: 1,
             name: name.into(),
             effects,
+            parameters: BTreeMap::new(),
+            bindings: Vec::new(),
+            trigger_bindings: Vec::new(),
+            sound_cues: Vec::new(),
+            group_settings: None,
+            lights: Vec::new(),
+            primitives: Vec::new(),
+            meshes: Vec::new(),
+            materials: Vec::new(),
+            textures: Vec::new(),
+            part_attributes: Vec::new(),
             entity_ids: Vec::new(),
             transforms: Vec::new(),
         }
@@ -45,7 +107,16 @@ impl EffectAsset {
         if self.effects.is_empty() || self.effects.len() > 128 {
             return Err("effect asset requires 1..128 child effects".into());
         }
-        for length in [self.entity_ids.len(), self.transforms.len()] {
+        for length in [
+            self.entity_ids.len(),
+            self.transforms.len(),
+            self.lights.len(),
+            self.primitives.len(),
+            self.meshes.len(),
+            self.materials.len(),
+            self.textures.len(),
+            self.part_attributes.len(),
+        ] {
             if length != 0 && length != self.effects.len() {
                 return Err("effect child metadata length must match the effects list".into());
             }
@@ -71,11 +142,65 @@ impl EffectAsset {
                 return Err("effect child transform must be a finite nonsingular translation/rotation/scale matrix".into());
             }
         }
+        if let Some(settings) = &self.group_settings {
+            settings.validate()?;
+        }
+        if self.sound_cues.len() > 128 {
+            return Err("effect assets support at most128 sound cues".into());
+        }
+        for cue in &self.sound_cues {
+            if !cue.delay.is_finite()
+                || cue.delay < 0.0
+                || !cue.volume.is_finite()
+                || !(0.0..=16.0).contains(&cue.volume)
+                || !cue.pitch.is_finite()
+                || !(0.01..=16.0).contains(&cue.pitch)
+            {
+                return Err("sound cue delay/volume/pitch are outside their finite ranges".into());
+            }
+        }
+        self.validate_lights()?;
         for effect in &self.effects {
             effect.validate()?;
         }
+        for primitive in self.primitives.iter().flatten() {
+            primitive.validate().map_err(|error| error.to_string())?;
+        }
+        for textures in self.textures.iter().flatten() {
+            textures.validate()?;
+        }
+        for attributes in self.part_attributes.iter().flatten() {
+            if !attributes
+                .color
+                .iter()
+                .all(|value| value.is_finite() && (0.0..=1.0).contains(value))
+                || !attributes.friction.is_finite()
+                || !(0.0..=10.0).contains(&attributes.friction)
+            {
+                return Err("effect child attributes require finite color and friction within their supported ranges".into());
+            }
+        }
+        super::validate_group_bindings(&self.parameters, &self.bindings, &self.effects)?;
+        super::validate_group_triggers(&self.trigger_bindings, self.effects.len())?;
         Ok(())
     }
+    fn validate_lights(&self) -> Result<(), String> {
+        for light in self.lights.iter().flatten() {
+            if !light.color.is_finite()
+                || light.color.min_element() < 0.0
+                || !light.intensity.is_finite()
+                || light.intensity < 0.0
+                || !light.range.is_finite()
+                || light.range <= 0.0
+                || !light.spot_outer_angle_radians.is_finite()
+                || !(0.0..std::f32::consts::PI).contains(&light.spot_outer_angle_radians)
+            {
+                return Err("effect asset light configuration is invalid".into());
+            }
+        }
+        Ok(())
+    }
+
     /// Encodes the validated versioned asset.
     /// # Errors
     /// Returns validation or RON encoding errors.
@@ -155,11 +280,71 @@ impl EffectAsset {
                     id: ids[index],
                     name: Some(format!("{} {}", self.name, index + 1)),
                     local_transform,
+                    mesh: self
+                        .meshes
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .map(|asset| crate::Mesh { asset }),
+                    material: self
+                        .materials
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .map(|asset| crate::Material { asset }),
+                    textures: self.textures.get(index).cloned().flatten(),
+                    light: self.lights.get(index).copied().flatten(),
+                    primitive: self.primitives.get(index).cloned().flatten(),
                     effect: Some(effect),
+                    part_attributes: self
+                        .part_attributes
+                        .get(index)
+                        .copied()
+                        .flatten()
+                        .unwrap_or_default(),
                     ..EntitySnapshot::default()
                 }
             })
             .collect()
+    }
+    /// Captures the ordinary components belonging to already ordered effect children.
+    /// IDs, effect references and transforms remain under the caller's remapping policy.
+    /// # Errors
+    /// Rejects a child count that differs from the effect list.
+    pub fn capture_child_components(&mut self, children: &[EntitySnapshot]) -> Result<(), String> {
+        if children.len() != self.effects.len() {
+            return Err("effect component metadata must match ordered children".into());
+        }
+        self.lights = compact(children.iter().map(|child| child.light).collect());
+        self.primitives = compact(
+            children
+                .iter()
+                .map(|child| child.primitive.clone())
+                .collect(),
+        );
+        self.meshes = compact(
+            children
+                .iter()
+                .map(|child| child.mesh.map(|mesh| mesh.asset))
+                .collect(),
+        );
+        self.materials = compact(
+            children
+                .iter()
+                .map(|child| child.material.map(|material| material.asset))
+                .collect(),
+        );
+        self.textures = compact(
+            children
+                .iter()
+                .map(|child| child.textures.clone())
+                .collect(),
+        );
+        self.part_attributes = children
+            .iter()
+            .map(|child| Some(child.part_attributes))
+            .collect();
+        Ok(())
     }
     /// Restores one child resolved through authoritative `.rmeta` data.
     /// # Errors
@@ -178,6 +363,13 @@ impl EffectAsset {
         restored.source = Some(source);
         *instance = restored;
         Ok(())
+    }
+}
+fn compact<T>(values: Vec<Option<T>>) -> Vec<Option<T>> {
+    if values.iter().any(Option::is_some) {
+        values
+    } else {
+        Vec::new()
     }
 }
 
@@ -492,8 +684,53 @@ pub fn presets() -> Vec<EffectAsset> {
         ),
     ];
     for asset in &mut assets {
+        if matches!(
+            asset.name.as_str(),
+            "Object dissolve" | "Character highlight"
+        ) {
+            let target =
+                EntityId::from(uuid::Uuid::from_bytes(if asset.name == "Object dissolve" {
+                    *b"rustic_dissolve1"
+                } else {
+                    *b"rustic_outline_1"
+                }));
+            asset.entity_ids = vec![target];
+            asset.primitives = vec![Some(if asset.name == "Object dissolve" {
+                crate::Primitive::Sphere {
+                    radius: 0.7,
+                    segments: 32,
+                    rings: 24,
+                }
+            } else {
+                crate::Primitive::Capsule {
+                    radius: 0.35,
+                    height: 1.8,
+                    segments: 24,
+                    rings: 12,
+                }
+            })];
+            asset.transforms =
+                vec![Mat4::from_translation(glam::Vec3::new(0.0, 1.0, 0.0)).to_cols_array()];
+            asset.part_attributes = vec![Some(crate::PartAttributes {
+                anchored: true,
+                can_collide: false,
+                color: [0.22, 0.42, 0.75, 1.0],
+                ..Default::default()
+            })];
+            match &mut asset.effects[0].kind {
+                EffectKind::Dissolve(effect) => effect.target = Some(target),
+                EffectKind::Outline(effect) => effect.targets = vec![target],
+                _ => unreachable!(),
+            }
+        }
         for effect in &mut asset.effects {
             if let EffectKind::Particle(p) = &mut effect.kind {
+                if asset.name == "Fire sparks" {
+                    p.simulation_mode = super::ParticleSimulationMode::Auto;
+                    p.generate_events = false;
+                    p.sorting = super::ParticleSortMode::None;
+                    p.wind_influence = 0.0;
+                }
                 if p.rate == 0.0 {
                     p.bursts = vec![Burst {
                         count: if asset.name == "Firework burst" {
@@ -564,6 +801,101 @@ pub fn presets() -> Vec<EffectAsset> {
     shake.common.duration = 0.4;
     shake.common.looping = false;
     explosion.effects.extend([smoke, ring, shake]);
+    let mut debris = EffectComponent::new(EffectKind::MeshParticle(ParticleEmitter {
+        mesh: Some(explosion_mesh_asset()),
+        max_particles: 48,
+        rate: 0.0,
+        bursts: vec![Burst {
+            count: 24,
+            ..Burst::default()
+        }],
+        speed: [2.0, 5.0],
+        start_size: [0.05, 0.15],
+        lifetime: [0.6, 1.4],
+        shape: SpawnShape::Sphere,
+        gravity: [0.0, -9.81, 0.0],
+        collision: true,
+        appearance: EffectAppearance {
+            color: Gradient::constant([0.4, 0.2, 0.07, 1.0]),
+            emission: 0.0,
+            ..EffectAppearance::default()
+        },
+        ..ParticleEmitter::default()
+    }));
+    debris.common.looping = false;
+    debris.common.duration = 1.5;
+    explosion.effects.push(debris);
+    explosion.entity_ids = explosion.effects.iter().map(|_| EntityId::new()).collect();
+    let light_id = EntityId::new();
+    let mut flash = EffectComponent::new(EffectKind::LightPulse(LightPulse {
+        target: Some(light_id),
+        intensity: Curve {
+            keys: vec![
+                super::CurveKey {
+                    time: 0.0,
+                    value: 12.0,
+                },
+                super::CurveKey {
+                    time: 0.15,
+                    value: 8.0,
+                },
+                super::CurveKey {
+                    time: 1.0,
+                    value: 0.0,
+                },
+            ],
+        },
+        color: Gradient::constant([1.0, 0.5, 0.12, 1.0]),
+        ..LightPulse::default()
+    }));
+    flash.common.looping = false;
+    flash.common.duration = 0.35;
+    explosion.effects.push(flash);
+    explosion.entity_ids.push(light_id);
+    explosion.lights = vec![None; explosion.effects.len()];
+    if let Some(light) = explosion.lights.last_mut() {
+        *light = Some(Light {
+            kind: LightKind::Point,
+            color: glam::Vec3::new(1.0, 0.5, 0.12),
+            intensity: 0.0,
+            range: 8.0,
+            ..Light::default()
+        });
+    }
+    explosion.sound_cues.push(EffectSoundCue {
+        asset: explosion_sound_asset(),
+        delay: 0.0,
+        volume: 0.75,
+        pitch: 1.0,
+        spatial: true,
+        looping: false,
+    });
+    explosion
+        .parameters
+        .insert("power".into(), super::EffectParameter::Scalar(1.0));
+    explosion.bindings = [
+        (0, "kind.Particle.appearance.emission", 1.0),
+        (1, "kind.Particle.rate", 18.0),
+        (2, "kind.Shockwave.final_radius", 4.0),
+        (4, "kind.MeshParticle.appearance.emission", 0.15),
+        (5, "kind.LightPulse.intensity.keys.0.value", 12.0),
+        (5, "kind.LightPulse.intensity.keys.1.value", 8.0),
+    ]
+    .into_iter()
+    .map(|(child, path, scale)| super::GroupParameterBinding {
+        parameter: "power".into(),
+        child,
+        property_path: path.into(),
+        scale,
+        offset: if child == 2 { 0.1 } else { 0.0 },
+    })
+    .collect();
+    explosion.trigger_bindings.push(super::GroupTriggerBinding {
+        source_child: 5,
+        event: super::CompositeTriggerEvent::Completed,
+        target_child: 3,
+        action: super::CompositeTriggerAction::Restart,
+    });
     assets.push(explosion);
     assets
 }

@@ -59,3 +59,6 @@ mod audio_capture;
 mod audio_input;
 
 pub mod game_session;
+
+mod effect_audio;
+pub use effect_audio::EffectAudioPreview;

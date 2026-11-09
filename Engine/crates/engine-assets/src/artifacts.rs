@@ -204,6 +204,10 @@ pub enum DerivedArtifact {
     Font(FontArtifact),
     /// Versioned reusable scene effects.
     Effect(engine_world::effects::EffectAsset),
+    /// Standalone reusable physically based material.
+    Material(crate::MaterialAsset),
+    /// Six-face authored cubemap source.
+    Cubemap(crate::CubemapAsset),
     /// Deterministic placeholder used before a first successful import.
     Placeholder(PlaceholderArtifact),
 }
@@ -233,6 +237,10 @@ pub enum AssetKind {
     Font,
     /// Reusable scene effects asset.
     Effect,
+    /// Standalone physically based material source.
+    Material,
+    /// Six-face cubemap descriptor source.
+    Cubemap,
 }
 
 impl DerivedArtifact {
@@ -244,6 +252,8 @@ impl DerivedArtifact {
             Self::Audio(_) => AssetKind::Audio,
             Self::Font(_) => AssetKind::Font,
             Self::Effect(_) => AssetKind::Effect,
+            Self::Material(_) => AssetKind::Material,
+            Self::Cubemap(_) => AssetKind::Cubemap,
             Self::Placeholder(value) => value.kind,
         }
     }

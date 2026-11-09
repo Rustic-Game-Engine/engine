@@ -38,6 +38,9 @@ pub(super) fn project(scene: &ViewportScene, decal: &RenderDecal) -> Option<View
         .transform_vector3(Vec3::Y)
         .normalize_or_zero();
     for receiver in &scene.meshes {
+        if receiver.textures.visibility_layers & decal.layers == 0 {
+            continue;
+        }
         let model = Mat4::from_cols_array(&receiver.model);
         let normals = model.inverse().transpose();
         for triangle in receiver.indices.as_chunks::<3>().0.iter().take(200_000) {
