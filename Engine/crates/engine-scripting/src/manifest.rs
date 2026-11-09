@@ -193,7 +193,7 @@ pub fn load_manifest(bytes: &[u8]) -> Result<ManifestLoad, ManifestError> {
             supported: CURRENT_SCRIPT_MANIFEST_VERSION,
         });
     }
-    let migrated = probe.format_version == 1;
+    let mut migrated = probe.format_version == 1;
     let mut manifest = if migrated {
         let old: ManifestV1 =
             ron::from_str(text).map_err(|e| ManifestError::Parse(e.to_string()))?;
@@ -214,6 +214,16 @@ pub fn load_manifest(bytes: &[u8]) -> Result<ManifestLoad, ManifestError> {
     } else {
         ron::from_str(text).map_err(|e| ManifestError::Parse(e.to_string()))?
     };
+    // Preserve existing UI script identities and attachments while adopting the
+    // folder-based default for registries written before UI JavaScript support.
+    for entry in &mut manifest.scripts {
+        if entry.language == ScriptLanguage::JavaScript
+            && ScriptLanguage::from_path(&entry.relative_path) == Some(ScriptLanguage::Web)
+        {
+            entry.language = ScriptLanguage::Web;
+            migrated = true;
+        }
+    }
     if let Some(entry) = manifest.scripts.iter().find(|entry| {
         !safe_relative(&entry.relative_path)
             || !entry.language.accepts_project_path(&entry.relative_path)
@@ -318,6 +328,42 @@ mod tests {
             Err(ManifestError::FutureVersion { .. })
         ));
     }
+    #[test]
+    fn legacy_ui_javascript_adopts_web_category_without_changing_identity() {
+        let id = ScriptId::new();
+        let source = format!(
+            r#"(format_version:2,scripts:[(id:"{id}",language:java_script,relative_path:"ui/hud.js",api_version:(major:1,minor:0))])"#
+        );
+        let loaded = load_manifest(source.as_bytes()).unwrap();
+        assert!(loaded.migrated);
+        assert_eq!(loaded.manifest.scripts[0].id, id);
+        assert_eq!(loaded.manifest.scripts[0].language, ScriptLanguage::Web);
+    }
+
+    #[test]
+    fn moving_javascript_between_ui_and_gameplay_preserves_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
+        std::fs::write(
+            temp.path().join("scripts/hud.js"),
+            "globalThis.behavior={};",
+        )
+        .unwrap();
+        let id = register_script_asset(temp.path(), "scripts/hud.js").unwrap();
+        for (path, language) in [
+            ("ui/nested/hud.js", ScriptLanguage::Web),
+            ("scripts/hud.js", ScriptLanguage::JavaScript),
+        ] {
+            move_script_asset(temp.path(), id, path).unwrap();
+            let loaded =
+                load_manifest(&std::fs::read(temp.path().join("config/scripts.ron")).unwrap())
+                    .unwrap();
+            assert_eq!(loaded.manifest.scripts[0].id, id);
+            assert_eq!(loaded.manifest.scripts[0].language, language);
+            assert!(temp.path().join(path).is_file());
+        }
+    }
+
     #[test]
     fn duplicates_are_quarantined_and_traversal_is_rejected_on_save() {
         let id = ScriptId::new();

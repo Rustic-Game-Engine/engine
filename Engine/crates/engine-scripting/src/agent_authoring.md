@@ -94,6 +94,8 @@ Use `object_duplicate` to copy an object/folder and its whole subtree with fresh
 
 ## Attach scripts at the correct scope
 
+JavaScript `.js`/`.mjs` sources inside the top-level `ui/` folder (including subfolders) are automatically Web/UI assets; sources elsewhere remain gameplay JavaScript. UI scripts still require a global, scene or object attachment (or inclusion from an attached HTML entry). Avoid attaching an HTML helper twice. The same sandboxed scene APIs and `Events.on`/`Events.emit` work across UI and gameplay instances; share exposed object state or signal payloads rather than private JavaScript globals. This does not provide DOM rendering or browser/Node/module APIs.
+
 Write the gameplay source to the project, then call `script_attach` with its relative `path` and `scope`. The tool registers the source's stable script asset ID; never hand-invent registry IDs. Scope belongs to an attachment, so one source may be attached in several places. Adding a new scope does not remove another attachment: detach the old one explicitly to move behavior and avoid duplicate execution.
 
 - `global`: game/session services such as progression, settings or shared state; listed in `settings.json` and persists across scene switches. Takes `enabled` and `execution_order` and saves immediately.
