@@ -598,6 +598,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                     }
                 }
             }
+            export_custom_installer(root, output, settings)?;
             if settings.installer {
                 let compiler = ensure_installer_compiler(&settings.compiler)?;
                 if !available(&compiler.to_string_lossy(), "/?") {
@@ -800,6 +801,45 @@ fn collect_artifacts(
             collect_artifacts(&entry.path(), extension, output)?;
         } else if kind.is_file() && entry.path().extension().is_some_and(|e| e == extension) {
             output.push(entry.path());
+        }
+    }
+    Ok(())
+}
+
+// Export a language-neutral companion host alongside the Windows game payload.
+fn export_custom_installer(root: &Path, output: &Path, settings: &Settings) -> Result<(), String> {
+    let directory = output.join("scripts/install");
+    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    fs::write(
+        directory.join("server.py"),
+        include_str!("../../../scripts/install/server.py"),
+    )
+        .map_err(|e| e.to_string())?;
+    fs::write(
+        directory.join("index.html"),
+        include_str!("../../../scripts/install/index.html"),
+    )
+        .map_err(|e| e.to_string())?;
+    let config = serde_json::json!({
+        "title": settings.name.trim(), "payload": "../../game",
+        "location": format!("~/{}", settings.name.trim()), "allowLocationChange": true,
+        "window": {"width": 768, "height": 480}, "options": [],
+        "screens": [
+            {"kind": "welcome", "title": "Welcome", "text": settings.welcome},
+            {"kind": "location", "title": "Installation location"},
+            {"kind": "options", "title": "Options"},
+            {"kind": "install", "title": "Ready to install"}
+        ]
+    });
+    fs::write(
+        directory.join("installer.json"),
+        serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?,
+    )
+        .map_err(|e| e.to_string())?;
+    for name in ["installer.json", "index.html"] {
+        let custom = root.join("scripts/install").join(name);
+        if custom.is_file() {
+            fs::copy(custom, directory.join(name)).map_err(|e| e.to_string())?;
         }
     }
     Ok(())

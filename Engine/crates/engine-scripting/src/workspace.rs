@@ -284,7 +284,7 @@ description: Work on the {project_name} Rustic Game Engine project; use when ask
 
 # Rustic workspace
 
-Use `workspace_info` to confirm the project root, then `read_agent_file` with path `AGENTS.md` or `CLAUDE.md` for repository routing. Use `list_agent_files`, `read_agent_file`, and `write_agent_file` to inspect or edit project agent information stored in Rustic editor app data. Use `scene_summary` rather than guessing the contents of a `.scene` file. Keep game code and content within this project unless the user explicitly asks to modify the engine source.
+Use `workspace_info` to confirm the project root, then `read_agent_file` with path `AGENTS.md` or `CLAUDE.md` for repository routing. Use `list_agent_files`, `read_agent_file`, and `write_agent_file` to inspect or edit project agent information stored in Rustic editor app data. Use `scene_summary` rather than guessing the contents of a `.scene` file. Keep game code and content within this project unless the user explicitly asks to modify the engine source. Windows exports include a Python 3.10+ custom installer API at /scripts/install (HTTP routes). Customize the project scripts/install/installer.json and index.html before exporting; read CUSTOM_INSTALLER.md for routes, token authentication, options, and limitations. Installer configuration is separate from gameplay scripts.
 "
     );
     let skill = with_authoring_guide(&skill);
