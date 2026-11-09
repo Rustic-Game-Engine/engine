@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "test": "npm run test:player && node test.mjs && npm run test:effects",
-    "test:player": "node --test player.test.mjs",
+    "test:player": "node --test player.test.mjs hosted-player.test.mjs",
     "test:effects": "node effects.mjs"
   },
   "devDependencies": {

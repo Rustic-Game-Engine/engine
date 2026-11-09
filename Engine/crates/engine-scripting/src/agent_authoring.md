@@ -94,6 +94,8 @@ Use `object_duplicate` to copy an object/folder and its whole subtree with fresh
 
 ## Attach scripts at the correct scope
 
+JavaScript `.js`/`.mjs` sources inside the top-level `ui/` folder (including subfolders) are automatically Web/UI assets; sources elsewhere remain gameplay JavaScript. UI scripts still require a global, scene or object attachment (or inclusion from an attached HTML entry). Avoid attaching an HTML helper twice. The same sandboxed scene APIs and `Events.on`/`Events.emit` work across UI and gameplay instances; share exposed object state or signal payloads rather than private JavaScript globals. This does not provide DOM rendering or browser/Node/module APIs.
+
 Write the gameplay source to the project, then call `script_attach` with its relative `path` and `scope`. The tool registers the source's stable script asset ID; never hand-invent registry IDs. Scope belongs to an attachment, so one source may be attached in several places. Adding a new scope does not remove another attachment: detach the old one explicitly to move behavior and avoid duplicate execution.
 
 - `global`: game/session services such as progression, settings or shared state; listed in `settings.json` and persists across scene switches. Takes `enabled` and `execution_order` and saves immediately.
@@ -167,6 +169,22 @@ or `EffectBirth`, `EffectCollision`, `EffectDeath`. Each event supplies an xyz
 position argument and uses the existing bounded signal queue. Completion is
 meaningful for non-looping effects. Cosmetic particle contacts do not apply
 authoritative damage or physics forces.
+## Exporting a game website
+
+Use File → Build Project… → Website (playable game). Hosted runtime supports all
+Rustic scripting languages through the native runtime; it packages launchers and
+a verified game snapshot, and requires a matching GPU-capable host with the used
+external language toolchains. Players need only a browser. Run start-website.cmd
+(Windows) or sh start-website.sh (Unix), then open http://127.0.0.1:8080. Remote
+hosting requires an HTTPS reverse proxy with /play WebSocket forwarding and
+matching Host/Origin. Each player gets temporary isolated game files; saves do
+not persist. PNG frames are streamed at 640 × 360/up to 30 fps; bandwidth varies by scene.
+Static WebAssembly mode needs no game server but only supports Lua 5.4,
+JavaScript and HTML/CSS; external languages and standalone PHP pages must not be
+silently omitted. Existing saved build settings retain static mode. Do not create
+a separate web/ project or attach export helpers as gameplay scripts. See the
+project builds guide for host requirements and troubleshooting. There is no
+agent export tool; use the editor's build dialog.
 
 ## Physics authoring
 

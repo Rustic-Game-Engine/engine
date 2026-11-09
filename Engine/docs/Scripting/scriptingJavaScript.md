@@ -5,6 +5,12 @@ JavaScript is bundled and sandboxed. A script assigns one behavior object to
 APIs. Create `.js` or `.mjs` gameplay files with the editor so an Asset ID and the
 chosen global, scene, or component attachment are created automatically.
 
+JavaScript under the project's top-level `ui/` folder, including subfolders,
+automatically uses the Web/UI category. It keeps the same lifecycle, scene access
+and `Events` APIs. Attachments still determine when it runs. See
+[UI JavaScript and gameplay signals](scriptingWeb.md#javascript-in-ui) for setup,
+a working example and runtime limitations.
+
 ## Behavior lifecycle
 
 ```javascript
