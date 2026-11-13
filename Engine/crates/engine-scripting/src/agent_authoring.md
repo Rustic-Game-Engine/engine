@@ -137,3 +137,18 @@ agent export tool; use the editor's build dialog.
 ## Physics authoring
 
 Built-in primitives use oriented box collision proxies and unit mass in Play. Anchor floors and ramps, enable can_collide on both bodies, and author friction (0..10, default 0.5) through object_update.part_attributes. Rotated planes/boxes provide slope normals; curved primitives remain boxes and sheared transforms use enclosing AABBs. Use Physics.force once per FixedUpdate with dt, impulse to add velocity, and launch to replace it. Raycasts/sphere casts return rotated surface normals. Physics.ground(entity, maxAngle) reads the last completed fixed step and returns null or {entity, normal, angle, walkable}; it does not implement a character controller. Register Physics.onCollisionEnter/Stay/Exit explicitly from Start; callbacks arrive during Update with (other ID, world normal), using native array callbacks in C/C++/C#/Java. Both bodies need can_touch and can_collide; at least one must be unanchored. Defining OnCollisionEnter lifecycle functions alone does not register them. Inspect logs and test sliding, landing and leaving contact.
+
+## Custom Windows installer interfaces
+
+For installer design, read the engine's `PROJECT_BUILDS.md`. Put the manifest at
+`scripts/install/installer.json` in the game project: `{"kind":"web","entry":"index.html"}`
+for static HTML/CSS/JavaScript, or `{"kind":"csharp","entry":"InstallerUi.cs"}`
+for one Windows Forms source defining `InstallerUi(InstallerContext context)`.
+Do not attach installer sources as gameplay scripts. Use `window.chrome.webview`
+messages (`ready`, `install`, `close`) for web UIs or `context.InstallAsync` for C#;
+the Inno Setup backend handles copying, shortcuts and uninstalling. Build on
+Windows with the .NET 8 SDK and distribute the complete `custom-installer` folder.
+Web UIs require Microsoft Edge WebView2 Runtime on the player's machine. Consult
+the build guide for complete examples, event/error handling, license acceptance,
+supported source limits and troubleshooting. These interfaces are independent
+of gameplay script adapters and do not apply to website/Android exports.

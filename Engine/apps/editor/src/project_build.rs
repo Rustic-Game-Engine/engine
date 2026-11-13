@@ -1,5 +1,6 @@
 //! Project distribution UI and shell-free packaging jobs.
 mod hosted;
+mod installer_ui;
 mod portable;
 use eframe::egui;
 use engine_editor::AuthoringDocument;
@@ -167,6 +168,7 @@ impl ProjectBuild {
                                     project_file_field(ui, "Wizard image (.bmp, project relative, optional)", &mut self.settings.banner, root, ("Wizard image", &["bmp"]), &mut self.status);
                                     ui.checkbox(&mut self.settings.modern, "Modern wizard style");
                                     ui.checkbox(&mut self.settings.desktop_shortcut, "Offer desktop shortcut");
+                                    ui.label("Custom C# or HTML/CSS/JavaScript UI: add scripts/install/installer.json to your project. Builds create a custom-installer folder to distribute.");
                                     field(ui, "Inno Setup compiler (ISCC.exe path)", &mut self.settings.compiler);
                                     ui.small("Leave ISCC.exe for automatic setup. Building finds or installs Inno Setup and adds it to your user PATH. First installation requires internet access.");
                                     ui.group(|ui| {
@@ -473,6 +475,11 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
             {
                 missing.push("The custom Inno Setup compiler path does not exist. Use ISCC.exe for automatic setup.".into());
             }
+            if settings.installer
+                && let Err(error) = installer_ui::validate(root)
+            {
+                missing.push(error);
+            }
         }
         Target::Website => {
             if settings.website_mode == WebsiteMode::Hosted
@@ -630,6 +637,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 if !output.join("setup.exe").is_file() {
                     return Err("Installer compiler did not produce setup.exe.".into());
                 }
+                installer_ui::export(root, output, settings)?;
             }
         }
         Target::Website if settings.website_mode == WebsiteMode::Hosted => {

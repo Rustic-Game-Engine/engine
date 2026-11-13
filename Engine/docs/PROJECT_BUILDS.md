@@ -13,11 +13,177 @@ Build on Windows with `rustic-runtime.exe` beside the editor. Installed engine d
 3. For setup, leave the **Inno Setup compiler** field as `ISCC.exe` (or blank). When you click **Build Project**, the background worker finds Inno Setup on PATH, in standard installation folders, or through its Windows uninstall registration. If missing, it downloads the signed Inno Setup 6.7.3 installer from the official GitHub release and installs it for the current user without administrator access. The compiler folder is added to your user PATH, and this build continues without restarting the editor. First installation requires internet access. To use a custom installation, expand **Design installer** and enter its existing absolute `ISCC.exe` path.
 4. Set a numeric version such as `1.0.0`, publisher and welcome message. Choose modern/classic wizard styling and whether to offer a desktop shortcut. The dialog shows a text preview.
 5. Optionally use **Browse…** beside the license, setup icon, and wizard image fields to select a plain text (`.txt`) license, `.ico` setup icon, and `.bmp` wizard image. The file explorer starts in your project folder and stores the selected path relative to it. Copy files from outside the project into it before selecting them; otherwise the dialog reports an error and keeps the previous value. You can also type or clear these optional paths directly. For example, `branding/license.txt`, `branding/setup.ico`, and `branding/wizard.bmp`. Inno Setup validates image formats/dimensions; its standard large wizard image is 164 × 314 pixels. The compiled wizard displays these images; the editor preview displays text.
-6. Click **Build Project**. Distribute `setup.exe`, or distribute the complete `game/` folder containing `<Application name>.exe` and `data/`. Launch the game by opening the executable; the editor is not required.
+6. Click **Build Project**. For the standard wizard, distribute `setup.exe`; for a custom UI, distribute the complete `custom-installer/` folder described below. Alternatively, distribute the complete `game/` folder containing `<Application name>.exe` and `data/`. Launch the game by opening the executable; the editor is not required.
 
 Setup installs per user into `%LOCALAPPDATA%\Programs\<Application name>`, adds a Start menu shortcut and an uninstaller, and optionally offers a desktop shortcut. The generated `installer.iss` is kept beside setup for inspection. The setup icon customizes the installer, not the game executable's embedded icon. These are unsigned builds; signing and store publication are separate steps.
 
 The game opens its own window and isolated simulation, forwards keyboard, primary mouse and touch input, and stops the simulation when the window closes. Logs are written under `%LOCALAPPDATA%\RusticGames\<Application name>\logs` on Windows. Lua 5.4, JavaScript and HTML/CSS script support are bundled. Available sibling DLLs and `rustic-luau-host.exe` are copied. Other external script languages still require their supported toolchains on the player's machine; test the result on a clean machine.
+
+### Custom UI in `scripts/install` (Windows)
+
+You can replace the setup front end with your own **C# Windows Forms** UI or
+**HTML, CSS and JavaScript**. This is a Windows x64 installer feature; gameplay
+script registration is not involved. Create these files in your game's project,
+then use **File → Build Project… → Windows game (.exe)** with **Create a custom
+installer** enabled. No manifest means the standard wizard is used.
+
+Install the **.NET 8 SDK** on the build machine and put `dotnet` on PATH before
+opening the editor. Publishing restores Microsoft WebView2 from NuGet and the
+Windows/.NET runtime packs, requiring network access on the first build. Players
+do not need .NET. Web interfaces require the **Microsoft Edge WebView2 Runtime**
+on the player's Windows machine; install it from Microsoft if startup reports it
+missing. This does not bundle a browser runtime or automatically install it.
+
+#### HTML/CSS/JavaScript example
+
+Create `scripts/install/installer.json`:
+
+```json
+{"kind":"web","entry":"index.html"}
+```
+
+Create `scripts/install/index.html`:
+
+```html
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Game setup</title>
+<style>
+  body { font: 18px system-ui; margin: 3rem; background: #17202a; color: white; }
+  input { width: 100%; margin-block: 1rem; }
+  button { padding: .7rem 1.5rem; }
+</style>
+<h1 id="title">Game setup</h1>
+<label>Install folder <input id="folder"></label>
+<button id="install" disabled>Install</button>
+<button id="close">Close</button>
+<p id="status" role="status"></p>
+<script>
+const bridge = window.chrome.webview;
+const folder = document.getElementById('folder');
+const install = document.getElementById('install');
+const status = document.getElementById('status');
+bridge.addEventListener('message', ({data}) => {
+  if (data.type === 'ready') {
+    document.getElementById('title').textContent = data.name + ' Setup';
+    folder.value = data.directory;
+    install.disabled = false;
+  }
+  if (data.type === 'installing') {
+    install.disabled = true;
+    status.textContent = 'Installing…';
+  }
+  if (data.type === 'complete') status.textContent = 'Installed successfully.';
+  if (data.type === 'error') {
+    install.disabled = false;
+    status.textContent = data.message || 'Installation failed: ' + data.exitCode;
+  }
+});
+install.onclick = () => bridge.postMessage({
+  type: 'install', directory: folder.value, desktopShortcut: false
+});
+document.getElementById('close').onclick = () => bridge.postMessage({type: 'close'});
+bridge.postMessage({type: 'ready'});
+</script>
+</html>
+```
+
+Put CSS, JavaScript, images and other static assets beside the page and reference
+them with relative URLs. The page runs in WebView2 at
+`https://installer.rustic/`; navigation to other origins and popup windows are
+blocked. The installation bridge accepts messages from this local origin only.
+Use `ready` after attaching your message listener. `install` accepts an optional
+absolute `directory` (defaults to the local Programs folder) and a Boolean
+`desktopShortcut`. Responses are `installing`, `complete` (exit code 0), or
+`error` (message or Inno Setup exit code). `close` closes the window when idle.
+Only one installation can run, and closing is blocked during installation.
+There is no percentage progress or in-progress cancellation API. TypeScript,
+React, Sass and other web build tools must produce static HTML/CSS/JavaScript
+inside this directory before building the game. Server languages such as PHP
+are not executed here.
+
+#### C# example
+
+Use this `scripts/install/installer.json`:
+
+```json
+{"kind":"csharp","entry":"InstallerUi.cs"}
+```
+
+Create `scripts/install/InstallerUi.cs`:
+
+```csharp
+using System.Windows.Forms;
+
+public sealed class InstallerUi : Form
+{
+    public InstallerUi(InstallerContext context)
+    {
+        Text = context.GameName + " Setup";
+        Width = 600;
+        var folder = new TextBox { Dock = DockStyle.Top, Text = context.DefaultDirectory };
+        var button = new Button { Dock = DockStyle.Bottom, Text = "Install" };
+        Controls.Add(folder);
+        Controls.Add(button);
+        button.Click += async (_, _) =>
+        {
+            button.Enabled = false;
+            try
+            {
+                var code = await context.InstallAsync(folder.Text, desktopShortcut: false);
+                button.Text = code == 0 ? "Installed" : "Retry (exit " + code + ")";
+                button.Enabled = code != 0;
+            }
+            catch (System.Exception error)
+            {
+                MessageBox.Show(error.Message);
+                button.Enabled = true;
+            }
+        };
+    }
+}
+```
+
+The entry is a single C# source file defining `public class InstallerUi : Form`
+with an `InstallerUi(InstallerContext context)` constructor. The engine supplies
+the application entry point and compiles it with .NET 8 Windows Forms. Additional
+project files, NuGet dependencies, WPF and arbitrary `.csproj` entry points are
+not supported. Put helper classes in the same source file. Access copied assets
+through `context.AssetsDirectory`. `InstallAsync(directory, desktopShortcut)`
+returns the Inno Setup exit code; `Installing` and `Installed` expose state.
+The host prevents window closing during installation.
+
+#### Build output and limits
+
+Distribute the **entire `custom-installer/` folder** and run its `setup.exe`.
+It contains the self-contained UI executable, libraries, `ui/` assets and
+`payload/setup.exe` (the standard Inno Setup installer, also usable as a fallback).
+This is a folder distribution, not a single-file custom installer. The generated
+`installer.iss` remains in the parent build folder. Installation still uses the
+configured game name, publisher, version, shortcuts and per-user uninstaller.
+The custom UI controls presentation and calls the silent installation backend;
+standard welcome/license pages are hidden during that call. If you require
+license acceptance, implement it in your custom UI. Wizard banners/styles apply
+to the fallback wizard, not to the custom interface. Enable **Offer desktop
+shortcut** in build settings before requesting it from your UI.
+
+The manifest must use `web` with an existing `.html` entry or `csharp` with an
+existing `.cs` entry, relative to `scripts/install`. Absolute paths, parent
+components, escaping resources, unknown manifest fields and symbolic links in
+copied inputs are rejected. A malformed manifest stops the build instead of
+silently falling back. The directory is copied with `bin/` and `obj/` excluded;
+keep credentials and unrelated files out of it. These are trusted author sources:
+C# runs as native code with the player's account privileges. Installer sources
+are independent of game behaviors; do not register them in `config/scripts.ron`.
+Portable Windows builds and website/Android exports do not use this UI.
+
+If publishing fails, check the .NET 8 SDK and the reported NuGet/compiler output.
+If the web page is blank, check relative asset paths and script errors in WebView2
+developer tools. If installation fails, display the bridge error/exit code, check
+the chosen directory is writable and the complete distribution is present, or run
+`payload/setup.exe` to diagnose using the standard wizard. Test installation and
+uninstallation on a clean Windows machine before distribution.
 
 ## Playable website
 
