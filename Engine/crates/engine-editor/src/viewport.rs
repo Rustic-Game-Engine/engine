@@ -79,6 +79,13 @@ impl EditorCamera {
         self.pitch = (self.pitch + delta.y * 0.008).clamp(-1.553, 1.553);
     }
 
+    /// Turn in place instead of rotating the camera around its focus point.
+    pub fn look(&mut self, delta: Vec2) {
+        let position = self.position();
+        self.orbit(delta);
+        self.focus += position - self.position();
+    }
+
     pub fn pan(&mut self, delta: Vec2, viewport_height: f32) {
         let units_per_pixel = 2.0 * self.distance * (self.vertical_fov_radians * 0.5).tan()
             / viewport_height.max(1.0);
@@ -333,6 +340,37 @@ mod tests {
             .unwrap();
         assert!(ray.direction.dot(camera.forward()) > 0.999);
         assert!(camera.world_ray(Vec2::ZERO, Vec2::ZERO).is_none());
+    }
+
+    #[test]
+    fn free_look_turns_in_place_and_flight_follows_the_new_direction() {
+        let mut camera = EditorCamera::default();
+        let position = camera.position();
+        let forward = camera.forward();
+        camera.look(Vec2::new(80.0, -35.0));
+        assert!(camera.position().abs_diff_eq(position, 1.0e-5));
+        assert!(!camera.forward().abs_diff_eq(forward, 0.01));
+        let facing = camera.forward();
+        camera.fly(Vec3::Z, 0.5, 5.0);
+        assert!(
+            camera
+                .position()
+                .abs_diff_eq(position + facing * 2.5, 1.0e-5)
+        );
+        let position = camera.position();
+        camera.fly(Vec3::Y, 0.5, 5.0);
+        assert!(
+            camera
+                .position()
+                .abs_diff_eq(position + Vec3::Y * 2.5, 1.0e-5)
+        );
+        camera.look(Vec2::new(0.0, 100_000.0));
+        assert!(camera.view_projection(1.0).is_finite());
+        assert!(
+            camera
+                .position()
+                .abs_diff_eq(position + Vec3::Y * 2.5, 1.0e-5)
+        );
     }
 
     #[test]

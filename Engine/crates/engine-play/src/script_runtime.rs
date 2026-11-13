@@ -99,7 +99,7 @@ impl RuntimeBehavior {
             Self::Web(old) => WebBehavior::load_shared(
                 old.script_id(),
                 source,
-                "hot-reload.html",
+                old.source_name(),
                 Arc::clone(&host),
                 200_000,
             )
@@ -852,7 +852,11 @@ fn read_script_source(
         }
         Err(error) => return Err(format!("could not read {}: {error}", source_path.display())),
     };
-    if entry.language == ScriptLanguage::Web {
+    if entry.language == ScriptLanguage::Web
+        && entry.relative_path.extension().is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        })
+    {
         resolve_linked_web_scripts(
             snapshot_root,
             &entry.relative_path,
@@ -5060,6 +5064,72 @@ rustic_run(["on_start"=>"on_start"]);"#),
             );
         }
         assert!(logs.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn ui_javascript_receives_gameplay_signals_reads_scene_state_and_reloads() {
+        for path in ["ui/hud.js", "ui/nested/hud.mjs"] {
+            let temp = tempfile::tempdir().unwrap();
+            std::fs::create_dir_all(temp.path().join("scripts")).unwrap();
+            std::fs::create_dir_all(temp.path().join("ui/nested")).unwrap();
+            std::fs::write(
+                temp.path().join("scripts/player.js"),
+                br"globalThis.behavior={
+                FixedUpdate(){rustic.set_translation(3,0,0);Events.emit('score',[7]);}
+            };",
+            )
+            .unwrap();
+            let ui_source = br"globalThis.behavior={Start(){Events.on('score',score=>{
+                const position=rustic.get_object_attribute('Player','Position');
+                rustic.log('info',score+':'+position[0]);
+            });}};";
+            std::fs::write(temp.path().join(path), ui_source).unwrap();
+            let player_id =
+                engine_scripting::register_script_asset(temp.path(), "scripts/player.js").unwrap();
+            let ui_id = engine_scripting::register_script_asset(temp.path(), path).unwrap();
+            let manifest =
+                load_manifest(&std::fs::read(temp.path().join("config/scripts.ron")).unwrap())
+                    .unwrap()
+                    .manifest;
+            assert_eq!(
+                manifest
+                    .scripts
+                    .iter()
+                    .find(|e| e.id == ui_id)
+                    .unwrap()
+                    .language,
+                ScriptLanguage::Web
+            );
+            let scene = SceneDocument {
+                environment: engine_world::SceneEnvironment::default(),
+                id: engine_core::SceneId::new(),
+                name: "UI bridge".into(),
+                startup_scripts: Vec::new(),
+                entities: vec![
+                    EntitySnapshot {
+                        name: Some("Player".into()),
+                        scripts: vec![ScriptComponent::new(player_id)],
+                        ..EntitySnapshot::default()
+                    },
+                    EntitySnapshot {
+                        scripts: vec![ScriptComponent::new(ui_id)],
+                        ..EntitySnapshot::default()
+                    },
+                ],
+                instances: Vec::new(),
+            };
+            GameSettings::default().save(temp.path()).unwrap();
+            let mut runtime =
+                RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+            runtime.fixed_update(0.016);
+            runtime.frame_update(0.016);
+            assert_eq!(runtime.drain_logs(), vec![("info".into(), "7:3".into())]);
+            assert!(runtime.reload(ui_id, b"globalThis.behavior={").is_err());
+            runtime.reload(ui_id, ui_source).unwrap();
+            runtime.fixed_update(0.016);
+            runtime.frame_update(0.016);
+            assert_eq!(runtime.drain_logs(), vec![("info".into(), "7:3".into())]);
+        }
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! Project distribution UI and shell-free packaging jobs.
 mod hosted;
+mod installer_ui;
 mod portable;
 use eframe::egui;
 use engine_editor::AuthoringDocument;
@@ -167,6 +168,7 @@ impl ProjectBuild {
                                     project_file_field(ui, "Wizard image (.bmp, project relative, optional)", &mut self.settings.banner, root, ("Wizard image", &["bmp"]), &mut self.status);
                                     ui.checkbox(&mut self.settings.modern, "Modern wizard style");
                                     ui.checkbox(&mut self.settings.desktop_shortcut, "Offer desktop shortcut");
+                                    ui.label("Custom C# or HTML/CSS/JavaScript UI: add scripts/install/installer.json to your project. Builds create a custom-installer folder to distribute.");
                                     field(ui, "Inno Setup compiler (ISCC.exe path)", &mut self.settings.compiler);
                                     ui.small("Leave ISCC.exe for automatic setup. Building finds or installs Inno Setup and adds it to your user PATH. First installation requires internet access.");
                                     ui.group(|ui| {
@@ -473,6 +475,11 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
             {
                 missing.push("The custom Inno Setup compiler path does not exist. Use ISCC.exe for automatic setup.".into());
             }
+            if settings.installer
+                && let Err(error) = installer_ui::validate(root)
+            {
+                missing.push(error);
+            }
         }
         Target::Website => {
             if settings.website_mode == WebsiteMode::Hosted
@@ -598,6 +605,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                     }
                 }
             }
+            export_custom_installer(root, output, settings)?;
             if settings.installer {
                 let compiler = ensure_installer_compiler(&settings.compiler)?;
                 if !available(&compiler.to_string_lossy(), "/?") {
@@ -630,6 +638,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 if !output.join("setup.exe").is_file() {
                     return Err("Installer compiler did not produce setup.exe.".into());
                 }
+                installer_ui::export(root, output, settings)?;
             }
         }
         Target::Website if settings.website_mode == WebsiteMode::Hosted => {
@@ -805,6 +814,52 @@ fn collect_artifacts(
     Ok(())
 }
 
+// Export a language-neutral companion host alongside the Windows game payload.
+fn export_custom_installer(root: &Path, output: &Path, settings: &Settings) -> Result<(), String> {
+    if installer_ui::enabled(root)? {
+        return Ok(());
+    }
+    let directory = output.join("scripts/install");
+    fs::create_dir_all(&directory).map_err(|e| e.to_string())?;
+    fs::write(
+        directory.join("server.py"),
+        include_str!("../../../scripts/install/server.py"),
+    )
+    .map_err(|e| e.to_string())?;
+    fs::write(
+        directory.join("index.html"),
+        include_str!("../../../scripts/install/index.html"),
+    )
+    .map_err(|e| e.to_string())?;
+    let config = serde_json::json!({
+        "title": settings.name.trim(), "payload": "../../game",
+        "location": format!("~/{}", settings.name.trim()), "allowLocationChange": true,
+        "window": {"width": 768, "height": 480}, "options": [],
+        "screens": [
+            {"kind": "welcome", "title": "Welcome", "text": settings.welcome},
+            {"kind": "location", "title": "Installation location"},
+            {"kind": "options", "title": "Options"},
+            {"kind": "install", "title": "Ready to install"}
+        ]
+    });
+    fs::write(
+        directory.join("installer.json"),
+        serde_json::to_vec_pretty(&config).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
+    let hooks = root.join("scripts/install/hooks");
+    if hooks.is_dir() {
+        copy_tree(&hooks, &directory.join("hooks"), &[])?;
+    }
+    for name in ["installer.json", "index.html"] {
+        let custom = root.join("scripts/install").join(name);
+        if custom.is_file() {
+            fs::copy(custom, directory.join(name)).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
 fn installer_script(settings: &Settings) -> String {
     let name = settings.name.trim();
     let style = if settings.modern { "modern" } else { "classic" };
@@ -901,6 +956,38 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn custom_installer_export_preserves_design_and_hook_files() {
+        let project = tempfile::tempdir().unwrap();
+        let output = tempfile::tempdir().unwrap();
+        export_custom_installer(project.path(), output.path(), &Settings::default()).unwrap();
+        let bundle = output.path().join("scripts/install");
+        let config: serde_json::Value =
+            serde_json::from_slice(&fs::read(bundle.join("installer.json")).unwrap()).unwrap();
+        assert_eq!(config["payload"], "../../game");
+        assert!(bundle.join("server.py").is_file());
+        assert!(bundle.join("index.html").is_file());
+
+        let custom = project.path().join("scripts/install");
+        fs::create_dir_all(custom.join("hooks/nested")).unwrap();
+        fs::write(custom.join("hooks/nested/setup.py"), "print('setup')").unwrap();
+        fs::write(custom.join("installer.json"), r#"{"title":"Custom"}"#).unwrap();
+        fs::write(custom.join("index.html"), "<h1>Custom</h1>").unwrap();
+        export_custom_installer(project.path(), output.path(), &Settings::default()).unwrap();
+        assert_eq!(
+            fs::read(custom.join("installer.json")).unwrap(),
+            fs::read(bundle.join("installer.json")).unwrap()
+        );
+        assert_eq!(
+            fs::read(custom.join("index.html")).unwrap(),
+            fs::read(bundle.join("index.html")).unwrap()
+        );
+        assert_eq!(
+            fs::read(custom.join("hooks/nested/setup.py")).unwrap(),
+            fs::read(bundle.join("hooks/nested/setup.py")).unwrap()
+        );
+    }
+
     #[test]
     fn installer_includes_designed_pages_and_per_user_installation() {
         let settings = Settings {

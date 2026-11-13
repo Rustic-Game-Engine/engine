@@ -5,7 +5,7 @@ pub fn active(response: &egui::Response) -> bool {
     // Give the viewport its own keys while respecting focus in other widgets.
     response.ctx.input(|input| input.focused)
         && (response.has_focus()
-            || (response.hovered() && !response.ctx.egui_wants_keyboard_input()))
+            || (response.contains_pointer() && !response.ctx.egui_wants_keyboard_input()))
 }
 
 #[cfg(test)]

@@ -141,7 +141,7 @@ impl ScriptLanguage {
             Self::CSharp => "C#",
             Self::Java => "Java",
             Self::Php => "PHP",
-            Self::Web => "HTML/CSS",
+            Self::Web => "HTML/CSS/JavaScript",
         }
     }
 
@@ -150,6 +150,7 @@ impl ScriptLanguage {
         match extension.as_str() {
             "lua" => Some(Self::Lua54),
             "luau" => Some(Self::Luau),
+            "js" | "mjs" if path.starts_with("ui") => Some(Self::Web),
             "js" | "mjs" => Some(Self::JavaScript),
             "py" => Some(Self::Python),
             "c" => Some(Self::C),
@@ -367,6 +368,20 @@ mod tests {
     #[test]
     fn web_languages_are_confined_to_the_ui_directory() {
         assert!(ScriptLanguage::Web.accepts_project_path(Path::new("ui/hud.html")));
+        for path in ["ui/hud.js", "ui/nested/hud.mjs", "ui/hud.JS"] {
+            assert_eq!(
+                ScriptLanguage::from_path(Path::new(path)),
+                Some(ScriptLanguage::Web)
+            );
+            assert!(ScriptLanguage::Web.accepts_project_path(Path::new(path)));
+            assert!(!ScriptLanguage::JavaScript.accepts_project_path(Path::new(path)));
+        }
+        for path in ["scripts/ui/hud.js", "ui-other/hud.js", "hud.js"] {
+            assert_eq!(
+                ScriptLanguage::from_path(Path::new(path)),
+                Some(ScriptLanguage::JavaScript)
+            );
+        }
         assert!(ScriptLanguage::Web.accepts_project_path(Path::new("ui/theme.css")));
         assert!(ScriptLanguage::Php.accepts_project_path(Path::new("ui/menu.php")));
         assert!(!ScriptLanguage::Web.accepts_project_path(Path::new("scripts/hud.html")));

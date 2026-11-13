@@ -94,6 +94,8 @@ Use `object_duplicate` to copy an object/folder and its whole subtree with fresh
 
 ## Attach scripts at the correct scope
 
+JavaScript `.js`/`.mjs` sources inside the top-level `ui/` folder (including subfolders) are automatically Web/UI assets; sources elsewhere remain gameplay JavaScript. UI scripts still require a global, scene or object attachment (or inclusion from an attached HTML entry). Avoid attaching an HTML helper twice. The same sandboxed scene APIs and `Events.on`/`Events.emit` work across UI and gameplay instances; share exposed object state or signal payloads rather than private JavaScript globals. This does not provide DOM rendering or browser/Node/module APIs.
+
 Write the gameplay source to the project, then call `script_attach` with its relative `path` and `scope`. The tool registers the source's stable script asset ID; never hand-invent registry IDs. Scope belongs to an attachment, so one source may be attached in several places. Adding a new scope does not remove another attachment: detach the old one explicitly to move behavior and avoid duplicate execution.
 
 - `global`: game/session services such as progression, settings or shared state; listed in `settings.json` and persists across scene switches. Takes `enabled` and `execution_order` and saves immediately.
@@ -139,3 +141,20 @@ agent export tool; use the editor's build dialog.
 Built-in primitives use oriented box collision proxies and unit mass in Play. Anchor floors and ramps, enable can_collide on both bodies, and author friction (0..10, default 0.5) through object_update.part_attributes. Rotated planes/boxes provide slope normals; curved primitives remain boxes and sheared transforms use enclosing AABBs. Use Physics.force once per FixedUpdate with dt, impulse to add velocity, and launch to replace it. Raycasts/sphere casts return rotated surface normals. Physics.ground(entity, maxAngle) reads the last completed fixed step and returns null or {entity, normal, angle, walkable}; it does not implement a character controller. Register Physics.onCollisionEnter/Stay/Exit explicitly from Start; callbacks arrive during Update with (other ID, world normal), using native array callbacks in C/C++/C#/Java. Both bodies need can_touch and can_collide; at least one must be unanchored. Defining OnCollisionEnter lifecycle functions alone does not register them. Inspect logs and test sliding, landing and leaving contact.
 
 For inside/outside rendering on a primitive or imported mesh, use `object_update` with `{"entity_id":"<mesh-owner-id>","properties":{"part_attributes":{"double_sided":true}}}`. This boolean defaults to false, is undoable and persists with `scene_save`. It changes rendering only, uses the same textures on both sides and does not add thickness or collision geometry. Scripts can read/write `DoubleSided` through the built-in attribute API during Play. Verify the inside or back of the surface in a fresh viewport capture.
+
+## Custom Windows installer interfaces
+
+For installer design, read the engine's `PROJECT_BUILDS.md`. Put the manifest at
+`scripts/install/installer.json` in the game project: `{"kind":"web","entry":"index.html"}`
+for static HTML/CSS/JavaScript, or `{"kind":"csharp","entry":"InstallerUi.cs"}`
+for one Windows Forms source defining `InstallerUi(InstallerContext context)`.
+Do not attach installer sources as gameplay scripts. Use `window.chrome.webview`
+messages (`ready`, `install`, `close`) for web UIs or `context.InstallAsync` for C#;
+the Inno Setup backend handles copying, shortcuts and uninstalling. Build on
+Windows with the .NET 8 SDK and distribute the complete `custom-installer` folder.
+Web UIs require Microsoft Edge WebView2 Runtime on the player's machine. Consult
+the build guide for complete examples, event/error handling, license acceptance,
+supported source limits and troubleshooting. These interfaces are independent
+of gameplay script adapters and do not apply to website/Android exports.
+
+Installer manifest compatibility: only an explicit `kind` selects the compiled UI. Keep companion HTTP API manifests without `kind` in their existing format; do not mix the schemas. Compiled UI projects do not also export the Python companion bundle.

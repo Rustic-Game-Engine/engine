@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><meta charset="utf-8"><title>Custom installer</title>
+<style>body{font:16px system-ui;max-width:48rem;margin:2rem auto;padding:1rem}label{display:block;margin:1rem 0}input[type=text]{width:95%}progress{width:100%}pre{white-space:pre-wrap;max-height:16rem;overflow:auto}button{margin:.5rem;padding:.5rem}</style>
+<h1 id="title">Installer</h1><label>Session token <input id="token" type="password"></label><button id="connect">Connect</button>
+<main id="screen"></main><p id="error" role="alert"></p><progress id="progress" max="100" value="0"></progress><p id="status" aria-live="polite"></p><pre id="logs"></pre>
+<script>
+const el=id=>document.getElementById(id);let config,page=0,timer;
+async function api(route,data){const response=await fetch('/scripts/install/'+route,{method:data?'POST':'GET',headers:{Authorization:'Bearer '+el('token').value,'Content-Type':'application/json'},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw Error(result.error);return result;}
+function button(text,action){const b=document.createElement('button');b.textContent=text;b.onclick=()=>Promise.resolve(action()).catch(showError);el('screen').append(b);}
+function showError(e){el('error').textContent=e.message;}
+function render(){el('screen').replaceChildren();const screen=config.screens[page];const title=document.createElement('h2');title.textContent=screen.title;el('screen').append(title);const text=document.createElement('p');text.textContent=screen.text||'';el('screen').append(text);
+if(screen.kind==='options')for(const option of config.options||[]){const label=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=option.default||false;input.onchange=async()=>{try{await api('configure',{options:{[option.id]:input.checked}});option.default=input.checked;}catch(e){input.checked=option.default||false;showError(e);}};label.append(input,document.createTextNode(option.label));el('screen').append(label);}
+if(screen.kind==='location'){const input=document.createElement('input');input.type='text';input.value=config.location;input.disabled=config.allowLocationChange===false;input.onchange=async()=>{try{await api('configure',{location:input.value});config.location=input.value;}catch(e){input.value=config.location;showError(e);}};el('screen').append(input);}
+if(page>0)button('Back',()=>{page--;render();});if(page<config.screens.length-1)button('Next',()=>{page++;render();});else button('Install',()=>api('start',{}));button('Cancel installation',()=>api('cancel',{}));}
+el('connect').onclick=async()=>{try{config=await api('config');el('title').textContent=config.title;document.body.style.maxWidth=Math.max(320,Math.min(config.window?.width||768,1920))+'px';document.body.style.minHeight=Math.max(200,Math.min(config.window?.height||480,1080))+'px';render();clearInterval(timer);timer=setInterval(async()=>{try{const s=await api('status');el('progress').value=s.percentage;el('status').textContent=s.status+' — '+s.percentage+'% '+(s.currentTask||'');el('logs').textContent=s.logs.join('\n');if(s.error)showError(Error(s.error));}catch(e){showError(e);clearInterval(timer);}},500);}catch(e){showError(e);}};
+</script></html>
