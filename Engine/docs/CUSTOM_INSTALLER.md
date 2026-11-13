@@ -5,6 +5,12 @@ Windows game exports include `scripts/install/server.py`, `installer.json`, and
 the existing Inno Setup wizard remains available. The host requires Python 3.10+
 on the end user's computer. It is not a standalone executable or an uninstaller.
 
+Manifests in this guide have no `kind` field. A manifest with `kind: "web"` or
+`kind: "csharp"` instead opts into the compiled front end described in
+[Build and distribute a project](PROJECT_BUILDS.md#custom-ui-in-scriptsinstall-windows).
+These formats are independent; compiled front ends do not export this Python
+companion bundle.
+
 ## Design and launch
 
 Export a Windows game from the editor Build window. To customize future exports,

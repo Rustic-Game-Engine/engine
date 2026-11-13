@@ -416,6 +416,8 @@ description: Control and inspect the Rustic Game Engine project in the current w
 # Rustic workspace
 
 Use the `rustic-workspace` MCP tools first to identify the active project root, inspect scenes, and locate engine documentation. Read project instructions with `read_agent_file` (`AGENTS.md` or `CLAUDE.md`). Agent information lives in Rustic editor app data; inspect or edit it with `list_agent_files`, `read_agent_file`, and `write_agent_file`. Keep game content in the project reported by `workspace_info`. Only edit the engine source repository when the user explicitly requests engine changes. Use `scene_summary` before changing a scene rather than guessing its serialized structure.
+
+For a custom Windows installer UI, read `PROJECT_BUILDS.md`. Create `scripts/install/installer.json` in the game project with kind `web` and an HTML entry, or kind `csharp` and a single C# source entry defining InstallerUi(InstallerContext). Do not register installer sources as gameplay behaviors. Builds require the .NET 8 SDK and produce a custom-installer folder; web UIs require WebView2 Runtime on player machines. Use the supplied installation bridge/context rather than implementing file copying or uninstall logic. These sources are separate from gameplay HTML/CSS and external C# adapters. Existing user-edited stored skills are preserved; consult current build documentation for the complete contract.
 ";
     let skill = with_authoring_guide(skill);
     let codex_skill = storage.join(".agents/skills/rustic-workspace");
