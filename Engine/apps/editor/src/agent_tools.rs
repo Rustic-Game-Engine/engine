@@ -1010,8 +1010,14 @@ fn edit_textures(
         .snapshot(request.entity_id)
         .map_err(|e| e.to_string())?;
     let renderable = before.mesh.is_some() || before.primitive.is_some();
-    if !renderable && (child || before.textures.is_none()) {
-        return Err("Choose a mesh or primitive, or update an existing Texture child".into());
+    if child && !renderable {
+        return Err("Choose a mesh or primitive to create a Texture child".into());
+    }
+    if !child && (renderable || before.textures.is_none()) {
+        return Err(
+            "Select a Texture child to update; use texture_create_child on a mesh or primitive"
+                .into(),
+        );
     }
     let mut textures = if child {
         engine_world::SurfaceTextures::default()
@@ -1154,15 +1160,32 @@ mod texture_flow_tests {
             )
             .unwrap();
         let id = created["entity_id"].clone();
-        app.agent_tool("texture_update",&json!({"entity_id":id,"maps":{"Normal":"assets/normal.png","Emissive":"assets/sky.hdr"}}),&context).unwrap();
+        assert!(
+            app.agent_tool(
+                "texture_update",
+                &json!({"entity_id":id,"maps":{"Normal":"assets/normal.png"}}),
+                &context,
+            )
+            .is_err()
+        );
+        let surface = app.agent_tool(
+            "texture_create_child",
+            &json!({"entity_id":id,"maps":{"Normal":"assets/normal.png","Emissive":"assets/sky.hdr"}}),
+            &context,
+        ).unwrap();
+        let surface_id = surface["entity_id"].clone();
         app.agent_tool(
             "texture_update",
-            &json!({"entity_id":id,"maps":{"Normal":null},"uv_scale":[2,3]}),
+            &json!({"entity_id":surface_id,"maps":{"Normal":null},"uv_scale":[2,3]}),
             &context,
         )
         .unwrap();
         let before = app
-            .agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
+            .agent_tool(
+                "texture_inspect",
+                &json!({"entity_id":surface_id}),
+                &context,
+            )
             .unwrap();
         assert!(before["textures"]["maps"].get("Normal").is_none());
         assert_eq!(before["textures"]["maps"]["Emissive"], "assets/sky.hdr");
@@ -1177,11 +1200,15 @@ mod texture_flow_tests {
             json!({"unexpected":true}),
         ] {
             let mut args = bad;
-            args["entity_id"] = id.clone();
+            args["entity_id"] = surface_id.clone();
             assert!(app.agent_tool("texture_update", &args, &context).is_err());
             assert_eq!(
-                app.agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
-                    .unwrap(),
+                app.agent_tool(
+                    "texture_inspect",
+                    &json!({"entity_id":surface_id}),
+                    &context
+                )
+                .unwrap(),
                 before
             );
         }
@@ -1199,9 +1226,13 @@ mod texture_flow_tests {
         let inspected = app
             .agent_tool("texture_inspect", &json!({"entity_id":id}), &context)
             .unwrap();
-        assert_eq!(
-            inspected["texture_children"][0]["entity_id"],
-            child["entity_id"]
+        assert!(inspected["textures"].is_null());
+        assert!(
+            inspected["texture_children"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|entry| entry["entity_id"] == child["entity_id"])
         );
         assert_eq!(
             inspected["resolved_textures"]["maps"]["Normal"],
@@ -1230,7 +1261,7 @@ mod texture_flow_tests {
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|o| o["entity_id"] == id && o["textures"].is_object())
+                .any(|o| o["entity_id"] == surface_id && o["textures"].is_object())
         );
         app.agent_tool(
             "environment_update",

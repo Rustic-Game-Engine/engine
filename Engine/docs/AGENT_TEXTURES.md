@@ -17,7 +17,7 @@ The tools execute on the editor thread. Read-only projects reject edits; texture
 | --- | --- | --- |
 | `texture_guide` | `{}` | Current PBR/HDR workflow, exact slot names, conventions, examples and limitations. |
 | `texture_inspect` | `{"entity_id":"<object-id>"}` | Direct `textures`, effective `resolved_textures`, and immediate `texture_children` in override order. |
-| `texture_update` | `entity_id`, optional `maps`, `clear_maps`, `uv_scale`, `uv_offset`, `height_scale`, `emissive_strength` | One undoable material edit on a mesh, primitive or existing Texture child. |
+| `texture_update` | `entity_id`, optional `maps`, `clear_maps`, `uv_scale`, `uv_offset`, `height_scale`, `emissive_strength` | One undoable material edit on an existing Texture child. Mesh/primitive targets are rejected; use `texture_create_child` first. |
 | `texture_create_child` | Parent object's `entity_id`, optional `name`, and the same map/control arguments | Creates the child and initial material in one undoable edit; returns the child's `entity_id`. |
 | `environment_update` | `{"settings":{...}}` | Patches sky/atmosphere fields in one undoable edit. Read existing fields in `editor_status.environment`. |
 
@@ -25,11 +25,11 @@ The tools execute on the editor thread. Read-only projects reject edits; texture
 
 ## Assign surface maps
 
-Call `texture_update` with the target mesh or primitive's ID:
+Call `texture_create_child` with the mesh or primitive's ID, then use the returned Texture child's ID for `texture_update`:
 
 ```json
 {
-  "entity_id": "<mesh-id>",
+  "entity_id": "<texture-child-id>",
   "maps": {
     "BaseColor": "assets/stone_albedo.png",
     "Normal": "assets/stone_normal.png",
@@ -43,7 +43,7 @@ Call `texture_update` with the target mesh or primitive's ID:
 `maps` patches only supplied slots; unmentioned slots and controls remain unchanged. `null` clears one slot. `clear_maps:true` clears all previous slots before applying any supplied maps and retains the texture component and controls. For example:
 
 ```json
-{"entity_id":"<mesh-id>","maps":{"Normal":null},"emissive_strength":2}
+{"entity_id":"<texture-child-id>","maps":{"Normal":null},"emissive_strength":2}
 ```
 
 Use the exact case-sensitive keys `BaseColor`, `Normal`, `Roughness`, `Metallic`, `AmbientOcclusion`, `Height`, `Emissive`, `Clearcoat`, `ClearcoatRoughness`, `ClearcoatNormal`, `Transmission`, `Thickness`, `SheenColor`, `SheenRoughness`, `Specular`, `SpecularColor`, and `Anisotropy`. Every slot is optional. Tools use explicit slot keys rather than filename inference; packed ORM images are not automatically split. See [Surface textures and PBR maps](SURFACE_TEXTURES.md) for channels, color spaces and rendering limits.
@@ -68,7 +68,7 @@ Call `texture_create_child` with the parent mesh/primitive's ID:
 
 The returned child ID is the target for later `texture_update` calls. To move its effect, call `object_update` with the child's `entity_id` and `{"parent":"<other-mesh-id>"}` in `properties`.
 
-A Texture child applies only to its immediate parent. Its supplied maps override direct slots; empty slots retain the parent's maps. With several children, stable entity-ID order resolves duplicate slots, and the last nonempty child's controls apply to the combined material. Prefer one Texture child per object for predictable editing. `texture_inspect` shows the resulting maps and children.
+A Texture child applies only to its immediate parent. Its supplied maps combine with the other Texture children; empty slots leave other supplied maps intact. Older scenes can still resolve legacy direct maps, but author new maps on Texture children. With several children, stable entity-ID order resolves duplicate slots, and the last nonempty child's controls apply to the combined material. Prefer one Texture child per object for predictable editing. `texture_inspect` shows the resulting maps and children.
 
 ## Set an HDR sky
 
