@@ -72,7 +72,7 @@ The global `rustic` table exposes `entity_id`, `get_translation`, `set_translati
 `find_entity`, `get_attribute`/`GetAttribute`, `edit_attribute`/`EditAttribute`,
 `input`, `log`, `delta_time`, `fixed_delta_time`, `get_property`, `set_property`, and
 `set_enabled`. The built-in attributes are `Name`, `Position`, `Size`, `Color`,
-`CanTouch`, `CanCollide`, `Anchored`, `Friction`, and `Parent`.
+`CanTouch`, `CanCollide`, `DoubleSided`, `Anchored`, `Friction`, and `Parent`.
 Lua also provides `print(...)` for an info Console entry and `warn(...)` for a
 warning Console entry. Use `rustic.log(level, message)` to choose a different level.
 

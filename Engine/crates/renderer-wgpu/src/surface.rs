@@ -271,6 +271,7 @@ mod tests {
             camera_position: [0.0, 0.0, -1.0],
             view_projection: identity_matrix(),
             meshes: vec![ViewportMesh {
+                double_sided: false,
                 textures: SurfaceTextures::default(),
                 instance_key: 1,
                 mesh_key: 1,

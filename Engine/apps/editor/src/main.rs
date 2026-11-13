@@ -2908,6 +2908,10 @@ impl EditorViewer<'_> {
                 ui.color_edit_button_rgba_unmultiplied(&mut color).changed();
             attributes.color = color;
             attributes_changed |= ui
+                .checkbox(&mut attributes.double_sided, "Double sided")
+                .on_hover_text("Draws both the inside and outside of this shape.")
+                .changed();
+            attributes_changed |= ui
                 .checkbox(&mut attributes.can_touch, "Can touch")
                 .on_hover_text("Enables clicks, taps and collision event subscriptions. Does not affect solid response.")
                 .changed();
@@ -3455,6 +3459,11 @@ fn viewport_scene(
             })
             .collect();
         meshes.push(ViewportMesh {
+            double_sided: document
+                .world()
+                .part_attributes(entity)
+                .unwrap_or_default()
+                .double_sided,
             textures: document.world().resolved_textures(entity),
             instance_key,
             mesh_key,
@@ -3505,6 +3514,11 @@ fn viewport_scene(
                     .map_or([0.55, 0.62, 0.72, 1.0], |material| material.base_color)
             };
             meshes.push(ViewportMesh {
+                double_sided: document
+                    .world()
+                    .part_attributes(extracted.entity)
+                    .unwrap_or_default()
+                    .double_sided,
                 textures,
                 instance_key: hash_value(&(extracted.entity.to_string(), mesh_index)),
                 mesh_key: hash_value(&(extracted.mesh, mesh_index)),

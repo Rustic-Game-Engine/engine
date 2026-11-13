@@ -78,6 +78,9 @@ pub struct PartAttributes {
     pub can_touch: bool,
     pub can_collide: bool,
     pub anchored: bool,
+    /// Render both front and back faces of primitives and imported meshes.
+    #[serde(default)]
+    pub double_sided: bool,
     /// Coulomb friction coefficient, combined geometrically at contacts.
     #[serde(default = "default_friction")]
     pub friction: f32,
@@ -94,6 +97,7 @@ impl Default for PartAttributes {
             can_touch: true,
             can_collide: true,
             anchored: false,
+            double_sided: false,
             friction: default_friction(),
         }
     }
@@ -295,6 +299,20 @@ mod physics_attribute_tests {
             attributes
         );
     }
+    #[test]
+    fn legacy_attributes_are_single_sided_and_double_sided_round_trips() {
+        let legacy = "(color:(0.55,0.62,0.72,1.0),can_touch:true,can_collide:true,anchored:false)";
+        let mut attributes: PartAttributes = ron::from_str(legacy).unwrap();
+        assert!(!attributes.double_sided);
+        attributes.double_sided = true;
+        let encoded = ron::ser::to_string(&attributes).unwrap();
+        assert!(
+            ron::from_str::<PartAttributes>(&encoded)
+                .unwrap()
+                .double_sided
+        );
+    }
+
     #[test]
     fn invalid_friction_is_rejected_before_world_mutation() {
         let mut world = crate::SceneWorld::new();

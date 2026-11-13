@@ -117,6 +117,7 @@ See [APIs in every language](/docs/guides/api-languages) for native signatures.
 | `Size` | three finite numbers | Local transform scale |
 | `Color` | three finite numbers | RGB; preserves existing alpha |
 | `CanTouch` | boolean | Enables clicks/taps and collision subscriptions when both bodies allow touch; does not affect solid response |
+| `DoubleSided` | boolean | Draws both inside and outside faces of primitives and imported meshes; defaults to false |
 | `CanCollide` | boolean | Enables solid box collisions with other collidable primitives in Play |
 | `Friction` | number, 0..10 | Contact friction coefficient; defaults to 0.5 |
 | `Anchored` | boolean | Prevents physics movement; unchecked primitives fall under gravity |
@@ -145,3 +146,30 @@ curved primitives use oriented enclosing boxes. Rotated planes and boxes support
 
 An invalid call reports a scripting error and can fail that behavior. Queued
 commands applied before a failure remain applied; a callback is not a transaction.
+
+## Draw both sides of a 3D object
+
+Select a primitive or imported model in the scene hierarchy, then enable
+**Double sided** beside Color in the Inspector. The shape remains visible when
+viewed from inside, or from behind an open surface, in the editor, Play and
+exported games. The checkbox supports undo/redo and is saved with the scene.
+Existing scenes and newly created objects default to off.
+
+To change it during Play, create an Object Component Lua script in Programming,
+attach it to the shape and use:
+
+```lua
+return {
+    Start = function()
+        rustic.EditAttribute("DoubleSided", true)
+    end,
+}
+```
+
+`rustic.GetAttribute("DoubleSided")` reads the current boolean. Other supported
+languages use their existing attribute APIs with the same name and a boolean.
+Runtime edits follow the usual Play change review workflow. This setting affects
+rendering only: it adds no wall thickness or collision geometry. Both sides use
+the same color and textures, with normals reversed for lighting on the back.
+If an interior disappears, check this property on the mesh-owning object rather
+than its parent folder, and confirm a script is not resetting it to false.
