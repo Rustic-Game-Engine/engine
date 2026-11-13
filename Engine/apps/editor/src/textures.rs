@@ -262,10 +262,9 @@ fn assign_files(
             .map_err(|e| e.to_string())?
             .iter()
             .filter_map(|id| document.world().snapshot(*id).ok())
-            .filter(|child| {
+            .rfind(|child| {
                 child.mesh.is_none() && child.primitive.is_none() && child.textures.is_some()
             })
-            .next_back()
     } else {
         Some(s)
     };
@@ -371,7 +370,7 @@ mod tests {
             });
             for (snapshot, expected) in [(&owner, false), (&child, true)] {
                 let mut output = context.run_ui(egui::RawInput::default(), |ui| {
-                    viewer.texture_inspector(ui, snapshot)
+                    viewer.texture_inspector(ui, snapshot);
                 });
                 output.textures_delta.clear();
                 let visible = |label: &str| {
@@ -414,7 +413,7 @@ mod tests {
             .is_err()
         );
         assert!(document.world().children(owner).unwrap().is_empty());
-        assign_files(&mut document, &root, owner, &[image.clone()]).unwrap();
+        assign_files(&mut document, &root, owner, std::slice::from_ref(&image)).unwrap();
         let child = document.selected().unwrap();
         assert_ne!(child, owner);
         assert!(document.world().surface_textures(owner).unwrap().is_none());
@@ -434,7 +433,7 @@ mod tests {
         document.redo().unwrap();
         let normal = root.join("assets/normal.png");
         std::fs::copy(&image, &normal).unwrap();
-        assign_files(&mut document, &root, owner, &[normal.clone()]).unwrap();
+        assign_files(&mut document, &root, owner, std::slice::from_ref(&normal)).unwrap();
         assert_eq!(document.world().children(owner).unwrap(), &[child]);
         let before = document.world().surface_textures(child).unwrap();
         assert_eq!(before.as_ref().unwrap().maps.len(), 2);
