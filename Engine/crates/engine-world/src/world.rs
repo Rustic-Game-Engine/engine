@@ -1219,6 +1219,7 @@ mod tests {
             can_touch: false,
             can_collide: true,
             anchored: true,
+            double_sided: false,
             friction: 0.5,
         };
         world

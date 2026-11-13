@@ -1573,6 +1573,30 @@ mod tests {
     }
 
     #[test]
+    fn double_sided_is_undoable_and_persists() {
+        let temporary = tempdir().unwrap();
+        let root = temporary.path().join("double-sided");
+        let project = Project::create(&root, "DoubleSided", ProjectTemplate::Blank).unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let id = document
+            .add_primitive("Cube", Primitive::Cube { size: 2.0 }, None)
+            .unwrap();
+        let mut attributes = document.world().part_attributes(id).unwrap();
+        assert!(!attributes.double_sided);
+        attributes.double_sided = true;
+        document.set_part_attributes(id, attributes).unwrap();
+        assert!(document.world().part_attributes(id).unwrap().double_sided);
+        document.undo().unwrap();
+        assert!(!document.world().part_attributes(id).unwrap().double_sided);
+        document.redo().unwrap();
+        assert!(document.world().part_attributes(id).unwrap().double_sided);
+        document.save().unwrap();
+        drop(document);
+        let reopened = AuthoringDocument::open(Project::open(&root).unwrap(), false).unwrap();
+        assert!(reopened.world().part_attributes(id).unwrap().double_sided);
+    }
+
+    #[test]
     fn folders_persist_and_accept_new_scene_objects() {
         let temporary = tempdir().unwrap();
         let root = temporary.path().join("folders");

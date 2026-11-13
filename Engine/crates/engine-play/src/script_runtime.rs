@@ -2079,6 +2079,7 @@ impl GameplayHost for RuntimeHost {
             "cantouch" => EngineValue::Boolean(snapshot.part_attributes.can_touch),
             "cancollide" => EngineValue::Boolean(snapshot.part_attributes.can_collide),
             "anchored" => EngineValue::Boolean(snapshot.part_attributes.anchored),
+            "doublesided" => EngineValue::Boolean(snapshot.part_attributes.double_sided),
             "friction" => EngineValue::Number(f64::from(snapshot.part_attributes.friction)),
             "parent" => EngineValue::Entity(snapshot.parent),
             _ => return Ok(None),
@@ -2122,7 +2123,11 @@ impl GameplayHost for RuntimeHost {
                     parent,
                 }])
             }
-            (property @ ("color" | "cantouch" | "cancollide" | "anchored" | "friction"), value) => {
+            (
+                property @ ("color" | "cantouch" | "cancollide" | "anchored" | "doublesided"
+                | "friction"),
+                value,
+            ) => {
                 let mut attributes = world
                     .part_attributes(self.entity)
                     .map_err(|error| error.to_string())?;
@@ -2134,6 +2139,7 @@ impl GameplayHost for RuntimeHost {
                     ("cantouch", EngineValue::Boolean(value)) => attributes.can_touch = value,
                     ("cancollide", EngineValue::Boolean(value)) => attributes.can_collide = value,
                     ("anchored", EngineValue::Boolean(value)) => attributes.anchored = value,
+                    ("doublesided", EngineValue::Boolean(value)) => attributes.double_sided = value,
                     ("friction", EngineValue::Number(value))
                         if value.is_finite() && (0.0..=10.0).contains(&value) =>
                     {
@@ -4114,6 +4120,52 @@ rustic_run(['on_start'=>'on_start']);"#),
             scenes: Arc::default(),
             global: false,
         }
+    }
+
+    #[test]
+    fn double_sided_attribute_accepts_only_booleans() {
+        let mut scene = SceneWorld::new();
+        let entity = EntitySnapshot::default();
+        let id = entity.id;
+        scene
+            .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+            .unwrap();
+        let world = Arc::new(Mutex::new(scene));
+        let mut host = environment_host(&world);
+        host.entity = id;
+        host.entity_bound = true;
+        assert_eq!(
+            host.attribute("DoubleSided").unwrap(),
+            Some(EngineValue::Boolean(false))
+        );
+        host.edit_attribute("Double sided", EngineValue::Boolean(true))
+            .unwrap();
+        assert_eq!(
+            host.attribute("double_sided").unwrap(),
+            Some(EngineValue::Boolean(true))
+        );
+        assert!(
+            host.edit_attribute("DoubleSided", EngineValue::String("false".into()))
+                .is_err()
+        );
+        assert!(
+            world
+                .lock()
+                .unwrap()
+                .part_attributes(id)
+                .unwrap()
+                .double_sided
+        );
+        host.edit_attribute("DoubleSided", EngineValue::Boolean(false))
+            .unwrap();
+        assert!(
+            !world
+                .lock()
+                .unwrap()
+                .part_attributes(id)
+                .unwrap()
+                .double_sided
+        );
     }
 
     #[test]

@@ -2906,6 +2906,10 @@ impl EditorViewer<'_> {
                 ui.color_edit_button_rgba_unmultiplied(&mut color).changed();
             attributes.color = color;
             attributes_changed |= ui
+                .checkbox(&mut attributes.double_sided, "Double sided")
+                .on_hover_text("Draws both the inside and outside of this shape.")
+                .changed();
+            attributes_changed |= ui
                 .checkbox(&mut attributes.can_touch, "Can touch")
                 .on_hover_text("Enables clicks, taps and collision event subscriptions. Does not affect solid response.")
                 .changed();
@@ -3452,18 +3456,16 @@ fn viewport_scene(
                     .unwrap_or([0.0, 1.0, 0.0]),
             })
             .collect();
+        let attributes = document.world().part_attributes(entity).unwrap_or_default();
         meshes.push(ViewportMesh {
+            double_sided: attributes.double_sided,
             textures: document.world().resolved_textures(entity),
             instance_key,
             mesh_key,
             vertices,
             indices: generated.indices,
             model: extracted.transform,
-            color: document
-                .world()
-                .part_attributes(entity)
-                .unwrap_or_default()
-                .color,
+            color: attributes.color,
             selected: document.selected() == Some(entity),
         });
     }
@@ -3471,6 +3473,10 @@ fn viewport_scene(
         let Some(model) = model_assets.get(&extracted.mesh) else {
             continue;
         };
+        let attributes = document
+            .world()
+            .part_attributes(extracted.entity)
+            .unwrap_or_default();
         for (mesh_index, imported) in model.meshes.iter().enumerate() {
             let vertices = imported
                 .positions
@@ -3491,11 +3497,7 @@ fn viewport_scene(
                 .maps
                 .contains_key(&engine_world::TextureMap::BaseColor)
             {
-                document
-                    .world()
-                    .part_attributes(extracted.entity)
-                    .unwrap_or_default()
-                    .color
+                attributes.color
             } else {
                 model
                     .materials
@@ -3503,6 +3505,7 @@ fn viewport_scene(
                     .map_or([0.55, 0.62, 0.72, 1.0], |material| material.base_color)
             };
             meshes.push(ViewportMesh {
+                double_sided: attributes.double_sided,
                 textures,
                 instance_key: hash_value(&(extracted.entity.to_string(), mesh_index)),
                 mesh_key: hash_value(&(extracted.mesh, mesh_index)),

@@ -204,7 +204,12 @@ impl EditorApp {
                             {
                                 if !matches!(
                                     k.as_str(),
-                                    "color" | "anchored" | "can_touch" | "can_collide" | "friction"
+                                    "color"
+                                        | "anchored"
+                                        | "can_touch"
+                                        | "can_collide"
+                                        | "double_sided"
+                                        | "friction"
                                 ) {
                                     return Err(format!("unknown part attribute: {k}"));
                                 }
@@ -620,6 +625,7 @@ impl EditorApp {
             .iter()
             .enumerate()
             .map(|(i, m)| ViewportMesh {
+                double_sided: false,
                 textures: engine_world::SurfaceTextures::default(),
                 instance_key: i as u64,
                 mesh_key: i as u64,
@@ -828,7 +834,7 @@ mod authoring_flow_tests {
             )
             .unwrap();
         let id = object["entity_id"].clone();
-        app.agent_tool("object_update",&json!({"entity_id":id,"properties":{"translation":[2,3,4],"part_attributes":{"anchored":true}}}),&context).unwrap();
+        app.agent_tool("object_update",&json!({"entity_id":id,"properties":{"translation":[2,3,4],"part_attributes":{"anchored":true,"double_sided":true}}}),&context).unwrap();
         let object_id: EntityId = serde_json::from_value(id.clone()).unwrap();
         assert_eq!(
             app.document
@@ -863,6 +869,21 @@ mod authoring_flow_tests {
                 .name
                 .as_deref(),
             Some("Player")
+        );
+        assert!(
+            app.document
+                .world()
+                .part_attributes(object_id)
+                .unwrap()
+                .double_sided
+        );
+        assert!(
+            app.agent_tool(
+                "object_update",
+                &json!({"entity_id":id,"properties":{"part_attributes":{"double_sided":"true"}}}),
+                &context
+            )
+            .is_err()
         );
         let root = app.document.project().root().to_path_buf();
         std::fs::create_dir_all(root.join("scripts")).unwrap();
