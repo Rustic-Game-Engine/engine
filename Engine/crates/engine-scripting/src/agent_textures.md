@@ -12,13 +12,13 @@ Use `texture_guide` for the current bundled version of this guidance, even if an
 ## Workflow
 
 1. Call `texture_inspect` with the target's `entity_id`. It returns direct `textures`, `resolved_textures`, and immediate `texture_children` in their override order. `editor_status` also exposes direct and resolved maps; `scene_summary` is saved data only.
-2. Use `texture_update` on a primitive, imported mesh, or existing Texture child. `maps` is a partial update: omitted slots stay unchanged; `null` clears one slot; `clear_maps:true` clears slots before applying the supplied ones. Optional `uv_scale`, `uv_offset`, `height_scale` and `emissive_strength` change controls without resetting other values.
-3. Alternatively, use `texture_create_child` with the mesh/primitive's `entity_id`, optional `name`, and the same maps/controls. Creation and its initial material commit as one undoable edit. Use the returned child ID for later updates. Reparent it using `object_update` with `properties.parent` to move its effect. A child applies to its immediate parent only, never siblings or descendants; supplied slots override direct slots. With multiple children, stable entity-ID order resolves duplicate slots and the last nonempty child's controls apply to the combined material. Prefer one child per mesh.
+2. Use `texture_update` on an existing Texture child. Mesh and primitive targets are rejected; create a Texture child first. `maps` is a partial update: omitted slots stay unchanged; `null` clears one slot; `clear_maps:true` clears slots before applying the supplied ones. Optional `uv_scale`, `uv_offset`, `height_scale` and `emissive_strength` change controls without resetting other values.
+3. Use `texture_create_child` with the mesh/primitive's `entity_id`, optional `name`, and the same maps/controls. Creation and its initial material commit as one undoable edit. Use the returned child ID for later updates. Reparent it using `object_update` with `properties.parent` to move its effect. A child applies to its immediate parent only, never siblings or descendants; supplied slots combine with other Texture children. Older direct components remain readable for compatibility; author new maps only on Texture children. With multiple children, stable entity-ID order resolves duplicate slots and the last nonempty child's controls apply to the combined material. Prefer one child per mesh.
 4. Inspect a fresh `viewport_capture` and recent `editor_status` logs. Check texture orientation, UV seams, repetition, normals, roughness and brightness under useful lighting. Set the object's `part_attributes.color` to `[1,1,1,1]` for untinted albedo.
 5. Save with `scene_save`; start a real playtest with `playtest_control`. Capture frames and check logs, then stop before editing again. `editor_undo` and `editor_redo` reverse material edits and child creation/movement. Do not hand-edit scene serialization or invent a gameplay `Material.set_texture` API.
 
 ```json
-{"entity_id":"<mesh-id>","maps":{"BaseColor":"assets/brick_albedo.png","Normal":"assets/brick_normal.png","Roughness":"assets/brick_roughness.png"},"uv_scale":[2,2]}
+{"entity_id":"<texture-child-id>","maps":{"BaseColor":"assets/brick_albedo.png","Normal":"assets/brick_normal.png","Roughness":"assets/brick_roughness.png"},"uv_scale":[2,2]}
 ```
 
 ```json
