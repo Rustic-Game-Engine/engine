@@ -10,6 +10,7 @@ mod transform_widget;
 mod ui_designer;
 mod ui_theme;
 mod viewport_keyboard;
+mod viewport_pointer;
 
 use eframe::egui;
 use egui::emath::GuiRounding as _;
@@ -1837,7 +1838,7 @@ impl EditorViewer<'_> {
         response.clone().on_hover_text(if is_2d {
             "Orthographic 2D authoring viewport; drop content to select it"
         } else {
-            "LMB click select/drag look · MMB orbit · Shift+MMB or Q/E pan · WASD move · wheel zoom · F frame · Home reset"
+            "LMB click select · LMB/RMB drag look · MMB orbit · Shift+MMB pan · WASD fly · Q/E down/up · Shift faster · wheel zoom · F frame · Home reset"
         });
         let pixels_per_point = ui.ctx().pixels_per_point();
         let extent = [
@@ -2079,13 +2080,13 @@ impl EditorViewer<'_> {
     }
 
     fn viewport_input(&mut self, ui: &egui::Ui, response: &egui::Response) {
-        let hovered = response.hovered();
+        let hovered = response.contains_pointer();
         if hovered && ui.input(|input| input.pointer.any_pressed()) {
             response.request_focus();
         }
         let pointer_delta = ui.input(|input| input.pointer.delta());
         let shift = ui.input(|input| input.modifiers.shift);
-        if response.dragged_by(egui::PointerButton::Middle) {
+        if viewport_pointer::dragged(response, egui::PointerButton::Middle) {
             if shift {
                 self.camera.pan(
                     Vec2::new(pointer_delta.x, pointer_delta.y),
@@ -2104,8 +2105,16 @@ impl EditorViewer<'_> {
                 self.request_preview = true;
             }
         }
+        let look_drag = viewport_pointer::dragged(response, egui::PointerButton::Secondary);
+        let primary_drag = viewport_pointer::dragged(response, egui::PointerButton::Primary);
+        if look_drag || (primary_drag && self.gizmo_drag.is_none()) {
+            self.camera
+                .look(Vec2::new(pointer_delta.x, pointer_delta.y));
+            self.request_preview = true;
+        }
         let keyboard_active = viewport_keyboard::active(response);
         if keyboard_active {
+            let mut moving = false;
             ui.input(|input| {
                 if input.key_pressed(egui::Key::F) {
                     self.frame_selected();
@@ -2117,7 +2126,8 @@ impl EditorViewer<'_> {
                 let motion = Vec3::new(
                     f32::from(input.key_down(egui::Key::D))
                         - f32::from(input.key_down(egui::Key::A)),
-                    0.0,
+                    f32::from(input.key_down(egui::Key::E))
+                        - f32::from(input.key_down(egui::Key::Q)),
                     f32::from(input.key_down(egui::Key::W))
                         - f32::from(input.key_down(egui::Key::S)),
                 );
@@ -2125,29 +2135,17 @@ impl EditorViewer<'_> {
                     self.camera.fly(
                         motion.normalize(),
                         input.stable_dt,
-                        self.camera.distance.max(1.0),
+                        if shift { 20.0 } else { 5.0 },
                     );
                     self.request_preview = true;
-                    ui.ctx().request_repaint();
-                }
-                let horizontal_pan = f32::from(input.key_down(egui::Key::E))
-                    - f32::from(input.key_down(egui::Key::Q));
-                if horizontal_pan != 0.0 {
-                    self.camera.pan(
-                        Vec2::new(-horizontal_pan * 600.0 * input.stable_dt, 0.0),
-                        response.rect.height(),
-                    );
-                    self.request_preview = true;
-                    ui.ctx().request_repaint();
+                    moving = true;
                 }
             });
-        }
-        if response.dragged_by(egui::PointerButton::Secondary)
-            || (response.dragged_by(egui::PointerButton::Primary) && self.gizmo_drag.is_none())
-        {
-            self.camera
-                .orbit(Vec2::new(pointer_delta.x, pointer_delta.y));
-            self.request_preview = true;
+            // Input holds the context lock; requesting a repaint inside that
+            // closure would lock the same context again and stall navigation.
+            if moving {
+                ui.ctx().request_repaint();
+            }
         }
         if response.clicked_by(egui::PointerButton::Primary)
             && let Some(position) = response.interact_pointer_pos()
@@ -5720,6 +5718,101 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
 #[cfg(test)]
 mod explorer_tests {
     use super::*;
+
+    #[test]
+    fn viewport_drag_looks_in_place_and_keys_fly_without_editing_the_scene() {
+        let temporary = TestProject::new();
+        let project = Project::create(
+            temporary.0.join("game"),
+            "Game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        document.add_folder(None).unwrap();
+        document.save().unwrap();
+        let root = document.project().root().to_path_buf();
+        let tree = scan_project_directory(&root, &root);
+        let mut action = None;
+        let mut viewer = EditorViewer {
+            document: &mut document,
+            project_root: &root,
+            console: &mut RuntimeConsole::default(),
+            project_tree: Some(&tree),
+            project_filter: &mut String::new(),
+            preview: None,
+            preview_status: "",
+            request_preview: false,
+            playing: false,
+            can_switch_scene: true,
+            play: None,
+            play_keys: BTreeSet::new(),
+            camera: &mut EditorCamera::default(),
+            viewport_extent: &mut [640, 480],
+            gizmo: &mut GizmoSettings::default(),
+            gizmo_drag: &mut None,
+            gizmo_widget: &mut transform_widget::TransformWidget::default(),
+            scene_graph: &mut scene_graph::SceneGraph::default(),
+            ui_designer: &mut ui_designer::UiDesigner::default(),
+            model_assets: &mut BTreeMap::new(),
+            project_file_action: &mut action,
+        };
+        let context = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+        let mut time = 0.0;
+        let mut frame = |viewer: &mut EditorViewer<'_>, events| {
+            time += 1.0 / 60.0;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(rect),
+                    focused: true,
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    viewer.viewport(ui, false);
+                },
+            );
+            output.textures_delta.clear();
+        };
+        let start = egui::pos2(200.0, 200.0);
+        frame(&mut viewer, vec![egui::Event::PointerMoved(start)]);
+        frame(&mut viewer, vec![]);
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerButton {
+                pos: start,
+                button: egui::PointerButton::Secondary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let position = viewer.camera.position();
+        let forward = viewer.camera.forward();
+        frame(
+            &mut viewer,
+            vec![egui::Event::PointerMoved(egui::pos2(280.0, 220.0))],
+        );
+        assert!(viewer.camera.position().abs_diff_eq(position, 1.0e-5));
+        assert!(!viewer.camera.forward().abs_diff_eq(forward, 0.01));
+        let forward = viewer.camera.forward();
+        frame(
+            &mut viewer,
+            vec![egui::Event::Key {
+                key: egui::Key::W,
+                physical_key: None,
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        let displacement = viewer.camera.position() - position;
+        assert!(displacement.length() > 0.0);
+        assert!(displacement.normalize().dot(forward) > 0.999);
+        assert!(viewer.request_preview);
+        assert!(!viewer.document.is_modified());
+    }
 
     #[test]
     #[allow(
