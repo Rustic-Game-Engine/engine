@@ -101,7 +101,7 @@ impl EditorApp {
                 let objects = self.document.entity_snapshots().map_err(|e| e.to_string())?.iter().map(|s| json!({
                     "entity_id":s.id,"name":s.name,"folder":s.folder,"parent":s.parent,"translation":s.local_transform.translation.to_array(),
                     "rotation":s.local_transform.rotation.to_array(),"scale":s.local_transform.scale.to_array(),
-                    "part_attributes":s.part_attributes,"camera":s.camera,"light":s.light,"scripts":s.scripts,
+                    "part_attributes":s.part_attributes,"camera":s.camera,"light":s.light,"effect":s.effect,"effect_group":s.effect_group,"scripts":s.scripts,
                     "mesh_asset":s.mesh.map(|m| m.asset),"material_asset":s.material.map(|m| m.asset),"primitive":s.primitive,
                     "textures":s.textures,"resolved_textures":self.document.world().resolved_textures(s.id)
                 })).collect::<Vec<_>>();
@@ -204,7 +204,12 @@ impl EditorApp {
                             {
                                 if !matches!(
                                     k.as_str(),
-                                    "color" | "anchored" | "can_touch" | "can_collide" | "friction"
+                                    "color"
+                                        | "anchored"
+                                        | "can_touch"
+                                        | "can_collide"
+                                        | "friction"
+                                        | "visibility_layers"
                                 ) {
                                     return Err(format!("unknown part attribute: {k}"));
                                 }
@@ -234,6 +239,36 @@ impl EditorApp {
                             before: before.light,
                             after: decode(value)?,
                         }),
+                        "effect" => {
+                            let after: Option<engine_world::EffectComponent> = decode(value)?;
+                            if let Some(effect) = &after {
+                                effect.validate()?;
+                            }
+                            edits.push(engine_world::SceneEdit::Effect {
+                                entity: id,
+                                before: before.effect.clone(),
+                                after,
+                            });
+                        }
+                        "effect_group" => {
+                            let after: Option<engine_world::effects::EffectGroup> = decode(value)?;
+                            if let Some(group) = &after {
+                                group.validate()?;
+                            }
+                            edits.push(engine_world::SceneEdit::EffectGroup {
+                                entity: id,
+                                before: before.effect_group.clone(),
+                                after,
+                            });
+                        }
+                        "material_asset" => {
+                            let after = checked_material(self.document.project().root(), value)?;
+                            edits.push(engine_world::SceneEdit::Material {
+                                entity: id,
+                                before: before.material.map(|material| material.asset),
+                                after,
+                            });
+                        }
                         "scripts" => edits.push(engine_world::SceneEdit::Scripts {
                             entity: id,
                             before: before.scripts.clone(),
@@ -277,6 +312,22 @@ impl EditorApp {
                         object.primitive = Some(engine_world::Primitive::Cube { size: 1.0 });
                     }
                     _ => return Err("kind must be empty, folder, camera, light or blockout".into()),
+                }
+                if let Some(value) = args.get("effect") {
+                    object.effect = decode(value)?;
+                    if let Some(effect) = &object.effect {
+                        effect.validate()?;
+                    }
+                }
+                if let Some(value) = args.get("effect_group") {
+                    object.effect_group = decode(value)?;
+                    if let Some(group) = &object.effect_group {
+                        group.validate()?;
+                    }
+                }
+                if let Some(value) = args.get("material_asset") {
+                    object.material = checked_material(self.document.project().root(), value)?
+                        .map(|asset| engine_world::Material { asset });
                 }
                 let id = object.id;
                 self.document
@@ -805,6 +856,115 @@ mod tests {
 mod authoring_flow_tests {
     use super::*;
     use engine_project::Project;
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "complete agent transaction, undo/redo and persistence flow"
+    )]
+    fn effect_authoring_tools_validate_and_undo_component_edits() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temp.path().join("effects"),
+            "Effects",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let context = egui::Context::default();
+        let mut app = EditorApp::new(project, &context).unwrap();
+        let object = app
+            .agent_tool(
+                "object_create",
+                &json!({"name":"Sparks","effect":{"kind":{"Particle":{"rate":60}}}}),
+                &context,
+            )
+            .unwrap();
+        let id: EntityId = decode(&object["entity_id"]).unwrap();
+        let original = app.document.world().effect(id).unwrap();
+        assert!(original.is_some());
+        assert!(
+            app.agent_tool(
+                "object_update",
+                &json!({"entity_id":id,"properties":{"effect":{"common":{"duration":0}}}}),
+                &context
+            )
+            .is_err()
+        );
+        assert_eq!(app.document.world().effect(id).unwrap(), original);
+        app.agent_tool(
+            "object_update",
+            &json!({"entity_id":id,"properties":{"effect":null}}),
+            &context,
+        )
+        .unwrap();
+        assert!(app.document.world().effect(id).unwrap().is_none());
+        app.agent_tool("editor_undo", &json!({}), &context).unwrap();
+        assert_eq!(app.document.world().effect(id).unwrap(), original);
+        let material_path = app.document.project().root().join("assets/Shared.material");
+        std::fs::write(
+            &material_path,
+            engine_assets::MaterialAsset::default().to_bytes().unwrap(),
+        )
+        .unwrap();
+        let meta = engine_assets::AssetMeta::new("rustic.material", 1);
+        engine_assets::save_meta(&engine_assets::sidecar_path(&material_path), &meta).unwrap();
+        app.agent_tool(
+            "object_update",
+            &json!({"entity_id":id,"properties":{
+                "effect_group":{"duration":2},"material_asset":meta.asset_id,
+                "part_attributes":{"visibility_layers":4}
+            }}),
+            &context,
+        )
+        .unwrap();
+        let authored = app.document.world().snapshot(id).unwrap();
+        assert!((authored.effect_group.as_ref().unwrap().duration - 2.0).abs() < f32::EPSILON);
+        assert_eq!(authored.material.unwrap().asset, meta.asset_id);
+        assert_eq!(authored.part_attributes.visibility_layers, 4);
+        assert!(
+            app.agent_tool(
+                "object_update",
+                &json!({"entity_id":id,"properties":{
+                    "effect_group":{"duration":0},"material_asset":null
+                }}),
+                &context
+            )
+            .is_err()
+        );
+        assert_eq!(app.document.world().snapshot(id).unwrap(), authored);
+        app.agent_tool("editor_undo", &json!({}), &context).unwrap();
+        assert!(
+            app.document
+                .world()
+                .snapshot(id)
+                .unwrap()
+                .effect_group
+                .is_none()
+        );
+        app.agent_tool("editor_redo", &json!({}), &context).unwrap();
+        app.agent_tool("scene_save", &json!({}), &context).unwrap();
+        let loaded =
+            engine_world::load_scene(&std::fs::read(app.document.scene_path()).unwrap()).unwrap();
+        assert_eq!(
+            loaded
+                .document
+                .entities
+                .iter()
+                .find(|e| e.id == id)
+                .unwrap()
+                .effect,
+            original
+        );
+        let restored = loaded
+            .document
+            .entities
+            .iter()
+            .find(|entity| entity.id == id)
+            .unwrap();
+        assert_eq!(restored.effect_group, authored.effect_group);
+        assert_eq!(restored.material, authored.material);
+        assert_eq!(restored.part_attributes.visibility_layers, 4);
+    }
+
     #[test]
     #[allow(
         clippy::too_many_lines,
@@ -1503,4 +1663,21 @@ mod scene_explorer_tests {
             assert_eq!(app.document.entity_snapshots().unwrap(), before);
         }
     }
+}
+
+fn checked_material(root: &Path, value: &Value) -> Result<Option<engine_core::AssetId>, String> {
+    let asset: Option<engine_core::AssetId> = decode(value)?;
+    if let Some(asset) = asset {
+        let path = crate::materials::find_material(root, asset)
+            .ok_or("material_asset must identify an existing project .material source")?;
+        let length = std::fs::metadata(&path)
+            .map_err(|error| error.to_string())?
+            .len();
+        if length > 4 * 1024 * 1024 {
+            return Err("material source exceeds 4MiB".into());
+        }
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        engine_assets::MaterialAsset::from_bytes(&bytes).map_err(|error| error.to_string())?;
+    }
+    Ok(asset)
 }

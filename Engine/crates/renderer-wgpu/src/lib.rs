@@ -1,11 +1,27 @@
 //! Concrete wgpu backend. No type from the implementation dependency appears in the public API.
 
+mod decals;
+mod depth;
+mod effects;
+mod gpu_particles;
+mod material;
+mod outline;
+mod post;
+mod probe_capture;
+mod reflections;
+mod shadows;
+pub use shadows::ShadowStats;
+#[cfg(test)]
+mod webgl_compat;
+pub use probe_capture::ReflectionProbeReadback;
 mod sky;
+mod sprites;
 mod surface;
 
+#[cfg(not(target_os = "emscripten"))]
+use engine_rhi::SurfaceState;
 use engine_rhi::{
     BindingKind, RendererBackend, ShaderBinding, ShaderReflection, ShaderStage, SurfaceLifecycle,
-    SurfaceState,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -20,6 +36,7 @@ pub const MAX_RENDER_DIMENSION: u32 = 8_192;
 
 // Shared by viewport pipelines and their color/depth attachments.
 const VIEWPORT_SAMPLE_COUNT: u32 = 4;
+pub(crate) const VIEWPORT_COLOR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 const VIEWPORT_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth24PlusStencil8;
 const SELECTION_OUTLINE_WIDTH_PIXELS: f32 = 3.0;
 
@@ -69,6 +86,15 @@ struct Uniforms {
     sun_direction: vec4<f32>,
     haze: vec4<f32>,
     camera: vec4<f32>,
+    effect: vec4<f32>,
+    edge: vec4<f32>,
+    probe_position: array<vec4<f32>,4>,
+    probe_dimensions: array<vec4<f32>,4>,
+    probe_options: array<vec4<f32>,4>,
+    probe_inverse: array<mat4x4<f32>,4>,
+    surface_effect: vec4<f32>,
+    surface_uv: vec4<f32>,
+    effect_direction:vec4<f32>,effect_options:vec4<f32>,effect_color:vec4<f32>,effect_misc:vec4<f32>,wind:vec4<f32>,
 };
 struct Light {
     position_kind: vec4<f32>,
@@ -77,15 +103,23 @@ struct Light {
     cone: vec4<f32>,
 };
 @group(0) @binding(0) var<uniform> uniforms: Uniforms;
-struct Surface { uv: vec4<f32>, strength: vec4<f32>, mask: vec4<u32> };
+struct Surface { uv: vec4<f32>, strength: vec4<f32>, mask: vec4<u32>,base_color:vec4<f32>,emissive_color:vec4<f32>,factors:vec4<f32> };
 @group(1) @binding(0) var maps: texture_2d_array<f32>;
 @group(1) @binding(1) var map_sampler: sampler;
 @group(1) @binding(2) var<uniform> surface: Surface;
+@group(1) @binding(3) var effect_maps:texture_2d_array<f32>;
+@group(2) @binding(0) var probe_map0:texture_2d<f32>;
+@group(2) @binding(1) var probe_map1:texture_2d<f32>;
+@group(2) @binding(2) var probe_map2:texture_2d<f32>;
+@group(2) @binding(3) var probe_map3:texture_2d<f32>;
+@group(2) @binding(4) var probe_sampler:sampler;
+fn environment_probe(index:u32,uv:vec2<f32>,lod:f32)->vec3<f32>{switch index{case 0u:{return textureSampleLevel(probe_map0,probe_sampler,uv,lod).rgb;}case 1u:{return textureSampleLevel(probe_map1,probe_sampler,uv,lod).rgb;}case 2u:{return textureSampleLevel(probe_map2,probe_sampler,uv,lod).rgb;}default:{return textureSampleLevel(probe_map3,probe_sampler,uv,lod).rgb;}}}
 fn has_map(layer: u32) -> bool { return (surface.mask.x & (1u << layer)) != 0u; }
 fn sample_map(layer: u32, uv: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
     if !has_map(layer) { return fallback; }
     return textureSampleLevel(maps, map_sampler, uv, i32(layer), 0.0);
 }
+fn effect_texcoord(animated:vec2<f32>,base:vec2<f32>)->vec2<f32>{let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,base,1,0.).r,uniforms.effect_options.y>0.5);var uv=animated;if uniforms.effect_misc.x<0.5{uv=mix(base,animated,mask);}if uniforms.effect_options.z>0.5{uv+=(textureSampleLevel(effect_maps,map_sampler,uv+vec2<f32>(uniforms.effect_misc.y),2,0.).rg*2.-vec2<f32>(1.))*uniforms.effect_options.w*mask;}return uv;}
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -96,19 +130,28 @@ struct VertexOutput {
     @location(0) normal: vec3<f32>,
     @location(1) world_position: vec3<f32>,
     @location(2) uv: vec2<f32>,
+    @location(3) local_position:vec3<f32>,
 };
 @vertex fn vs_main(input: VertexInput) -> VertexOutput {
     var output: VertexOutput;
-    output.uv = input.uv * surface.uv.xy + surface.uv.zw;
-    var position = input.position;
+    let sine=sin(uniforms.surface_effect.x);let cosine=cos(uniforms.surface_effect.x);
+    let uv=input.uv-vec2<f32>(0.5);
+    output.uv = vec2<f32>(uv.x*cosine-uv.y*sine,uv.x*sine+uv.y*cosine)+vec2<f32>(0.5);
+    output.uv = (output.uv * surface.uv.xy + surface.uv.zw) * uniforms.surface_uv.xy + uniforms.surface_uv.zw;
+    let base_uv=input.uv*surface.uv.xy+surface.uv.zw;output.local_position=vec3<f32>(base_uv,0.);let geometry_uv=effect_texcoord(output.uv,base_uv);
+    var position = input.position+uniforms.wind.xyz*input.position.y*input.position.y;
     if uniforms.lighting.y < 0.5 && has_map(5u) {
-        position += input.normal * (sample_map(5u, output.uv, vec4<f32>(0.5)).r - 0.5) * surface.strength.x;
+        position += input.normal * (sample_map(5u, geometry_uv, vec4<f32>(0.5)).r - 0.5) * surface.strength.x;
     }
     output.position = uniforms.model_view_projection * vec4<f32>(position, 1.0);
     output.normal = normalize((uniforms.normal_matrix * vec4<f32>(input.normal, 0.0)).xyz);
     output.world_position = (uniforms.model * vec4<f32>(position, 1.0)).xyz;
     return output;
 }
+fn srgb_to_linear(color:vec3<f32>)->vec3<f32>{return select(pow((color+vec3<f32>(0.055))/1.055,vec3<f32>(2.4)),color/12.92,color<=vec3<f32>(0.04045));}
+fn display_radiance(color:vec3<f32>)->vec3<f32>{let linear=srgb_to_linear(clamp(color,vec3<f32>(0.),vec3<f32>(0.999)));return linear/max(vec3<f32>(1.)-linear,vec3<f32>(0.00001));}
+fn roughness(uv:vec2<f32>)->f32 {return clamp(sample_map(2u,uv,vec4<f32>(1.)).r*surface.strength.z,0.04,1.);}
+fn metalness(uv:vec2<f32>)->f32 {return clamp(sample_map(3u,uv,vec4<f32>(1.)).r*surface.strength.w,0.,1.);}
 fn linear_to_srgb(color: vec3<f32>) -> vec3<f32> {
     return select(1.055 * pow(color, vec3<f32>(1.0 / 2.4)) - vec3<f32>(0.055), color * 12.92, color <= vec3<f32>(0.0031308));
 }
@@ -120,7 +163,8 @@ fn mapped_normal(uv: vec2<f32>, normal: vec3<f32>, position: vec3<f32>, layer: u
     let tangent = (p1 * t2.y - p2 * t1.y) * sign(determinant);
     let bitangent = (-p1 * t2.x + p2 * t1.x) * sign(determinant);
     let scale = max(max(dot(tangent, tangent), dot(bitangent, bitangent)), 0.000001);
-    let detail = sample_map(layer, uv, vec4<f32>(0.5, 0.5, 1.0, 1.0)).xyz * 2.0 - 1.0;
+    var detail = sample_map(layer, uv, vec4<f32>(0.5, 0.5, 1.0, 1.0)).xyz * 2.0 - 1.0;
+    detail=vec3<f32>(detail.xy*surface.factors.y,detail.z);
     return normalize(tangent * inverseSqrt(scale) * detail.x + bitangent * inverseSqrt(scale) * detail.y + normal * detail.z);
 }
 fn fresnel(f0: vec3<f32>, cosine: f32) -> vec3<f32> {
@@ -129,8 +173,8 @@ fn fresnel(f0: vec3<f32>, cosine: f32) -> vec3<f32> {
 fn brdf(n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, uv: vec2<f32>, base: vec3<f32>) -> vec3<f32> {
     let h = normalize(v + l + vec3<f32>(0.000001));
     let nv = max(dot(n, v), 0.001); let nl = max(dot(n, l), 0.0); let nh = max(dot(n, h), 0.0);
-    let rough = clamp(sample_map(2u, uv, vec4<f32>(0.5)).r, 0.04, 1.0);
-    let metallic = clamp(sample_map(3u, uv, vec4<f32>(0.0)).r, 0.0, 1.0);
+    let rough = select(roughness(uv),uniforms.edge.z,uniforms.effect.z>0.5);
+    let metallic = select(metalness(uv),uniforms.edge.w,uniforms.effect.z>0.5);
     let specular = max(sample_map(14u, uv, vec4<f32>(1.0)).r, 0.0);
     let spec_color = sample_map(15u, uv, vec4<f32>(1.0)).rgb;
     let f = fresnel(mix(0.04 * specular * spec_color, base, metallic), max(dot(h, v), 0.0));
@@ -165,19 +209,27 @@ fn brdf(n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, uv: vec2<f3
     result += coat * coat_f * coat_a2 / max(3.14159265*coat_d*coat_d*4.0*nv,0.001) * max(dot(coat_n,l),0.0);
     return result;
 }
-@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
+fn dissolve_order(input:VertexOutput)->f32{var order=fract(sin(dot(floor(input.world_position*max(uniforms.surface_effect.y,1.)),vec3<f32>(12.9898,78.233,37.719)))*43758.5453);if uniforms.effect_options.x>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.uv*uniforms.surface_effect.y,0,0.).r;}if dot(uniforms.effect_direction.xyz,uniforms.effect_direction.xyz)>0.{order=clamp(dot(input.world_position,uniforms.effect_direction.xyz)+uniforms.effect_direction.w,0.,1.);}if uniforms.effect_options.y>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r;}return order;}
+fn surface_discard(input:VertexOutput){if uniforms.effect_misc.x>0.5&&uniforms.effect.x>0.&&dissolve_order(input)<uniforms.effect.x{discard;}let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r,uniforms.effect_options.y>0.5);let alpha=uniforms.color.a*surface.base_color.a*sample_map(0u,input.uv,vec4<f32>(1.)).a*mix(1.,uniforms.effect_color.a,mask);if alpha<=0.001||(surface.factors.w>=0.&&alpha<surface.factors.w){discard;}}
+@fragment fn fs_shadow_encodedDepth(raw:VertexOutput)->@location(0) vec4<f32>{var input=raw;input.uv=effect_texcoord(raw.uv,raw.local_position.xy);surface_discard(input);let encoded=u32(clamp(input.position.z,0.,1.)*16777215.);return vec4<f32>(f32(encoded&255u),f32((encoded>>8u)&255u),f32((encoded>>16u)&255u),255.)/255.;}
+@fragment fn fs_main(raw: VertexOutput) -> @location(0) vec4<f32> {
+    var input=raw;input.uv=effect_texcoord(raw.uv,raw.local_position.xy);surface_discard(input);let dissolve_noise=dissolve_order(input);
     let geometric = normalize(input.normal);
     let n = mapped_normal(input.uv, geometric, input.world_position, 1u);
     let coat_n = mapped_normal(input.uv, geometric, input.world_position, 9u);
-    if uniforms.lighting.y > 0.5 { return uniforms.color; }
-    let color = uniforms.color * sample_map(0u, input.uv, vec4<f32>(1.0));
+    if uniforms.lighting.y > 0.5 { return vec4<f32>(display_radiance(uniforms.color.rgb),uniforms.color.a); }
+    // Authored material factors are linear (including glTF baseColorFactor).
+    // Color textures are decoded on upload; do not decode either factor twice.
+    var color = uniforms.color * surface.base_color * sample_map(0u, input.uv, vec4<f32>(1.0));
+    let influence=select(1.,textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r,uniforms.effect_options.y>0.5);color*=mix(vec4<f32>(1.),uniforms.effect_color,influence);
+    if uniforms.effect.z > 0.5 {let edge=min(min(input.uv.x,1.-input.uv.x),min(input.uv.y,1.-input.uv.y));color.a*=smoothstep(0.,max(uniforms.effect.y,0.001),edge);color.a*=smoothstep(uniforms.effect_misc.y,min(1.,uniforms.effect_misc.y+0.1),dot(geometric,normalize(uniforms.effect_direction.xyz+vec3<f32>(0.000001))));}
     let v = normalize(uniforms.camera.xyz-input.world_position+vec3<f32>(0.000001));
-    let ao = clamp(sample_map(4u,input.uv,vec4<f32>(1.0)).r,0.0,1.0);
+    let ao = mix(1.,clamp(sample_map(4u,input.uv,vec4<f32>(1.0)).r,0.0,1.0),surface.factors.x);
     var radiance = color.rgb * uniforms.ambient.rgb * uniforms.ambient.w * ao;
-    let pbr = surface.mask.x != 0u;
+    let pbr = surface.mask.x != 0u || surface.factors.z>0.5 || uniforms.effect.z>0.5;
     var sun_response = color.rgb * max(dot(n,uniforms.sun_direction.xyz),0.0);
     if pbr { sun_response = brdf(n,coat_n,v,uniforms.sun_direction.xyz,input.uv,color.rgb); }
-    radiance += uniforms.sun.rgb * uniforms.sun.w * sun_response;
+    radiance += uniforms.sun.rgb * uniforms.sun.w * sun_response * select(1.,sample_shadow(32u,input.world_position,dot(n,uniforms.sun_direction.xyz)),uniforms.lighting.z>0.5);
     for (var i = 0u; i < u32(uniforms.lighting.x); i += 1u) {
         let light = uniforms.lights[i];
         var direction = -light.direction_range.xyz;
@@ -195,14 +247,66 @@ fn brdf(n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, uv: vec2<f3
         }
         var response = color.rgb * max(dot(n,direction),0.0);
         if pbr { response = brdf(n,coat_n,v,direction,input.uv,color.rgb); }
-        radiance += light.color_intensity.rgb*light.color_intensity.w*attenuation*response;
+        radiance += light.color_intensity.rgb*light.color_intensity.w*attenuation*response*select(1.,sample_shadow(i,input.world_position,dot(n,direction)),uniforms.lighting.z>0.5);
     }
-    radiance += sample_map(6u,input.uv,vec4<f32>(0.0)).rgb*surface.strength.y;
+    radiance += sample_map(6u,input.uv,vec4<f32>(select(0.,1.,surface.factors.z>0.5))).rgb*surface.emissive_color.rgb*surface.strength.y;
+    radiance += color.rgb * uniforms.effect.w * influence;
+    if uniforms.effect.x > 0.0 && dissolve_noise < uniforms.effect.x + uniforms.effect.y { radiance += uniforms.edge.rgb * uniforms.edge.w; }
+    for(var index=0u;index<4u;index+=1u){
+        let probe=uniforms.probe_position[index];if probe.w<=0. {continue;}
+        let reflected=reflect(-v,n);var direction=reflected;
+        if uniforms.probe_options[index].x>0.5 {
+            let half=max(uniforms.probe_dimensions[index].xyz*0.5,vec3<f32>(0.001));
+            let origin=(uniforms.probe_inverse[index]*vec4<f32>(input.world_position,1.)).xyz;
+            let ray=(uniforms.probe_inverse[index]*vec4<f32>(reflected,0.)).xyz;
+            let safe=select(vec3<f32>(0.00001),ray,abs(ray)>vec3<f32>(0.00001));
+            let box=max((half-origin)/safe,(-half-origin)/safe);var distance=min(min(box.x,box.y),box.z);
+            let shape=uniforms.probe_options[index].y;
+            if shape>0.5 && shape<1.5 {let o=origin/half;let d=ray/half;let a=dot(d,d);let b=dot(o,d);let c=dot(o,o)-1.;distance=(-b+sqrt(max(b*b-a*c,0.)))/max(a,0.00001);}
+            if shape>1.5 && shape<2.5 {let o=origin/half;let d=ray/half;let a=dot(d.xz,d.xz);let b=dot(o.xz,d.xz);let c=dot(o.xz,o.xz)-1.;let cylinder=(-b+sqrt(max(b*b-a*c,0.)))/max(a,0.00001);distance=min(cylinder,box.y);}
+            direction=normalize(input.world_position+reflected*max(distance,0.)-probe.xyz);
+        }
+        let uv=vec2<f32>(atan2(direction.z,direction.x)/6.2831853+0.5,acos(clamp(direction.y,-1.,1.))/3.14159265);
+        let reflection=environment_probe(index,uv,roughness(input.uv)*max(uniforms.probe_dimensions[index].w-1.,0.));
+        radiance+=reflection*fresnel(mix(vec3<f32>(0.04),color.rgb,metalness(input.uv)),max(dot(n,v),0.))*probe.w;
+    }
     let distance = max(length(input.world_position-uniforms.camera.xyz)-uniforms.camera.w,0.0);
     let haze = 1.0-exp(-uniforms.haze.w*distance);
-    let mapped = radiance/(vec3<f32>(1.0)+radiance);
-    return vec4<f32>(linear_to_srgb(mix(mapped,uniforms.haze.rgb,haze)),color.a);
+    let fog_color=uniforms.haze.rgb/max(vec3<f32>(1.)-min(uniforms.haze.rgb,vec3<f32>(0.999)),vec3<f32>(0.00001));
+    return vec4<f32>(mix(radiance,fog_color,haze),color.a);
 }
+struct ShadowData {
+    matrices: array<mat4x4<f32>,8>,
+    parameters: array<vec4<f32>,8>,
+    count_size: vec4<f32>,
+};
+@group(3) @binding(0) var shadow_depth: texture_2d_array<f32>;
+@group(3) @binding(1) var<uniform> shadow_data: ShadowData;
+fn sample_shadow(light_index:u32,position:vec3<f32>,normal_light:f32)->f32 {
+    var visibility=1.;
+    let size=i32(shadow_data.count_size.y);
+    for(var face=0u;face<u32(shadow_data.count_size.x);face+=1u){
+        let settings=shadow_data.parameters[face];
+        if u32(settings.x)!=light_index {continue;}
+        let clip=shadow_data.matrices[face]*vec4<f32>(position,1.);
+        if clip.w<=0. {continue;}
+        let projected=clip.xyz/clip.w;
+        let uv=vec2<f32>(projected.x*0.5+0.5,0.5-projected.y*0.5);
+        if projected.z<0.||projected.z>1.||any(uv<vec2<f32>(0.))||any(uv>vec2<f32>(1.)){continue;}
+        let pixel=vec2<i32>(uv*f32(size));
+        let bias=settings.z*(1.+2.*(1.-clamp(normal_light,0.,1.)));
+        var lit=0.;
+        for(var y=-1;y<=1;y+=1){for(var x=-1;x<=1;x+=1){
+            let point=clamp(pixel+vec2<i32>(x,y),vec2<i32>(0),vec2<i32>(size-1));
+            let encoded=textureLoad(shadow_depth,point,i32(face),0).rgb;
+            let depth=dot(encoded,vec3<f32>(255.,65280.,16711680.))/16777215.;
+            lit+=select(0.,1.,projected.z-bias<=depth);
+        }}
+        visibility=min(visibility,lit/9.);
+    }
+    return visibility;
+}
+
 ";
 
 /// A backend request. `Auto` tries platform-preferred candidates in explicit order.
@@ -391,6 +495,52 @@ pub struct ViewportScene {
     pub clear_color: [f32; 4],
 }
 
+pub use engine_world::effects::PostProcessSettings;
+fn post_values(settings: PostProcessSettings) -> [f32; 40] {
+    [
+        settings.saturation,
+        settings.contrast,
+        settings.brightness,
+        settings.exposure,
+        settings.vignette,
+        settings.chromatic_aberration,
+        settings.film_grain,
+        settings.time,
+        settings.distortion,
+        settings.distortion_scale,
+        settings.distortion_speed,
+        0.,
+        settings.bloom,
+        settings.bloom_threshold,
+        settings.bloom_radius,
+        0.,
+        settings.tint[0],
+        settings.tint[1],
+        settings.tint[2],
+        1.,
+        settings.overlay[0],
+        settings.overlay[1],
+        settings.overlay[2],
+        settings.overlay[3],
+        settings.overlay_multiply[0],
+        settings.overlay_multiply[1],
+        settings.overlay_multiply[2],
+        1.,
+        settings.overlay_add[0],
+        settings.overlay_add[1],
+        settings.overlay_add[2],
+        settings.depth_of_field,
+        settings.motion_blur,
+        f32::from(u16::try_from(settings.motion_blur_samples).unwrap_or(u16::MAX)),
+        settings.focus_distance,
+        settings.focus_range,
+        settings.temporal_weight,
+        0.,
+        0.,
+        0.,
+    ]
+}
+
 /// Observable resource lifecycle counters used by diagnostics and tests.
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
 pub struct ViewportResourceStats {
@@ -560,6 +710,7 @@ pub enum RendererError {
 }
 
 struct BackendContext {
+    gpu_particles_capable: bool,
     device: wgpu::Device,
     queue: wgpu::Queue,
     diagnostics: AdapterDiagnostics,
@@ -677,6 +828,9 @@ impl SurfaceRenderer {
                     vendor: info.vendor,
                     device: info.device,
                 },
+                adapter.get_downlevel_capabilities().flags.contains(
+                    wgpu::DownlevelFlags::COMPUTE_SHADERS | wgpu::DownlevelFlags::VERTEX_STORAGE,
+                ),
             );
             let mut renderer = Self {
                 window,
@@ -849,7 +1003,12 @@ impl SurfaceRenderer {
 }
 
 impl BackendContext {
-    fn new(device: wgpu::Device, queue: wgpu::Queue, diagnostics: AdapterDiagnostics) -> Self {
+    fn new(
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        diagnostics: AdapterDiagnostics,
+        gpu_particles_capable: bool,
+    ) -> Self {
         let device_loss = Arc::new(Mutex::new(None));
         let callback_state = Arc::clone(&device_loss);
         device.set_device_lost_callback(move |reason, message| {
@@ -858,6 +1017,7 @@ impl BackendContext {
             }
         });
         Self {
+            gpu_particles_capable,
             device,
             queue,
             diagnostics,
@@ -906,6 +1066,9 @@ impl BackendContext {
                     vendor: info.vendor,
                     device: info.device,
                 },
+                adapter.get_downlevel_capabilities().flags.contains(
+                    wgpu::DownlevelFlags::COMPUTE_SHADERS | wgpu::DownlevelFlags::VERTEX_STORAGE,
+                ),
             ));
         }
         Err(RendererError::InitializationFailed { attempts })
@@ -1056,12 +1219,23 @@ struct PendingViewportReadback {
 /// Device, queue, pipelines, bind groups, mesh buffers, and size-dependent targets are retained;
 /// no backend type crosses this crate's public API.
 pub struct SceneViewportRenderer {
+    effects: effects::EffectsRenderer,
+    gpu_particles: Option<gpu_particles::GpuParticles>,
+    materials: material::MaterialCache,
+    through_outlines: outline::ThroughWallOutlines,
+    effect_frame: engine_world::effects::EffectFrame,
+    post: post::PostRenderer,
+    depth_capture: depth::DepthCapture,
+    post_settings: PostProcessSettings,
     sky: sky::SkyRenderer,
+    reflections: reflections::ReflectionCache,
     surfaces: surface::SurfaceCache,
     environment_root: std::path::PathBuf,
+    effect_asset_paths: HashMap<engine_world::AssetId, String>,
     request: BackendRequest,
     context: BackendContext,
     bind_layout: wgpu::BindGroupLayout,
+    shadows: shadows::Shadows,
     solid_pipeline: wgpu::RenderPipeline,
     outline_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
@@ -1085,10 +1259,26 @@ impl SceneViewportRenderer {
         let context = pollster::block_on(BackendContext::initialize(request))?;
         let bind_layout = viewport_bind_layout(&context.device);
         let surfaces = surface::SurfaceCache::new(&context.device);
+        let reflections = reflections::ReflectionCache::new(&context.device);
+        debug_assert!(VIEWPORT_SHADER.contains(shadows::SHADOW_WGSL));
+        let shadow_shader = context
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("shared-shadow-surface-shader"),
+                source: wgpu::ShaderSource::Wgsl(VIEWPORT_SHADER.into()),
+            });
+        let shadows = shadows::Shadows::new(
+            &context.device,
+            &shadow_shader,
+            &bind_layout,
+            &surfaces.layout,
+        );
         let solid_pipeline = viewport_pipeline(
             &context.device,
             &bind_layout,
             &surfaces.layout,
+            &reflections.layout,
+            &shadows.layout,
             ViewportPass::Solid,
             "rustic-viewport-solid-pipeline",
         );
@@ -1096,6 +1286,8 @@ impl SceneViewportRenderer {
             &context.device,
             &bind_layout,
             &surfaces.layout,
+            &reflections.layout,
+            &shadows.layout,
             ViewportPass::Outline,
             "rustic-viewport-outline-pipeline",
         );
@@ -1103,17 +1295,39 @@ impl SceneViewportRenderer {
             &context.device,
             &bind_layout,
             &surfaces.layout,
+            &reflections.layout,
+            &shadows.layout,
             ViewportPass::Lines,
             "rustic-viewport-grid-pipeline",
         );
         let sky = sky::SkyRenderer::new(&context.device)?;
+        let post = post::PostRenderer::new(&context.device)?;
+        let depth_capture = depth::DepthCapture::new(&context.device, &surfaces.layout)?;
+        let through_outlines = outline::ThroughWallOutlines::new(&context.device, &bind_layout);
+        let effects = effects::EffectsRenderer::new(&context.device)?;
+        let gpu_particles = if context.gpu_particles_capable {
+            gpu_particles::GpuParticles::new(&context.device)?
+        } else {
+            None
+        };
         Ok(Self {
             sky,
+            reflections,
+            post,
+            depth_capture,
+            effects,
+            gpu_particles,
+            materials: material::MaterialCache::default(),
+            through_outlines,
+            effect_frame: engine_world::effects::EffectFrame::default(),
+            post_settings: PostProcessSettings::default(),
             surfaces,
             environment_root: std::path::PathBuf::new(),
+            effect_asset_paths: HashMap::new(),
             request,
             context,
             bind_layout,
+            shadows,
             solid_pipeline,
             outline_pipeline,
             line_pipeline,
@@ -1134,9 +1348,105 @@ impl SceneViewportRenderer {
     /// Resolves scene sky image paths against a project or immutable play snapshot.
     pub fn set_environment_root(&mut self, root: impl Into<std::path::PathBuf>) {
         self.environment_root = root.into();
+        self.effect_asset_paths.clear();
+        if let Ok(report) = engine_assets::scan_sidecars(&self.environment_root.join("assets")) {
+            for asset in report.entries {
+                self.effect_asset_paths.insert(
+                    asset.meta.asset_id,
+                    format!(
+                        "assets/{}",
+                        asset.source_relative.to_string_lossy().replace('\\', "/")
+                    ),
+                );
+            }
+        }
         self.surfaces.clear();
+        self.reflections.clear();
+        self.effects.clear_textures();
+        self.materials.clear();
+        self.post.clear();
+        self.depth_capture.reset();
+        if let Some(gpu) = &mut self.gpu_particles {
+            gpu.clear();
+        }
     }
 
+    /// Installs the immutable simulation extraction consumed by the next render.
+    /// # Errors
+    /// Rejects non-finite camera post-processing inputs.
+    pub fn set_effect_frame(
+        &mut self,
+        frame: &engine_world::effects::EffectFrame,
+    ) -> Result<(), RendererError> {
+        let missing = frame
+            .particles
+            .iter()
+            .filter_map(|p| p.texture)
+            .chain(frame.geometry.iter().filter_map(|g| g.texture))
+            .chain(frame.fog.iter().filter_map(|f| f.noise_texture))
+            .chain(frame.distortions.iter().filter_map(|f| f.noise_texture))
+            .chain(frame.flares.iter().filter_map(|f| f.texture))
+            .chain(frame.overlays.iter().filter_map(|f| f.screen_mask))
+            .chain(frame.surfaces.iter().flat_map(|f| {
+                [f.noise_texture, f.mask_texture, f.distortion_texture]
+                    .into_iter()
+                    .flatten()
+            }))
+            .any(|id| !self.effect_asset_paths.contains_key(&id));
+        if missing
+            && let Ok(report) = engine_assets::scan_sidecars(&self.environment_root.join("assets"))
+        {
+            for entry in report.entries {
+                self.effect_asset_paths.insert(
+                    entry.meta.asset_id,
+                    format!(
+                        "assets/{}",
+                        entry.source_relative.to_string_lossy().replace('\\', "/")
+                    ),
+                );
+            }
+        }
+        self.set_post_process(frame.post)?;
+        self.effect_frame = frame.clone();
+        Ok(())
+    }
+
+    /// Applies validated camera adjustments on subsequent frames. Bloom and
+    /// exposure process linear HDR radiance before the final display tone map.
+    /// # Errors
+    /// Rejects non-finite post-processing inputs before uploading uniforms.
+    pub fn set_post_process(&mut self, settings: PostProcessSettings) -> Result<(), RendererError> {
+        if post_values(settings).iter().any(|v| !v.is_finite()) {
+            return Err(RendererError::InvalidMesh(
+                "post-process settings must be finite".into(),
+            ));
+        }
+        self.post_settings = settings;
+        self.effect_frame.post = settings;
+        Ok(())
+    }
+
+    /// Reports retained shadow maps, caster draws and lights omitted by the bounded atlas.
+    pub fn shadow_stats(&self) -> ShadowStats {
+        self.shadows.stats()
+    }
+
+    /// Reports whether this renderer owns a qualified compute/vertex-storage particle path.
+    pub fn gpu_particles_supported(&self) -> bool {
+        self.gpu_particles.is_some()
+    }
+    /// Identifies GPU state so scene runtimes can resend commands after device recovery.
+    pub fn gpu_particle_context(&self) -> Option<u64> {
+        self.gpu_particles
+            .as_ref()
+            .map(gpu_particles::GpuParticles::context_id)
+    }
+    /// Returns commands encoded by successful particle compute submissions.
+    pub fn take_gpu_particle_acknowledgements(&mut self) -> Vec<(engine_world::EntityId, u64)> {
+        self.gpu_particles
+            .as_mut()
+            .map_or_else(Vec::new, gpu_particles::GpuParticles::take_acknowledgements)
+    }
     pub const fn stats(&self) -> ViewportResourceStats {
         self.stats
     }
@@ -1181,8 +1491,12 @@ impl SceneViewportRenderer {
         if self.context.take_device_loss().is_some() {
             let previous = self.stats;
             let root = self.environment_root.clone();
+            let post_settings = self.post_settings;
+            let effect_frame = self.effect_frame.clone();
             *self = Self::new(self.request)?;
-            self.environment_root = root;
+            self.post_settings = post_settings;
+            self.effect_frame = effect_frame;
+            self.set_environment_root(root);
             self.stats.device_generations = previous.device_generations.saturating_add(1);
             self.stats.pipeline_generations = previous.pipeline_generations.saturating_add(1);
         }
@@ -1225,13 +1539,163 @@ impl SceneViewportRenderer {
             self.pending_readback = None;
             return Ok(Some(self.completed_frame(width, height, rgba8)));
         }
+        let mut resolved_scene = scene.clone();
+        resolve_effect_textures(
+            &mut resolved_scene,
+            &self.effect_frame,
+            &self.effect_asset_paths,
+        );
+        self.materials.resolve(
+            &mut resolved_scene,
+            &self.effect_frame,
+            &self.environment_root,
+            &self.effect_asset_paths,
+        )?;
+        let scene = &resolved_scene;
         self.surfaces.prepare(
             &self.context.device,
             &self.context.queue,
             &self.environment_root,
             scene,
         )?;
+        self.reflections.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &self.environment_root,
+            &self.effect_frame,
+            &self.effect_asset_paths,
+        )?;
+        if let Some(gpu) = &mut self.gpu_particles {
+            let mut gpu_encoder =
+                self.context
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("particle-compute-before-capture"),
+                    });
+            gpu.prepare(
+                &self.context.device,
+                &self.context.queue,
+                &mut gpu_encoder,
+                &self.effect_frame.gpu_emitters,
+                glam::Mat4::from_cols_array(&scene.view_projection),
+                glam::Vec3::from_array(scene.camera_position),
+            )?;
+            self.context.queue.submit([gpu_encoder.finish()]);
+            gpu.commit_submission();
+        }
+        self.prepare_shadows(scene)?;
+        self.update_reflection_captures(scene)?;
+        let mut visible_scene = scene.clone();
+        let camera_layers = self
+            .effect_frame
+            .camera_visibility_layers
+            .unwrap_or(u32::MAX);
+        visible_scene.meshes.retain(|mesh| {
+            mesh.textures.visibility_layers & camera_layers != 0
+                && mesh.textures.effect_source.is_none_or(|source| {
+                    effect_in_view(
+                        &self.effect_frame,
+                        source,
+                        glam::Vec3::from_array(scene.camera_position),
+                    )
+                })
+        });
+        decals::apply_view_fade(
+            &mut visible_scene,
+            &self.effect_frame,
+            glam::Vec3::from_array(scene.camera_position),
+        );
+        let scene = &visible_scene;
+        self.sky.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &self.environment_root,
+            scene,
+        )?;
+        self.depth_capture.prepare(
+            &self.context.device,
+            &self.context.queue,
+            width,
+            height,
+            scene,
+            &self.effect_frame,
+        );
+        if let Some(depth) = self.depth_capture.view() {
+            self.effects.set_depth(&self.context.device, depth);
+        }
+        let mut transparent_frame = self.effect_frame.clone();
+        transparent_frame
+            .particles
+            .extend(self.materials.boundary_particles(
+                scene,
+                &self.effect_frame,
+                &self.environment_root,
+            )?);
+        transparent_frame.particles.retain(|p| {
+            effect_in_view(
+                &self.effect_frame,
+                p.entity,
+                glam::Vec3::from_array(scene.camera_position),
+            ) && {
+                self.effect_frame
+                    .effect_layers
+                    .get(&p.entity)
+                    .copied()
+                    .unwrap_or(u32::MAX)
+                    & camera_layers
+                    != 0
+            }
+        });
+        transparent_frame.geometry.retain(|g| {
+            effect_in_view(
+                &self.effect_frame,
+                g.entity,
+                glam::Vec3::from_array(scene.camera_position),
+            ) && {
+                self.effect_frame
+                    .effect_layers
+                    .get(&g.entity)
+                    .copied()
+                    .unwrap_or(u32::MAX)
+                    & camera_layers
+                    != 0
+            }
+        });
+        self.effects.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &transparent_frame,
+            scene.view_projection,
+            scene.camera_position,
+            &self.environment_root,
+            &self.effect_asset_paths,
+        )?;
         self.ensure_targets(width, height);
+        self.through_outlines.prepare(
+            &self.context.device,
+            &self.context.queue,
+            width,
+            height,
+            &self.effect_frame,
+        );
+        if let (Some(targets), Some(depth_view), Some(motion)) = (
+            &self.targets,
+            self.depth_capture.view(),
+            self.depth_capture.motion_view(),
+        ) {
+            self.post.prepare(
+                &self.context.device,
+                &self.context.queue,
+                &targets.color_view,
+                depth_view,
+                motion,
+                width,
+                height,
+                &self.effect_frame,
+                &self.environment_root,
+                &self.effect_asset_paths,
+            )?;
+        }
         self.ensure_grid(&scene.grid_vertices)?;
         for guide in &scene.guides {
             self.ensure_guide(guide)?;
@@ -1248,8 +1712,37 @@ impl SceneViewportRenderer {
                 self.ensure_instance(outline_key);
                 self.write_instance(
                     outline_key,
-                    selection_outline_model(mesh, scene.view_projection, width, height),
-                    [1.0, 0.48, 0.04, 1.0],
+                    self.effect_frame
+                        .outlines
+                        .iter()
+                        .find(|outline| {
+                            outline
+                                .targets
+                                .iter()
+                                .any(|id| effect_entity_matches(*id, mesh.instance_key))
+                        })
+                        .map_or_else(
+                            || selection_outline_model(mesh, scene.view_projection, width, height),
+                            |outline| {
+                                selection_outline_model_with_width(
+                                    mesh,
+                                    scene.view_projection,
+                                    width,
+                                    height,
+                                    outline.thickness,
+                                )
+                            },
+                        ),
+                    self.effect_frame
+                        .outlines
+                        .iter()
+                        .find(|outline| {
+                            outline
+                                .targets
+                                .iter()
+                                .any(|id| effect_entity_matches(*id, mesh.instance_key))
+                        })
+                        .map_or([1.0, 0.48, 0.04, 1.0], |o| o.color),
                     true,
                     scene,
                 );
@@ -1263,6 +1756,23 @@ impl SceneViewportRenderer {
             scene,
         );
 
+        let active_meshes: std::collections::HashSet<_> = scene
+            .meshes
+            .iter()
+            .map(|m| m.mesh_key)
+            .chain(scene.guides.iter().map(|g| g.key))
+            .collect();
+        self.meshes.retain(|key, _| active_meshes.contains(key));
+        let active_instances: std::collections::HashSet<_> = scene
+            .meshes
+            .iter()
+            .flat_map(|m| [m.instance_key, m.instance_key ^ (1_u64 << 63)])
+            .chain(scene.guides.iter().map(|g| g.key))
+            .chain([u64::MAX])
+            .collect();
+        self.instances
+            .retain(|key, _| active_instances.contains(key));
+
         let targets = self.targets.as_ref().ok_or_else(|| {
             RendererError::Gpu("non-zero viewport target was not created".to_owned())
         })?;
@@ -1272,6 +1782,9 @@ impl SceneViewportRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("rustic-viewport-command-encoder"),
                 });
+
+        self.depth_capture
+            .encode(&mut encoder, scene, &self.meshes, &self.surfaces);
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rustic-viewport-main-pass"),
@@ -1280,9 +1793,9 @@ impl SceneViewportRenderer {
                     resolve_target: Some(&targets.color_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: f64::from(scene.clear_color[0]),
-                            g: f64::from(scene.clear_color[1]),
-                            b: f64::from(scene.clear_color[2]),
+                            r: f64::from(display_channel_radiance(scene.clear_color[0])),
+                            g: f64::from(display_channel_radiance(scene.clear_color[1])),
+                            b: f64::from(display_channel_radiance(scene.clear_color[2])),
                             a: f64::from(scene.clear_color[3]),
                         }),
                         store: wgpu::StoreOp::Discard,
@@ -1309,6 +1822,7 @@ impl SceneViewportRenderer {
                 self.sky.draw(&mut pass);
             }
             pass.set_bind_group(1, self.surfaces.default_group(), &[]);
+            pass.set_bind_group(2, self.reflections.get(None), &[]);
             if let Some(grid) = &self.grid {
                 let key = u64::MAX;
                 if let Some(instance) = self.instances.get(&key) {
@@ -1323,6 +1837,7 @@ impl SceneViewportRenderer {
             // Record visible surfaces before drawing shells. Depth alone cannot
             // stop an expanded shell from covering concave or disconnected parts
             // of its own mesh; the stencil excludes visible selected surfaces.
+            pass.set_bind_group(3, &self.shadows.bind, &[]);
             for selected_pass in [false, true] {
                 pass.set_pipeline(if selected_pass {
                     &self.outline_pipeline
@@ -1330,7 +1845,15 @@ impl SceneViewportRenderer {
                     &self.solid_pipeline
                 });
                 for mesh in &scene.meshes {
-                    if selected_pass && !mesh.selected {
+                    if selected_pass
+                        && (!mesh.selected
+                            || self.effect_frame.outlines.iter().any(|o| {
+                                o.through_walls
+                                    && o.targets
+                                        .iter()
+                                        .any(|id| effect_entity_matches(*id, mesh.instance_key))
+                            }))
+                    {
                         continue;
                     }
                     pass.set_stencil_reference(if selected_pass {
@@ -1351,6 +1874,7 @@ impl SceneViewportRenderer {
                     };
                     pass.set_bind_group(0, &instance.bind_group, &[]);
                     pass.set_bind_group(1, self.surfaces.group(&mesh.textures), &[]);
+                    pass.set_bind_group(2, self.reflections.get_for_mesh(mesh.instance_key), &[]);
                     pass.set_vertex_buffer(0, gpu_mesh.vertices.slice(..));
                     pass.set_index_buffer(gpu_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
@@ -1359,6 +1883,7 @@ impl SceneViewportRenderer {
 
             pass.set_pipeline(&self.line_pipeline);
             pass.set_bind_group(1, self.surfaces.default_group(), &[]);
+            pass.set_bind_group(2, self.reflections.get(None), &[]);
             for guide in &scene.guides {
                 let (Some(gpu_mesh), Some(instance)) =
                     (self.meshes.get(&guide.key), self.instances.get(&guide.key))
@@ -1370,9 +1895,30 @@ impl SceneViewportRenderer {
                 pass.set_index_buffer(gpu_mesh.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gpu_mesh.index_count, 0, 0..1);
             }
+            self.effects.draw(&mut pass);
+            if let Some(gpu) = &self.gpu_particles {
+                gpu.render_layers(
+                    &mut pass,
+                    self.effect_frame
+                        .camera_visibility_layers
+                        .unwrap_or(u32::MAX),
+                );
+            }
         }
+        self.through_outlines.encode(
+            &mut encoder,
+            scene,
+            &self.effect_frame,
+            &self.meshes,
+            &self.instances,
+            &targets.color_view,
+        );
+        let output = self
+            .post
+            .render(&self.context.queue, &mut encoder, scene, &self.effect_frame)
+            .ok_or_else(|| RendererError::Gpu("HDR post targets missing".into()))?;
         encoder.copy_texture_to_buffer(
-            targets.color.as_image_copy(),
+            output.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &targets.readback,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -1441,8 +1987,10 @@ impl SceneViewportRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            format: VIEWPORT_COLOR_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         // Resolve into the single-sample color texture used by CPU readback.
@@ -1452,7 +2000,7 @@ impl SceneViewportRenderer {
             mip_level_count: 1,
             sample_count: VIEWPORT_SAMPLE_COUNT,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: VIEWPORT_COLOR_FORMAT,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
@@ -1627,11 +2175,58 @@ impl SceneViewportRenderer {
         self.ensure_mesh(&mesh)
     }
 
+    fn prepare_shadows(&mut self, scene: &ViewportScene) -> Result<(), RendererError> {
+        for mesh in &scene.meshes {
+            self.ensure_mesh(mesh)?;
+        }
+        let values: Vec<_> = scene
+            .meshes
+            .iter()
+            .map(|mesh| {
+                self.instance_values(mesh.instance_key, mesh.model, mesh.color, false, scene)
+            })
+            .collect();
+        let meshes: Vec<_> = scene
+            .meshes
+            .iter()
+            .zip(&values)
+            .filter_map(|(mesh, values)| {
+                self.meshes
+                    .get(&mesh.mesh_key)
+                    .map(|gpu| shadows::ShadowMesh {
+                        instance_key: mesh.instance_key,
+                        vertices: &gpu.vertices,
+                        indices: &gpu.indices,
+                        index_count: gpu.index_count,
+                        model: glam::Mat4::from_cols_array(&mesh.model),
+                        uniform_values: values,
+                        material: self.surfaces.group(&mesh.textures),
+                        casts_shadows: mesh.textures.cast_shadows,
+                    })
+            })
+            .collect();
+        self.shadows.prepare(
+            &self.context.device,
+            &self.context.queue,
+            scene,
+            &meshes,
+            &self.bind_layout,
+        )?;
+        let mut encoder =
+            self.context
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("world-space-shadow-maps"),
+                });
+        self.shadows.encode(&mut encoder, &meshes);
+        self.context.queue.submit([encoder.finish()]);
+        Ok(())
+    }
     fn ensure_instance(&mut self, key: u64) {
         self.instances.entry(key).or_insert_with(|| {
             let uniform = self.context.device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("rustic-viewport-instance-uniform"),
-                size: 2352,
+                size: 2944,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             });
@@ -1653,14 +2248,18 @@ impl SceneViewportRenderer {
         });
     }
 
-    fn write_instance(
+    #[allow(
+        clippy::too_many_lines,
+        reason = "scene lights and effect modifiers share one explicit uniform layout"
+    )]
+    fn instance_values(
         &self,
         key: u64,
         model: [f32; 16],
         color: [f32; 4],
         unlit: bool,
         scene: &ViewportScene,
-    ) {
+    ) -> Vec<f32> {
         let lights = if unlit {
             &[][..]
         } else {
@@ -1679,7 +2278,16 @@ impl SceneViewportRenderer {
         values.extend([
             f32::from(u8::try_from(lights.len().min(32)).unwrap_or(32)),
             if unlit { 1.0 } else { 0.0 },
-            0.0,
+            if scene
+                .meshes
+                .iter()
+                .find(|m| m.instance_key == key)
+                .is_none_or(|m| m.textures.receive_shadows)
+            {
+                1.
+            } else {
+                0.
+            },
             0.0,
         ]);
         for light in lights.iter().take(32) {
@@ -1727,6 +2335,173 @@ impl SceneViewportRenderer {
         values.push(env.haze_density);
         values.extend(scene.camera_position);
         values.push(env.haze_start);
+        if let Some(modifier) = self.effect_frame.surfaces.iter().find(|m| {
+            scene
+                .meshes
+                .iter()
+                .find(|mesh| mesh.instance_key == key)
+                .is_some_and(|mesh| material::surface_matches(m, mesh))
+        }) {
+            values.extend([
+                modifier.dissolve,
+                modifier.edge_width,
+                0.0,
+                if modifier.is_dissolve {
+                    0.
+                } else {
+                    modifier.emission
+                },
+            ]);
+            values.extend(modifier.edge_color);
+            values.push(modifier.emission);
+        } else if let Some(decal) = self
+            .effect_frame
+            .decals
+            .iter()
+            .find(|d| decals::key(d.entity) == key)
+        {
+            values.extend([
+                0.0,
+                decal.edge_fade,
+                1.0,
+                (decal.appearance.emission - 1.).max(0.),
+            ]);
+            values.extend([0.0, 0.0, decal.roughness, decal.metallic]);
+        } else {
+            values.extend([0.0; 8]);
+        }
+        let blends = self.reflections.blends_for_mesh(key);
+        for index in 0..4 {
+            if let Some(blend) = blends.get(index) {
+                values.extend(blend.probe.capture_position.to_array());
+                values.push(blend.weight);
+            } else {
+                values.extend([0.; 4]);
+            }
+        }
+        for index in 0..4 {
+            if let Some(blend) = blends.get(index) {
+                values.extend(blend.probe.dimensions);
+                values.push(blend.mip_count);
+            } else {
+                values.extend([0.; 4]);
+            }
+        }
+        for index in 0..4 {
+            if let Some(blend) = blends.get(index) {
+                values.extend([
+                    if blend.probe.parallax_correction {
+                        1.
+                    } else {
+                        0.
+                    },
+                    match blend.probe.shape {
+                        engine_world::effects::VolumeShape::Sphere => 1.,
+                        engine_world::effects::VolumeShape::Cylinder => 2.,
+                        engine_world::effects::VolumeShape::Plane => 3.,
+                        engine_world::effects::VolumeShape::Box => 0.,
+                    },
+                    blend.probe.blend_distance,
+                    0.,
+                ]);
+            } else {
+                values.extend([0.; 4]);
+            }
+        }
+        for index in 0..4 {
+            values.extend(
+                blends
+                    .get(index)
+                    .map_or(glam::Mat4::IDENTITY, |b| b.probe.inverse_transform)
+                    .to_cols_array(),
+            );
+        }
+        if let Some(modifier) = self.effect_frame.surfaces.iter().find(|m| {
+            scene
+                .meshes
+                .iter()
+                .find(|mesh| mesh.instance_key == key)
+                .is_some_and(|mesh| material::surface_matches(m, mesh))
+        }) {
+            values.extend([modifier.uv_rotation, modifier.dissolve_noise_scale, 0., 0.]);
+        } else {
+            values.extend([0., 24., 0., 0.]);
+        }
+        if let Some(modifier) = self.effect_frame.surfaces.iter().find(|m| {
+            scene
+                .meshes
+                .iter()
+                .find(|mesh| mesh.instance_key == key)
+                .is_some_and(|mesh| material::surface_matches(m, mesh))
+        }) {
+            values.extend(modifier.uv_scale);
+            values.extend(modifier.uv_offset);
+        } else {
+            values.extend([1., 1., 0., 0.]);
+        }
+        let modifier = self.effect_frame.surfaces.iter().find(|m| {
+            scene
+                .meshes
+                .iter()
+                .find(|mesh| mesh.instance_key == key)
+                .is_some_and(|mesh| material::surface_matches(m, mesh))
+        });
+        let mesh = scene.meshes.iter().find(|m| m.instance_key == key);
+        values.extend(modifier.zip(mesh).map_or([0.; 4], |(m, mesh)| {
+            material::effect_direction(mesh, m.direction)
+        }));
+        if let Some(m) = modifier {
+            values.extend([
+                if m.noise_texture.is_some() { 1. } else { 0. },
+                if m.mask_texture.is_some() { 1. } else { 0. },
+                if m.distortion_texture.is_some() {
+                    1.
+                } else {
+                    0.
+                },
+                m.distortion_strength,
+            ]);
+            values.extend(m.color);
+            values.extend([if m.is_dissolve { 1. } else { 0. }, m.phase, 0., 0.]);
+        } else {
+            values.extend([0.; 4]);
+            values.extend([1.; 4]);
+            values.extend([0.; 4]);
+        }
+        let wind = mesh.map_or(glam::Vec3::ZERO, |mesh| {
+            engine_world::effects::sample_render_wind(
+                &self.effect_frame.wind_zones,
+                glam::Mat4::from_cols_array(&model).w_axis.truncate(),
+                self.effect_frame.post.time,
+                mesh.textures.visibility_layers,
+            ) * mesh.textures.wind_response.unwrap_or(0.)
+        });
+        values.extend(wind.to_array());
+        values.push(0.);
+        if let Some(decal) = self
+            .effect_frame
+            .decals
+            .iter()
+            .find(|d| decals::key(d.entity) == key)
+        {
+            let direction = decal
+                .transform
+                .transform_vector3(glam::Vec3::Y)
+                .normalize_or_zero();
+            values[716..719].copy_from_slice(&direction.to_array());
+            values[729] = decal.angle_fade;
+        }
+        values
+    }
+    fn write_instance(
+        &self,
+        key: u64,
+        model: [f32; 16],
+        color: [f32; 4],
+        unlit: bool,
+        scene: &ViewportScene,
+    ) {
+        let values = self.instance_values(key, model, color, unlit, scene);
         if let Some(instance) = self.instances.get(&key) {
             self.context
                 .queue
@@ -1735,6 +2510,22 @@ impl SceneViewportRenderer {
     }
 }
 
+fn srgb_channel_linear(value: f32) -> f32 {
+    if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    }
+}
+fn display_channel_radiance(value: f32) -> f32 {
+    let value = value.clamp(0., 0.999);
+    let linear = if value <= 0.04045 {
+        value / 12.92
+    } else {
+        ((value + 0.055) / 1.055).powf(2.4)
+    };
+    linear / (1. - linear).max(0.00001)
+}
 fn viewport_bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some("rustic-viewport-bind-layout"),
@@ -1812,6 +2603,8 @@ fn viewport_pipeline(
     device: &wgpu::Device,
     bind_layout: &wgpu::BindGroupLayout,
     surface_layout: &wgpu::BindGroupLayout,
+    probe_layout: &wgpu::BindGroupLayout,
+    shadow_layout: &wgpu::BindGroupLayout,
     pass: ViewportPass,
     label: &'static str,
 ) -> wgpu::RenderPipeline {
@@ -1822,7 +2615,12 @@ fn viewport_pipeline(
     });
     let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("rustic-viewport-pipeline-layout"),
-        bind_group_layouts: &[Some(bind_layout), Some(surface_layout)],
+        bind_group_layouts: &[
+            Some(bind_layout),
+            Some(surface_layout),
+            Some(probe_layout),
+            Some(shadow_layout),
+        ],
         immediate_size: 0,
     });
     let attributes = [
@@ -1880,7 +2678,7 @@ fn viewport_pipeline(
             entry_point: Some("fs_main"),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: VIEWPORT_COLOR_FORMAT,
                 blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
@@ -2009,6 +2807,25 @@ fn selection_outline_model(
     width: u32,
     height: u32,
 ) -> [f32; 16] {
+    selection_outline_model_with_width(
+        mesh,
+        view_projection,
+        width,
+        height,
+        SELECTION_OUTLINE_WIDTH_PIXELS,
+    )
+}
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "viewport extents are bounded by GPU texture limits"
+)]
+fn selection_outline_model_with_width(
+    mesh: &ViewportMesh,
+    view_projection: [f32; 16],
+    width: u32,
+    height: u32,
+    padding: f32,
+) -> [f32; 16] {
     let mut half_extents = glam::Vec3::ZERO;
     for vertex in &mesh.vertices {
         half_extents = half_extents.max(glam::Vec3::from(vertex.position).abs());
@@ -2031,7 +2848,7 @@ fn selection_outline_model(
     if !pixels_per_world_unit.is_finite() || pixels_per_world_unit <= f32::EPSILON {
         return mesh.model;
     }
-    let world_padding = SELECTION_OUTLINE_WIDTH_PIXELS / pixels_per_world_unit;
+    let world_padding = padding.clamp(0.0, 64.0) / pixels_per_world_unit;
     let mut outline_scale = glam::Vec3::ONE;
     for axis in 0..3 {
         let world_radius = half_extents[axis] * model.col(axis).truncate().length();
@@ -2346,6 +3163,7 @@ fn render_with_context(
     clippy::too_many_lines,
     reason = "surface rendering mirrors the auditable offscreen M2 fixture without leaking backend resources"
 )]
+#[cfg(not(target_os = "emscripten"))]
 fn encode_surface_mesh(
     context: &BackendContext,
     color_format: wgpu::TextureFormat,
@@ -2921,6 +3739,133 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one retained renderer compares sun, point and spot occlusion against matching unshadowed frames"
+    )]
+    fn world_space_shadows_obey_caster_and_receiver_flags_in_pixels() {
+        let quad =
+            |key: u64, x: f32, z: f32, size: f32, color: [f32; 4], casts: bool| ViewportMesh {
+                instance_key: key,
+                mesh_key: key,
+                vertices: [[-size, -size], [size, -size], [size, size], [-size, size]]
+                    .into_iter()
+                    .map(|p| ViewportVertex {
+                        position: [p[0] + x, p[1], z],
+                        normal: [0., 0., -1.],
+                        uv: [0.; 2],
+                    })
+                    .collect(),
+                indices: vec![0, 2, 1, 0, 3, 2],
+                model: identity_matrix(),
+                color,
+                selected: false,
+                textures: engine_world::SurfaceTextures {
+                    cast_shadows: casts,
+                    receive_shadows: key == 1,
+                    ..Default::default()
+                },
+            };
+        let env = engine_world::SceneEnvironment {
+            enabled: true,
+            sun_direction: glam::Vec3::new(-1., 0., -1.).normalize().to_array(),
+            sun_color: [1.; 3],
+            sun_intensity: 1.,
+            ambient_color: [1.; 3],
+            ambient_intensity: 0.03,
+            haze_density: 0.,
+            ..engine_world::SceneEnvironment::default()
+        };
+        let mut scene = ViewportScene {
+            environment: env,
+            camera_position: [0., 0., -1.],
+            view_projection: identity_matrix(),
+            meshes: vec![
+                quad(1, 0., 0.8, 0.9, [0.7, 0.7, 0.7, 1.], false),
+                quad(2, -0.4, 0.3, 0.15, [0.1, 0.1, 0.1, 1.], false),
+            ],
+            lights: vec![],
+            guides: vec![],
+            grid_vertices: vec![],
+            clear_color: [0., 0., 0., 1.],
+        };
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let unshadowed = renderer.render(64, 64, &scene).unwrap().unwrap();
+        scene.meshes[1].textures.cast_shadows = true;
+        let shadowed = renderer.render(64, 64, &scene).unwrap().unwrap();
+        let darker = unshadowed
+            .rgba8
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(shadowed.rgba8.as_chunks::<4>().0)
+            .filter(|(a, b)| a[0] > b[0].saturating_add(15))
+            .count();
+        assert!(
+            darker > 10,
+            "caster failed to darken receiver: {darker} pixels"
+        );
+        assert!(renderer.shadow_stats().caster_draws > 0);
+        scene.meshes[0].textures.receive_shadows = false;
+        let ignored = renderer.render(64, 64, &scene).unwrap().unwrap();
+        assert_eq!(
+            unshadowed.rgba8, ignored.rgba8,
+            "receive_shadows=false must restore direct illumination"
+        );
+        scene.environment.sun_intensity = 0.;
+        scene.meshes[0].textures.receive_shadows = true;
+        for kind in [
+            engine_world::LightKind::Point,
+            engine_world::LightKind::Spot,
+        ] {
+            scene.meshes[1].textures.cast_shadows = false;
+            scene.lights = vec![engine_world::RenderLight {
+                entity: engine_world::EntityId::new(),
+                transform: glam::Mat4::from_translation(glam::Vec3::new(-1., 0., -0.3))
+                    .to_cols_array(),
+                kind,
+                color: [1.; 3],
+                intensity: 3.,
+                range: 10.,
+                spot_outer_angle_radians: 1.1,
+                casts_shadows: true,
+            }];
+            let baseline = renderer.render(64, 64, &scene).unwrap().unwrap();
+            scene.meshes[1].textures.cast_shadows = true;
+            let occluded = renderer.render(64, 64, &scene).unwrap().unwrap();
+            let darker = baseline
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(occluded.rgba8.as_chunks::<4>().0)
+                .filter(|(a, b)| a[0] > b[0].saturating_add(15))
+                .count();
+            assert!(
+                darker > 10,
+                "{kind:?} shadow failed: {darker} darkened pixels"
+            );
+            let expected = if kind == engine_world::LightKind::Point {
+                6
+            } else {
+                1
+            };
+            assert_eq!(
+                renderer.shadow_stats().maps,
+                expected,
+                "point must render all six cube faces"
+            );
+            scene.lights[0].casts_shadows = false;
+            let disabled = renderer.render(64, 64, &scene).unwrap().unwrap();
+            assert_eq!(
+                baseline.rgba8, disabled.rgba8,
+                "{kind:?} cast-shadow flag must restore illumination"
+            );
+        }
+    }
+
+    #[test]
     #[ignore = "requires a graphics adapter; run explicitly for viewport qualification"]
     fn persistent_viewport_reuses_resources_resizes_and_depth_tests() {
         let vertices = vec![
@@ -3272,7 +4217,15 @@ mod tests {
                 100.0,
             );
             let mut scene = ViewportScene {
-                environment: engine_world::SceneEnvironment::default(),
+                environment: engine_world::SceneEnvironment {
+                    enabled: true,
+                    sky_color: [0.; 3],
+                    ambient_color: [1.; 3],
+                    ambient_intensity: 1.,
+                    sun_intensity: 0.,
+                    haze_density: 0.,
+                    ..engine_world::SceneEnvironment::default()
+                },
                 camera_position: eye.to_array(),
                 view_projection: (projection * view).to_cols_array(),
                 meshes: vec![mesh.clone()],
@@ -3290,14 +4243,24 @@ mod tests {
                     .try_into()
                     .unwrap()
             };
+            let fully_covered_blue = baseline
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[2])
+                .max()
+                .unwrap();
             let mut surface_pixels = 0;
             for y in 1..255 {
                 for x in 1..255 {
                     // Exclude the antialiased silhouette, where orange may
-                    // legitimately share a pixel with the original surface.
-                    if (y - 1..=y + 1)
-                        .all(|ny| (x - 1..=x + 1).all(|nx| pixel(&baseline, nx, ny)[2] > 32))
-                    {
+                    // legitimately share a pixel with the original surface. Flat
+                    // ambient lighting gives an exact full-coverage reference;
+                    // HDR tone mapping makes partially covered edges nonlinear.
+                    if (y - 1..=y + 1).all(|ny| {
+                        (x - 1..=x + 1).all(|nx| pixel(&baseline, nx, ny)[2] == fully_covered_blue)
+                    }) {
                         surface_pixels += 1;
                         assert_eq!(
                             pixel(&selected, x, y),
@@ -3443,9 +4406,225 @@ mod tests {
     }
 }
 
+fn effect_geometry_key(entity: engine_world::EntityId, index: usize) -> u64 {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    (entity, index, "effect-geometry").hash(&mut hasher);
+    hasher.finish()
+}
+fn resolve_effect_textures(
+    scene: &mut ViewportScene,
+    frame: &engine_world::effects::EffectFrame,
+    paths: &HashMap<engine_world::AssetId, String>,
+) {
+    use engine_world::TextureMap;
+    for (index, geometry) in frame.geometry.iter().enumerate() {
+        if let Some(mesh) = scene
+            .meshes
+            .iter_mut()
+            .find(|m| m.instance_key == effect_geometry_key(geometry.entity, index))
+            && let Some(path) = geometry.texture.and_then(|id| paths.get(&id))
+        {
+            mesh.textures
+                .maps
+                .insert(TextureMap::BaseColor, path.clone());
+        }
+    }
+    for decal in &frame.decals {
+        if let Some(mesh) = scene
+            .meshes
+            .iter_mut()
+            .find(|m| m.instance_key == decals::key(decal.entity))
+        {
+            if let Some(path) = decal.appearance.texture.and_then(|id| paths.get(&id)) {
+                mesh.textures
+                    .maps
+                    .insert(TextureMap::BaseColor, path.clone());
+            }
+            if let Some(path) = decal.normal_map.and_then(|id| paths.get(&id)) {
+                mesh.textures.maps.insert(TextureMap::Normal, path.clone());
+            }
+            mesh.textures.emissive_strength = decal.appearance.emission;
+        }
+    }
+}
+
+/// Applies extraction-time camera, lighting, surface and PBR geometry modifiers.
+/// Call this once for custom editor viewports, then pass the same frame to
+/// `SceneViewportRenderer::set_effect_frame` for transparent geometry and camera passes.
+#[allow(
+    clippy::too_many_lines,
+    reason = "frame modifiers are applied together before immutable rendering"
+)]
+pub fn append_effect_frame(scene: &mut ViewportScene, frame: &engine_world::effects::EffectFrame) {
+    use glam::{Mat4, Quat, Vec3};
+    let pivot = Vec3::from_array(scene.camera_position);
+    let offset = Mat4::from_translation(pivot + frame.camera_offset)
+        * Mat4::from_quat(Quat::from_euler(
+            glam::EulerRot::XYZ,
+            frame.camera_rotation.x,
+            frame.camera_rotation.y,
+            frame.camera_rotation.z,
+        ))
+        * Mat4::from_translation(-pivot);
+    scene.view_projection =
+        (Mat4::from_cols_array(&scene.view_projection) * offset.inverse()).to_cols_array();
+    scene.camera_position =
+        (Vec3::from_array(scene.camera_position) + frame.camera_offset).to_array();
+    for modifier in &frame.lights {
+        if let Some(light) = scene
+            .lights
+            .iter_mut()
+            .find(|light| light.entity == modifier.target)
+        {
+            light.color = modifier.color;
+            light.intensity = modifier.intensity;
+        }
+    }
+    for modifier in &frame.surfaces {
+        for mesh in &mut scene.meshes {
+            if !material::surface_matches(modifier, mesh) {
+                continue;
+            }
+            let _ = modifier; // Per-pixel masked tint is applied by the surface shader.
+        }
+    }
+    for outline in &frame.outlines {
+        for mesh in &mut scene.meshes {
+            if outline
+                .targets
+                .iter()
+                .any(|id| effect_entity_matches(*id, mesh.instance_key))
+            {
+                mesh.selected = true;
+            }
+        }
+    }
+    for water in &frame.water {
+        for mesh in &mut scene.meshes {
+            if !effect_entity_matches(water.target, mesh.instance_key) {
+                continue;
+            }
+            let model = Mat4::from_cols_array(&mesh.model);
+            let inverse = model.inverse();
+            for vertex in &mut mesh.vertices {
+                let world = model.transform_point3(Vec3::from_array(vertex.position));
+                let sample = water.disturbance.sample(world);
+                vertex.position = inverse
+                    .transform_point3(world + Vec3::Y * sample.displacement)
+                    .to_array();
+                vertex.normal = model
+                    .transpose()
+                    .transform_vector3(sample.normal)
+                    .normalize_or_zero()
+                    .to_array();
+            }
+        }
+    }
+    let projected: Vec<_> = frame
+        .decals
+        .iter()
+        .filter_map(|decal| decals::project(scene, decal))
+        .collect();
+    scene.meshes.extend(projected);
+    for (index, geometry) in frame
+        .geometry
+        .iter()
+        .enumerate()
+        .filter(|(_, g)| g.pbr || g.material.is_some())
+    {
+        let key = effect_geometry_key(geometry.entity, index);
+        scene.meshes.push(ViewportMesh {
+            textures: engine_world::SurfaceTextures {
+                effect_source: Some(geometry.entity),
+                material: geometry.material,
+                cast_shadows: geometry.cast_shadows,
+                receive_shadows: geometry.receive_shadows,
+                visibility_layers: frame
+                    .effect_layers
+                    .get(&geometry.entity)
+                    .copied()
+                    .unwrap_or(u32::MAX),
+                pbr: geometry.pbr,
+                emissive_strength: (geometry.emission - 1.).max(0.),
+                emissive_color: [geometry.color[0], geometry.color[1], geometry.color[2]],
+                ..Default::default()
+            },
+            instance_key: key,
+            mesh_key: key,
+            vertices: geometry
+                .mesh
+                .positions
+                .iter()
+                .enumerate()
+                .map(|(i, p)| ViewportVertex {
+                    position: *p,
+                    normal: geometry
+                        .mesh
+                        .normals
+                        .get(i)
+                        .copied()
+                        .unwrap_or([0., 1., 0.]),
+                    uv: geometry.mesh.tex_coords.get(i).copied().unwrap_or([0., 0.]),
+                })
+                .collect(),
+            indices: geometry.mesh.indices.clone(),
+            model: Mat4::IDENTITY.to_cols_array(),
+            color: geometry.color,
+            selected: false,
+        });
+    }
+}
+fn effect_in_view(
+    frame: &engine_world::effects::EffectFrame,
+    entity: engine_world::EntityId,
+    camera: glam::Vec3,
+) -> bool {
+    frame
+        .effect_render_distances
+        .get(&entity)
+        .is_none_or(|(center, radius, distance)| center.distance(camera) - radius <= *distance)
+}
+fn effect_entity_matches(entity: engine_world::EntityId, key: u64) -> bool {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    entity.hash(&mut h);
+    if h.finish() == key {
+        return true;
+    }
+    // Imported models use a stable (owner, source mesh index) key.
+    (0..256usize).any(|index| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (entity, index).hash(&mut h);
+        h.finish() == key
+    })
+}
+
+fn render_surface(
+    world: &engine_world::SceneWorld,
+    entity: engine_world::EntityId,
+) -> engine_world::SurfaceTextures {
+    let mut textures = world.resolved_textures(entity);
+    textures.material = world
+        .material(entity)
+        .ok()
+        .flatten()
+        .map(|m| m.asset)
+        .or(textures.material);
+    textures.visibility_layers = world
+        .part_attributes(entity)
+        .unwrap_or_default()
+        .visibility_layers;
+    textures
+}
 /// Builds a game frame from the live simulation world. Highest camera order wins.
 /// No active camera produces an empty frame instead of a fabricated viewpoint.
 pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScene {
+    let mut scene = base_game_scene(world, aspect);
+    append_effect_frame(&mut scene, world.effect_frame());
+
+    scene
+}
+
+fn base_game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScene {
     let mut buffer = engine_world::RenderWorldBuffer::new();
     let extracted = buffer.extract(world);
     let mut scene = ViewportScene {
@@ -3475,7 +4654,7 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
         primitive.entity.hash(&mut hasher);
         let key = hasher.finish();
         scene.meshes.push(ViewportMesh {
-            textures: world.resolved_textures(primitive.entity),
+            textures: render_surface(world, primitive.entity),
             instance_key: key,
             mesh_key: key,
             vertices: mesh
@@ -3501,6 +4680,170 @@ pub fn game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportScen
     scene
 }
 
+/// Batches rigid mesh particles by asset, source mesh and a bounded 16-step color
+/// palette, retaining authored geometry and normals in the existing PBR pipeline.
+/// Missing model assets produce no substitute geometry.
+#[allow(
+    clippy::too_many_lines,
+    clippy::type_complexity,
+    clippy::cast_precision_loss,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "mesh batches use bounded vertex and quantized color budgets"
+)]
+pub fn append_mesh_particle_models(
+    scene: &mut ViewportScene,
+    frame: &engine_world::effects::EffectFrame,
+    models: &std::collections::BTreeMap<engine_world::AssetId, engine_assets::ModelArtifact>,
+) {
+    use glam::{Mat4, Quat, Vec3};
+    let mut batches: std::collections::BTreeMap<
+        (
+            engine_world::AssetId,
+            Option<engine_world::AssetId>,
+            usize,
+            [u8; 4],
+            engine_world::EntityId,
+            u32,
+            bool,
+            bool,
+        ),
+        ViewportMesh,
+    > = std::collections::BTreeMap::default();
+    let mut vertex_budget = 1_000_000usize;
+    for particle in &frame.particles {
+        let Some(asset) = particle.mesh else {
+            continue;
+        };
+        let Some(model) = models.get(&asset) else {
+            continue;
+        };
+        for (source_index, source) in model.meshes.iter().enumerate() {
+            if source.positions.len() > vertex_budget {
+                continue;
+            }
+            vertex_budget -= source.positions.len();
+            let source_color = if particle.material.is_some() {
+                [1.; 4]
+            } else {
+                model
+                    .materials
+                    .get(source.material_index.unwrap_or(0))
+                    .map_or([1.; 4], |m| m.base_color)
+            };
+            let color: [u8; 4] = std::array::from_fn(|i| {
+                ((source_color[i] * particle.color[i]).clamp(0., 1.) * 15.).round() as u8
+            });
+            let batch = batches
+                .entry((
+                    asset,
+                    particle.material,
+                    source_index,
+                    color,
+                    particle.entity,
+                    frame
+                        .effect_layers
+                        .get(&particle.entity)
+                        .copied()
+                        .unwrap_or(u32::MAX),
+                    particle.cast_shadows,
+                    particle.receive_shadows,
+                ))
+                .or_insert_with(|| {
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    (
+                        asset,
+                        particle.material,
+                        source_index,
+                        color,
+                        particle.entity,
+                        frame
+                            .effect_layers
+                            .get(&particle.entity)
+                            .copied()
+                            .unwrap_or(u32::MAX),
+                        particle.cast_shadows,
+                        particle.receive_shadows,
+                        "mesh-particles",
+                    )
+                        .hash(&mut h);
+                    let key = h.finish();
+                    ViewportMesh {
+                        textures: engine_world::SurfaceTextures {
+                            effect_source: Some(particle.entity),
+                            material: particle.material,
+                            cast_shadows: particle.cast_shadows,
+                            receive_shadows: particle.receive_shadows,
+                            visibility_layers: frame
+                                .effect_layers
+                                .get(&particle.entity)
+                                .copied()
+                                .unwrap_or(u32::MAX),
+                            ..engine_world::SurfaceTextures::default()
+                        },
+                        instance_key: key,
+                        mesh_key: key,
+                        vertices: vec![],
+                        indices: vec![],
+                        model: Mat4::IDENTITY.to_cols_array(),
+                        color: color.map(|v| f32::from(v) / 15.),
+                        selected: false,
+                    }
+                });
+            let mut local = Mat4::IDENTITY;
+            let mut node = source.source_node;
+            let mut depth = 0;
+            while let Some(index) = node {
+                if depth >= model.nodes.len() {
+                    break;
+                }
+                let Some(n) = model.nodes.get(index) else {
+                    break;
+                };
+                local = Mat4::from_scale_rotation_translation(
+                    glam::DVec3::from_array(n.scale).as_vec3(),
+                    glam::DQuat::from_array(n.rotation).as_quat(),
+                    glam::DVec3::from_array(n.translation).as_vec3(),
+                ) * local;
+                node = n.parent;
+                depth += 1;
+            }
+            let transform = Mat4::from_scale_rotation_translation(
+                particle.scale * particle.size,
+                Quat::from_euler(
+                    glam::EulerRot::XYZ,
+                    particle.rotation3.x,
+                    particle.rotation3.y,
+                    particle.rotation3.z,
+                ),
+                particle.position,
+            ) * local;
+            let normal_matrix = transform.inverse().transpose();
+            let offset = batch.vertices.len() as u32;
+            batch
+                .vertices
+                .extend(source.positions.iter().enumerate().map(|(i, p)| {
+                    ViewportVertex {
+                        position: (transform.transform_point3(Vec3::from_array(*p))
+                            + particle.wind * p[1] * p[1])
+                            .to_array(),
+                        normal: normal_matrix
+                            .transform_vector3(Vec3::from_array(
+                                source.normals.get(i).copied().unwrap_or([0., 1., 0.]),
+                            ))
+                            .normalize_or_zero()
+                            .to_array(),
+                        uv: source.texcoords.get(i).copied().unwrap_or([0.; 2]),
+                    }
+                }));
+            batch
+                .indices
+                .extend(source.indices.iter().map(|i| i + offset));
+        }
+    }
+    scene.meshes.extend(batches.into_values());
+}
+
 /// Render imported rigid and skinned models using source node poses from the runtime scene.
 #[allow(
     clippy::too_many_lines,
@@ -3512,7 +4855,7 @@ pub fn game_scene_with_models(
     models: &std::collections::BTreeMap<engine_world::AssetId, engine_assets::ModelArtifact>,
 ) -> ViewportScene {
     use glam::{Mat4, Vec3};
-    let mut scene = game_scene(world, aspect);
+    let mut scene = base_game_scene(world, aspect);
     for entity in world.entity_ids() {
         let Ok(Some(mesh)) = world.mesh(entity) else {
             continue;
@@ -3630,10 +4973,11 @@ pub fn game_scene_with_models(
                 .materials
                 .get(source.material_index.unwrap_or(0))
                 .map_or([0.6, 0.6, 0.6, 1.], |m| m.base_color);
-            let textures = world.resolved_textures(entity);
-            if textures
-                .maps
-                .contains_key(&engine_world::TextureMap::BaseColor)
+            let textures = render_surface(world, entity);
+            if textures.material.is_some()
+                || textures
+                    .maps
+                    .contains_key(&engine_world::TextureMap::BaseColor)
             {
                 color = world.part_attributes(entity).unwrap_or_default().color;
             } else {
@@ -3651,6 +4995,9 @@ pub fn game_scene_with_models(
             });
         }
     }
+    append_mesh_particle_models(&mut scene, world.effect_frame(), models);
+    append_effect_frame(&mut scene, world.effect_frame());
+
     scene
 }
 

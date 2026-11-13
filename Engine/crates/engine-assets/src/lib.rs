@@ -1,16 +1,20 @@
 //! Versioned source-asset metadata, importers, dependency index, cache, and async loading.
 
 mod artifacts;
+mod cubemap;
 mod database;
 mod importers;
+mod material;
 mod meta;
 mod pipeline;
 mod watcher;
 mod worker;
 
 pub use artifacts::*;
+pub use cubemap::*;
 pub use database::*;
 pub use importers::*;
+pub use material::*;
 pub use meta::*;
 pub use pipeline::*;
 pub use watcher::*;
@@ -60,3 +64,6 @@ pub(crate) fn io_error(path: impl Into<PathBuf>, source: std::io::Error) -> Asse
         source,
     }
 }
+
+mod effect_resources;
+pub use effect_resources::install_builtin_effect_resources;

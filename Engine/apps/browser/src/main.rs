@@ -34,6 +34,9 @@ fn initialize() -> Result<(), String> {
     let mut renderer =
         SceneViewportRenderer::new(BackendRequest::OpenGl).map_err(|e| e.to_string())?;
     renderer.set_environment_root(root);
+    session.render_world(|world| {
+        world.submit_gpu_particle_feedback(renderer.gpu_particle_context(), &[]);
+    })?;
     let ui = game_ui::GameUi::load(root)?;
     GAME.with(|slot| {
         *slot.borrow_mut() = Some(BrowserGame {
@@ -68,12 +71,21 @@ pub extern "C" fn rustic_tick(width: u32, height: u32, seconds: f64) {
         let input: Input =
             serde_json::from_slice(&std::fs::read("/input.json").map_err(|e| e.to_string())?)
                 .map_err(|e| e.to_string())?;
+        game.session.render_world(|world| {
+            world.submit_gpu_particle_feedback(game.renderer.gpu_particle_context(), &[]);
+        })?;
         game.session
             .step(seconds, input.keys, input.pointers, input.reset)?;
         let [width, height] = engine_play::game_view_extent([width, height]);
-        let scene = game.session.render_world(|world| {
-            renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &game.models)
+        let (scene, effects) = game.session.render_world(|world| {
+            (
+                renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, &game.models),
+                world.effect_frame().clone(),
+            )
         })?;
+        game.renderer
+            .set_effect_frame(&effects)
+            .map_err(|error| error.to_string())?;
         #[cfg(target_os = "emscripten")]
         {
             let audio: Vec<u8> = game
@@ -94,6 +106,11 @@ pub extern "C" fn rustic_tick(width: u32, height: u32, seconds: f64) {
         else {
             return Ok(());
         };
+        let context = game.renderer.gpu_particle_context();
+        let acknowledgements = game.renderer.take_gpu_particle_acknowledgements();
+        game.session.render_world(|world| {
+            world.submit_gpu_particle_feedback(context, &acknowledgements);
+        })?;
         game.ui.composite_rgba(width, height, &mut frame.rgba8)?;
         std::fs::write("/frame.rgba", frame.rgba8).map_err(|e| e.to_string())?;
         std::fs::write(

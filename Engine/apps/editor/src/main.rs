@@ -1,5 +1,7 @@
 mod agent_tools;
+mod effects;
 mod explorer_selection;
+mod materials;
 mod play_session;
 mod pointer_input;
 mod project_build;
@@ -168,6 +170,7 @@ struct EditorApp {
     scene_graph: scene_graph::SceneGraph,
     ui_designer: ui_designer::UiDesigner,
     render_world: RenderWorldBuffer,
+    effect_preview: effects::EffectPreview,
     model_assets: BTreeMap<AssetId, ModelArtifact>,
     detach_inspector: bool,
     game_settings: GameSettings,
@@ -289,6 +292,7 @@ impl EditorApp {
             scene_graph: scene_graph::SceneGraph::default(),
             ui_designer: ui_designer::UiDesigner::default(),
             render_world: RenderWorldBuffer::new(),
+            effect_preview: effects::EffectPreview::default(),
             model_assets,
             detach_inspector: false,
             game_settings,
@@ -361,18 +365,27 @@ impl EditorApp {
         }
         self.agent_frame = None;
         self.preview_dirty = true;
-        let scene = viewport_scene(
+        self.effect_preview
+            .update(&self.document, self.camera.position());
+        let mut scene = viewport_scene(
             &self.document,
             self.camera,
             self.viewport_extent,
             &mut self.render_world,
             &self.model_assets,
         );
+        let effects = self.effect_preview.runtime.frame().clone();
+        renderer_wgpu::append_mesh_particle_models(&mut scene, &effects, &self.model_assets);
+        renderer_wgpu::append_effect_frame(&mut scene, &effects);
+        if self.effect_preview.show_bounds {
+            effects::append_bounds(&mut scene, &self.document);
+        }
         let request = ViewportRenderRequest {
             sequence: self.agent_frame_sequence + 1,
             width: self.viewport_extent[0],
             height: self.viewport_extent[1],
             scene,
+            effects,
         };
         match self.viewport_request.try_send(request) {
             Ok(()) => {
@@ -387,6 +400,10 @@ impl EditorApp {
         }
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "poll independent worker replies and renderer acknowledgements once per frame"
+    )]
     fn poll_background(&mut self, context: &egui::Context) {
         if let Some(receiver) = &self.project_scan
             && let Ok(project_tree) = receiver.try_recv()
@@ -411,7 +428,10 @@ impl EditorApp {
         // Completion notifications can coalesce into one UI repaint. Consume the
         // newest result so an older extent cannot hide the finished resize.
         let preview = self.preview_result.try_iter().last();
-        if let Some((sequence, result)) = preview.filter(|_| self.play.is_none()) {
+        if let Some((sequence, result, feedback)) = preview.filter(|_| self.play.is_none()) {
+            if let Some((context, acks)) = feedback {
+                self.effect_preview.submit_gpu_feedback(context, &acks);
+            }
             match result {
                 Ok(Some(frame)) => {
                     self.agent_frame =
@@ -431,7 +451,9 @@ impl EditorApp {
                         frame.adapter.backend,
                         frame.digest_hex()
                     );
-                    self.log(Severity::Info, "renderer", self.preview_status.clone());
+                    if !self.effect_preview.playing {
+                        self.log(Severity::Info, "renderer", self.preview_status.clone());
+                    }
                 }
                 Ok(None) => {
                     "Viewport suspended while minimized".clone_into(&mut self.preview_status);
@@ -445,6 +467,7 @@ impl EditorApp {
                 self.refresh_preview();
             }
         }
+        self.poll_effect_preview(context);
         if self.preview_dirty && self.play.is_none() {
             self.refresh_preview();
         }
@@ -485,6 +508,15 @@ impl EditorApp {
                     "Runtime exited; authoring document is intact",
                 );
                 self.play = None;
+            }
+        }
+    }
+
+    fn poll_effect_preview(&mut self, context: &egui::Context) {
+        if self.play.is_none() && self.effect_preview.playing {
+            context.request_repaint_after(Duration::from_millis(33));
+            if self.effect_preview.last_tick.elapsed() >= Duration::from_millis(33) {
+                self.preview_dirty = true;
             }
         }
     }
@@ -1654,10 +1686,12 @@ impl eframe::App for EditorApp {
             gizmo_widget: &mut self.gizmo_widget,
             scene_graph: &mut self.scene_graph,
             ui_designer: &mut self.ui_designer,
+            effect_preview: &mut self.effect_preview,
             model_assets: &mut self.model_assets,
             project_file_action: &mut project_file_action,
         };
         ui_theme::workspace(ui, |ui| self.dock.ui(&mut viewer, ui));
+        viewer.material_editor(ui.ctx());
         viewer.flush_play_input();
         let request_preview = viewer.request_preview;
         drop(viewer);
@@ -1696,6 +1730,7 @@ struct EditorViewer<'a> {
     gizmo_widget: &'a mut transform_widget::TransformWidget,
     scene_graph: &'a mut scene_graph::SceneGraph,
     ui_designer: &'a mut ui_designer::UiDesigner,
+    effect_preview: &'a mut effects::EffectPreview,
     model_assets: &'a mut BTreeMap<AssetId, ModelArtifact>,
     project_file_action: &'a mut Option<ProjectFileAction>,
 }
@@ -1871,8 +1906,62 @@ impl EditorViewer<'_> {
                 self.viewport_input(ui, &response);
             }
         }
+        if !is_2d
+            && !self.playing
+            && !self.document.is_read_only()
+            && let Some(payload) = response.dnd_release_payload::<effects::PresetDrop>()
+        {
+            match self.document.add_effect_asset(&payload.0, None) {
+                Ok(id) => {
+                    self.model_assets
+                        .extend(load_project_model_assets(self.project_root));
+                    let position = ui
+                        .input(|input| input.pointer.interact_pos())
+                        .and_then(|point| {
+                            viewport_ground_position(*self.camera, response.rect, point)
+                        })
+                        .unwrap_or(self.camera.focus);
+                    let _ = self.document.set_transform(
+                        id,
+                        LocalTransform {
+                            translation: position,
+                            ..LocalTransform::IDENTITY
+                        },
+                    );
+                    self.request_preview = true;
+                }
+                Err(error) => self.console.push(simple_console(
+                    Severity::Error,
+                    "effects.asset",
+                    error.to_string(),
+                )),
+            }
+        }
         if let Some(ViewportDrop::File(path)) = dropped.as_deref() {
-            if path.extension().is_some_and(|extension| {
+            if path
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("effect"))
+                && !is_2d
+                && !self.playing
+            {
+                let result =
+                    effects::load_effect_asset(self.project_root, path).and_then(|asset| {
+                        self.document
+                            .add_effect_asset(&asset, selected_scene_folder(self.document))
+                            .map_err(|e| e.to_string())
+                    });
+                match result {
+                    Ok(_) => {
+                        self.model_assets
+                            .extend(load_project_model_assets(self.project_root));
+                        self.request_preview = true;
+                    }
+                    Err(error) => {
+                        self.console
+                            .push(simple_console(Severity::Error, "effects.asset", error));
+                    }
+                }
+            } else if path.extension().is_some_and(|extension| {
                 extension.eq_ignore_ascii_case("scene") || extension.eq_ignore_ascii_case("rscene")
             }) {
                 let relative = path
@@ -2197,6 +2286,9 @@ impl EditorViewer<'_> {
         let Ok(world) = self.document.world().world_transform(entity) else {
             return;
         };
+        if self.effect_handle_gizmo(ui, rect, &snapshot, world.0) {
+            return;
+        }
         let parent = snapshot
             .parent
             .and_then(|id| self.document.world().world_transform(id).ok())
@@ -2314,6 +2406,27 @@ impl EditorViewer<'_> {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("+ Add", |ui| {
+                    ui.menu_button("Effects", |ui| {
+                        for kind in engine_world::effects::EffectKind::all_defaults() {
+                            if ui
+                                .add_enabled(
+                                    !self.document.is_read_only() && !self.playing,
+                                    egui::Button::new(kind.name()),
+                                )
+                                .clicked()
+                            {
+                                match self.document.add_effect(kind, selected_folder) {
+                                    Ok(_) => self.request_preview = true,
+                                    Err(error) => self.console.push(simple_console(
+                                        Severity::Error,
+                                        "effects",
+                                        error.to_string(),
+                                    )),
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
                     if ui
                         .add_enabled(!self.document.is_read_only(), egui::Button::new("Folder"))
                         .clicked()
@@ -2474,10 +2587,31 @@ impl EditorViewer<'_> {
             return;
         }
         let clipboard_id = egui::Id::new("scene-clipboard");
+        let reload_effect_models = matches!(
+            &action,
+            SceneTreeAction::EffectPreset(..) | SceneTreeAction::EffectFile(..)
+        );
         let result = match action {
             SceneTreeAction::TextureFiles(entity, paths) => {
                 self.assign_texture_files(entity, &paths);
                 return;
+            }
+            SceneTreeAction::EffectPreset(entity, asset) => self
+                .document
+                .add_effect_asset(&asset, Some(entity))
+                .map(|_| ()),
+            SceneTreeAction::EffectFile(entity, path) => {
+                match effects::load_effect_asset(self.project_root, &path) {
+                    Ok(asset) => self
+                        .document
+                        .add_effect_asset(&asset, Some(entity))
+                        .map(|_| ()),
+                    Err(error) => {
+                        self.console
+                            .push(simple_console(Severity::Error, "effects.asset", error));
+                        return;
+                    }
+                }
             }
             SceneTreeAction::Rename(entity, name) => self.document.set_name(entity, name),
             SceneTreeAction::Delete(entity) => self.document.delete_tree(entity),
@@ -2515,6 +2649,10 @@ impl EditorViewer<'_> {
             }
             SceneTreeAction::Space(_, _) => Ok(()),
         };
+        if result.is_ok() && reload_effect_models {
+            self.model_assets
+                .extend(load_project_model_assets(self.project_root));
+        }
         match result {
             Ok(()) => self.request_preview = true,
             Err(error) => self.console.push(simple_console(
@@ -2627,6 +2765,13 @@ impl EditorViewer<'_> {
     fn apply_project_file_action(&mut self, ui: &egui::Ui, action: Option<ProjectFileAction>) {
         let can_edit = !self.document.is_read_only() && !self.playing;
         match action {
+            Some(ProjectFileAction::Open(path))
+                if path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("material")) =>
+            {
+                self.open_material(ui.ctx(), self.project_root.join(path));
+            }
             Some(ProjectFileAction::Open(path)) => self.open_project_script(&path),
             Some(action @ ProjectFileAction::EditUi(_)) if can_edit => {
                 *self.project_file_action = Some(action);
@@ -2781,6 +2926,7 @@ impl EditorViewer<'_> {
     )]
     fn inspector_contents(&mut self, ui: &mut egui::Ui) {
         self.environment_inspector(ui);
+        self.effects_panel(ui);
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
@@ -2807,6 +2953,7 @@ impl EditorViewer<'_> {
             snapshot.local_transform.scale = live.scale.into();
             snapshot.part_attributes = live.part_attributes;
             snapshot.scripts.clone_from(&live.scripts);
+            snapshot.effect.clone_from(&live.effect);
         }
         let mut name = snapshot.name.clone().unwrap_or_else(|| "Entity".into());
         if ui.text_edit_singleline(&mut name).changed()
@@ -2908,6 +3055,12 @@ impl EditorViewer<'_> {
                 ui.color_edit_button_rgba_unmultiplied(&mut color).changed();
             attributes.color = color;
             attributes_changed |= ui
+                .add(
+                    egui::DragValue::new(&mut attributes.visibility_layers)
+                        .prefix("Visibility layer mask "),
+                )
+                .changed();
+            attributes_changed |= ui
                 .checkbox(&mut attributes.can_touch, "Can touch")
                 .on_hover_text("Enables clicks, taps and collision event subscriptions. Does not affect solid response.")
                 .changed();
@@ -2966,7 +3119,9 @@ impl EditorViewer<'_> {
                     .color(ui.visuals().weak_text_color()),
             );
         }
+        self.material_inspector(ui, &snapshot);
         self.texture_inspector(ui, &snapshot);
+        self.effect_inspector(ui, &snapshot);
         self.script_inspector(ui, entity, snapshot.scripts);
     }
 
@@ -3297,13 +3452,19 @@ mod gizmo_drag_tests {
     }
 }
 
-type ViewportRenderResult = (u64, Result<Option<RenderedFrame>, String>);
+type GpuParticleFeedback = (Option<u64>, Vec<(EntityId, u64)>);
+type ViewportRenderResult = (
+    u64,
+    Result<Option<RenderedFrame>, String>,
+    Option<GpuParticleFeedback>,
+);
 
 struct ViewportRenderRequest {
     sequence: u64,
     width: u32,
     height: u32,
     scene: ViewportScene,
+    effects: engine_world::effects::EffectFrame,
 }
 
 fn spawn_viewport_renderer(
@@ -3321,7 +3482,7 @@ fn spawn_viewport_renderer(
             let mut renderer = match SceneViewportRenderer::new(BackendRequest::Auto) {
                 Ok(renderer) => renderer,
                 Err(error) => {
-                    let _ = result_sender.send((0, Err(error.to_string())));
+                    let _ = result_sender.send((0, Err(error.to_string()), None));
                     context.request_repaint();
                     return;
                 }
@@ -3333,9 +3494,21 @@ fn spawn_viewport_renderer(
                     request = newer;
                 }
                 let result = renderer
-                    .render(request.width, request.height, &request.scene)
+                    .set_effect_frame(&request.effects)
+                    .and_then(|()| renderer.render(request.width, request.height, &request.scene))
                     .map_err(|error| error.to_string());
-                if result_sender.send((request.sequence, result)).is_err() {
+                let feedback = if matches!(&result, Ok(Some(_))) {
+                    Some((
+                        renderer.gpu_particle_context(),
+                        renderer.take_gpu_particle_acknowledgements(),
+                    ))
+                } else {
+                    None
+                };
+                if result_sender
+                    .send((request.sequence, result, feedback))
+                    .is_err()
+                {
                     break;
                 }
                 context.request_repaint();
@@ -3422,6 +3595,10 @@ fn panel_visibility_menu(
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "extract primitive and imported geometry under one authored camera and material contract"
+)]
 fn viewport_scene(
     document: &AuthoringDocument,
     camera: EditorCamera,
@@ -3439,7 +3616,7 @@ fn viewport_scene(
             continue;
         };
         let mesh_key = hash_value(&format!("{primitive:?}"));
-        let instance_key = hash_value(&entity.to_string());
+        let instance_key = hash_value(&entity);
         let vertices = generated
             .positions
             .iter()
@@ -3455,7 +3632,16 @@ fn viewport_scene(
             })
             .collect();
         meshes.push(ViewportMesh {
-            textures: document.world().resolved_textures(entity),
+            textures: {
+                let mut textures = document.world().resolved_textures(entity);
+                textures.material = textures.material.or(extracted.material);
+                textures.visibility_layers = document
+                    .world()
+                    .part_attributes(entity)
+                    .unwrap_or_default()
+                    .visibility_layers;
+                textures
+            },
             instance_key,
             mesh_key,
             vertices,
@@ -3488,10 +3674,17 @@ fn viewport_scene(
                         .unwrap_or([0.0, 1.0, 0.0]),
                 })
                 .collect();
-            let textures = document.world().resolved_textures(extracted.entity);
-            let color = if textures
-                .maps
-                .contains_key(&engine_world::TextureMap::BaseColor)
+            let mut textures = document.world().resolved_textures(extracted.entity);
+            textures.material = textures.material.or(extracted.material);
+            textures.visibility_layers = document
+                .world()
+                .part_attributes(extracted.entity)
+                .unwrap_or_default()
+                .visibility_layers;
+            let color = if textures.material.is_some()
+                || textures
+                    .maps
+                    .contains_key(&engine_world::TextureMap::BaseColor)
             {
                 document
                     .world()
@@ -3506,7 +3699,7 @@ fn viewport_scene(
             };
             meshes.push(ViewportMesh {
                 textures,
-                instance_key: hash_value(&(extracted.entity.to_string(), mesh_index)),
+                instance_key: hash_value(&(extracted.entity, mesh_index)),
                 mesh_key: hash_value(&(extracted.mesh, mesh_index)),
                 vertices,
                 indices: imported.indices.clone(),
@@ -4139,6 +4332,8 @@ struct SceneTreeDrag {
 enum SceneTreeAction {
     Rename(EntityId, String),
     TextureFiles(EntityId, Vec<PathBuf>),
+    EffectFile(EntityId, PathBuf),
+    EffectPreset(EntityId, Box<engine_world::effects::EffectAsset>),
     Copy(EntityId),
     Cut(EntityId),
     Paste(Option<EntityId>),
@@ -4271,9 +4466,17 @@ fn scene_entry_row(
         response.dnd_set_drag_payload(SceneTreeDrag { entity });
     }
     if can_edit {
+        if let Some(payload) = response.dnd_release_payload::<effects::PresetDrop>() {
+            result.action = Some(SceneTreeAction::EffectPreset(
+                entity,
+                Box::new(payload.0.clone()),
+            ));
+        }
         if let Some(payload) = response.dnd_release_payload::<ViewportDrop>() {
             let paths = payload.project_paths();
-            if paths.iter().all(|p| textures::is_texture(p)) {
+            if paths.len() == 1 && paths[0].extension().is_some_and(|ext| ext == "effect") {
+                result.action = Some(SceneTreeAction::EffectFile(entity, paths[0].clone()));
+            } else if !paths.is_empty() && paths.iter().all(|p| textures::is_texture(p)) {
                 result.action = Some(SceneTreeAction::TextureFiles(entity, paths));
             }
         }
@@ -5602,6 +5805,7 @@ fn camera_placement(camera: EditorCamera) -> LocalTransform {
 fn edit_camera(ui: &mut egui::Ui, camera: &mut engine_world::Camera) -> bool {
     let before = *camera;
     ui.checkbox(&mut camera.active, "Active");
+    ui.add(egui::DragValue::new(&mut camera.visibility_layers).prefix("Visibility layer mask "));
     ui.add(egui::DragValue::new(&mut camera.order).prefix("Priority "));
     ui.add(
         egui::DragValue::new(&mut camera.zoom)
@@ -5759,6 +5963,7 @@ mod explorer_tests {
             gizmo_widget: &mut transform_widget::TransformWidget::default(),
             scene_graph: &mut scene_graph::SceneGraph::default(),
             ui_designer: &mut ui_designer::UiDesigner::default(),
+            effect_preview: &mut effects::EffectPreview::default(),
             model_assets: &mut BTreeMap::new(),
             project_file_action: &mut action,
         };
@@ -6092,6 +6297,7 @@ mod explorer_tests {
                 gizmo_widget: &mut transform_widget::TransformWidget::default(),
                 scene_graph: &mut scene_graph::SceneGraph::default(),
                 ui_designer: &mut ui_designer::UiDesigner::default(),
+                effect_preview: &mut effects::EffectPreview::default(),
                 model_assets: &mut BTreeMap::new(),
                 project_file_action: &mut action,
             };

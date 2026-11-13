@@ -1,0 +1,66 @@
+---@class RusticEffectCommon
+---@field enabled boolean
+---@field visible boolean
+---@field auto_play boolean
+---@field looping boolean
+---@field duration number Seconds, positive.
+---@field delay number Seconds, nonnegative.
+---@field time_scale number Nonnegative.
+---@field simulation_space 'Local'|'World'
+---@field parameters table<string,RusticEffectParameter>
+---@field random_seed integer
+---@alias RusticEffectParameter {Scalar:number}|{Vector:number[]}|{Color:number[]}|{Boolean:boolean}
+---@class RusticEffectSoundCue
+---@field asset string
+---@field delay number
+---@field volume number
+---@field pitch number
+---@field spatial boolean
+---@field looping boolean
+---@class RusticEffectParameterBinding
+---@field parameter string
+---@field child integer
+---@field property_path string
+---@field scale number
+---@field offset number
+---@class RusticEffectTriggerBinding
+---@field source_child integer
+---@field event 'Birth'|'Collision'|'Death'|'Completed'
+---@field target_child integer
+---@field action 'Play'|'Pause'|'Resume'|'Stop'|'Restart'|'Reset'
+---@class RusticEffectGroup
+---@field source string|nil Readonly source asset identity.
+---@field child_entities string[] Readonly authored track identities.
+---@field source_baseline table|nil Readonly source defaults.
+---@field auto_play boolean
+---@field looping boolean
+---@field duration number
+---@field time_scale number
+---@field sound_cues RusticEffectSoundCue[]
+---@field parameters table<string,RusticEffectParameter>
+---@field bindings RusticEffectParameterBinding[]
+---@field trigger_bindings RusticEffectTriggerBinding[]
+---@class RusticEffectComponent
+---@field common RusticEffectCommon
+---@field kind table<string,table> One enum variant, e.g. Particle={rate=30}.
+---@class RusticEffectsApi
+---@field types fun():string[]
+---@field refreshProbe fun(entity:string|RusticObjectPath|nil):integer
+---@field spawn fun(asset:string,position:number[],lifetime:number,parent:string|RusticObjectPath|nil):string
+---@field instantiate fun(asset:string,parent:string|RusticObjectPath|nil,position:number[]|nil):string
+---@field sampleWind fun(position:number[],time:number,layers:integer|nil):number[]
+---@field create fun(entity:string|RusticObjectPath|nil,kind:string):RusticEffectComponent
+---@field get fun(entity:string|RusticObjectPath|nil):RusticEffectComponent|nil
+---@field group fun(entity:string|RusticObjectPath|nil):RusticEffectGroup|nil
+---@field configureGroup fun(entity:string|RusticObjectPath|nil,settings:table):RusticEffectGroup
+---@field configure fun(entity:string|RusticObjectPath|nil,settings:table):RusticEffectComponent
+---@field state fun(entity:string|RusticObjectPath|nil):string
+---@field play fun(entity:string|RusticObjectPath|nil)
+---@field pause fun(entity:string|RusticObjectPath|nil)
+---@field resume fun(entity:string|RusticObjectPath|nil)
+---@field stop fun(entity:string|RusticObjectPath|nil)
+---@field restart fun(entity:string|RusticObjectPath|nil)
+---@field reset fun(entity:string|RusticObjectPath|nil)
+---@field dispose fun(entity:string|RusticObjectPath|nil)
+---@type RusticEffectsApi
+Effects=Effects

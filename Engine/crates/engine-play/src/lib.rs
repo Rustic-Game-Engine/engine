@@ -5,6 +5,7 @@
 //! runtime, tests, and future command-line tooling.
 
 pub mod changes;
+mod effect_services;
 mod entity_services;
 pub mod frame_ring;
 #[cfg(feature = "native")]
@@ -58,3 +59,6 @@ mod audio_capture;
 mod audio_input;
 
 pub mod game_session;
+
+mod effect_audio;
+pub use effect_audio::EffectAudioPreview;

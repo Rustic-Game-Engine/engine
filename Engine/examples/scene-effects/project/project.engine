@@ -1,0 +1,27 @@
+(
+    format_version: 1,
+    project_id: "f54c145a-06cd-4c28-b0a2-017d83603c00",
+    template: blank,
+    metadata: (
+        name: "Scene Effects Showcase",
+        description: Some("A blank project with only the standard directory layout."),
+        tags: [],
+        created_unix_seconds: 1794202439,
+        updated_unix_seconds: 1794202439,
+    ),
+    directories: (
+        assets: "assets",
+        ui: "ui",
+        scenes: "scene",
+        scripts: "scripts",
+        shaders: "shaders",
+        materials: "materials",
+        plugins: "plugins",
+        config: "config",
+        cache: "cache",
+        temp: "temp",
+        builds: "builds",
+        logs: "logs",
+    ),
+    start_scene: Some("showcase.scene"),
+)

@@ -686,3 +686,20 @@ class GlobalApi:
 class CanonicalGame:
     def __init__(self): self.scene=ApiPath('game.scene','scene'); self.rustic=GlobalApi()
 game=CanonicalGame()
+
+# Scene effects extend the existing Effects tween helpers.
+Effects.refreshProbe=staticmethod(lambda entity=None:rustic.query(dict(op='effect_refresh_probe',entity=_entity(entity))))
+Effects.spawn=staticmethod(lambda asset,position,lifetime,parent=None:rustic.query(dict(op='effect_spawn',asset=asset,parent=None if parent is None else _entity(parent),position=position,lifetime=lifetime)))
+Effects.instantiate=staticmethod(lambda asset,parent=None,position=None:rustic.query(dict(op='effect_instantiate',asset=asset,parent=None if parent is None else _entity(parent),position=[0,0,0] if position is None else position)))
+Effects.types=staticmethod(lambda:rustic.query(dict(op='effect_types')))
+Effects.sampleWind=staticmethod(lambda position,time,layers=4294967295:rustic.query(dict(op='effect_wind',position=position,time=time,layers=layers)))
+Effects.create=staticmethod(lambda entity,kind:rustic.query(dict(op='effect_create',entity=_entity(entity),kind=kind)))
+Effects.get=staticmethod(lambda entity=None:rustic.query(dict(op='effect_get',entity=_entity(entity))))
+Effects.group=staticmethod(lambda entity=None:rustic.query(dict(op='effect_group_get',entity=_entity(entity))))
+Effects.configureGroup=staticmethod(lambda entity,settings:rustic.query(dict(op='effect_group_configure',entity=_entity(entity),settings=settings)))
+Effects.configure=staticmethod(lambda entity,settings:rustic.query(dict(op='effect_configure',entity=_entity(entity),settings=settings)))
+Effects.state=staticmethod(lambda entity=None:rustic.query(dict(op='effect_state',entity=_entity(entity))))
+def _effect_control(action):
+    return staticmethod(lambda entity=None:rustic.query(dict(op='effect_control',entity=_entity(entity),action=action)))
+for _effect_action in ('play','pause','resume','stop','restart','reset','dispose'):
+    setattr(Effects,_effect_action,_effect_control(_effect_action))

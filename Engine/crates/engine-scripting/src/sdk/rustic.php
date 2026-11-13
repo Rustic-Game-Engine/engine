@@ -240,6 +240,25 @@ final class Path{
     static function follow(?string $e,array $path,array $opts):GameplayHandle{return Gameplay::start(["kind"=>"path","entity"=>Gameplay::entity($e),"path"=>$path,"easing"=>$opts["easing"]??"Linear","orient_to_path"=>$opts["orientToPath"]??false]+array_intersect_key($opts,array_flip(["duration","speed"])),$opts["loop"]??false,0,$opts["pingPong"]??false);}
 }
 final class Effects{
+    static function types():array{global $rustic;return $rustic->query(["op"=>"effect_types"]);}
+    static function create(?string $entity,string $kind):array{global $rustic;return $rustic->query(["op"=>"effect_create","entity"=>Gameplay::entity($entity),"kind"=>$kind]);}
+    static function get(?string $entity):?array{global $rustic;return $rustic->query(["op"=>"effect_get","entity"=>Gameplay::entity($entity)]);}
+    static function group(?string $entity):?array{global $rustic;return $rustic->query(["op"=>"effect_group_get","entity"=>Gameplay::entity($entity)]);}
+    static function configure(?string $entity,array $settings):array{global $rustic;return $rustic->query(["op"=>"effect_configure","entity"=>Gameplay::entity($entity),"settings"=>$settings]);}
+    static function configureGroup(?string $entity,array $settings):array{global $rustic;return $rustic->query(["op"=>"effect_group_configure","entity"=>Gameplay::entity($entity),"settings"=>$settings]);}
+    static function refreshProbe(?string $entity):int{global $rustic;return $rustic->query(["op"=>"effect_refresh_probe","entity"=>Gameplay::entity($entity)]);}
+    static function state(?string $entity):string{global $rustic;return $rustic->query(["op"=>"effect_state","entity"=>Gameplay::entity($entity)]);}
+    static function instantiate(string $asset,?string $parent=null,array $position=[0,0,0]):string{global $rustic;return $rustic->query(["op"=>"effect_instantiate","asset"=>$asset,"parent"=>$parent===null?null:Gameplay::entity($parent),"position"=>$position]);}
+    static function spawn(string $asset,array $position,float $lifetime,?string $parent=null):string{global $rustic;return $rustic->query(["op"=>"effect_spawn","asset"=>$asset,"parent"=>$parent===null?null:Gameplay::entity($parent),"position"=>$position,"lifetime"=>$lifetime]);}
+    static function sampleWind(array $position,float $time,int $layers=4294967295):array{global $rustic;return $rustic->query(["op"=>"effect_wind","position"=>$position,"time"=>$time,"layers"=>$layers]);}
+    static function play(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"play"]);}
+    static function pause(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"pause"]);}
+    static function resume(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"resume"]);}
+    static function stop(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"stop"]);}
+    static function restart(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"restart"]);}
+    static function reset(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"reset"]);}
+    static function dispose(?string $entity):void{global $rustic;$rustic->query(["op"=>"effect_control","entity"=>Gameplay::entity($entity),"action"=>"dispose"]);}
+
     static function fade(?string $e,float $opacity,float $d,string $ease="Linear"):GameplayHandle{return Tween::to($e,"Opacity",$opacity,$d,$ease);}
     static function flash(?string $e,array $color,float $d,string $ease="Linear"):GameplayHandle{return Gameplay::start(Tween::action($e,"Color",$color,$d,$ease),false,1,true);}
     static function pulse(?string $e,array $scale,float $d,string $ease="Linear"):GameplayHandle{return Gameplay::start(Tween::action($e,"Scale",$scale,$d,$ease),false,1,true);}

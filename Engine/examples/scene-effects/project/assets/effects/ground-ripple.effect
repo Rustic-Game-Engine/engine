@@ -1,0 +1,91 @@
+(
+    version: 1,
+    name: "Ground ripple",
+    effects: [
+        (
+            source: None,
+            common: (
+                parameters: {},
+                bounds: None,
+                enabled: true,
+                visible: true,
+                auto_play: true,
+                looping: true,
+                duration: 5.0,
+                delay: 0.0,
+                time_scale: 1.0,
+                simulation_space: World,
+                attachment_target: None,
+                visibility_layers: 4294967295,
+                render_distance: 1000.0,
+                quality: Medium,
+                random_seed: 1,
+                priority: 0,
+            ),
+            kind: WaterRipple((
+                expansion_speed: None,
+                edge_softness: 0.0,
+                align_to_surface: false,
+                surface_layers: 4294967295,
+                displacement_strength: 0.0,
+                displacement_frequency: 4.0,
+                screen_distortion: 0.0,
+                target: None,
+                source_velocity: (0.0, 0.0, 0.0),
+                wake_angle: 0.6,
+                foam_intensity: 0.5,
+                foam_lifetime: 1.0,
+                normal_strength: 1.0,
+                max_disturbances: 32,
+                initial_radius: 0.1,
+                final_radius: 4.0,
+                thickness: 0.2,
+                vertical_offset: 0.01,
+                amplitude: 0.1,
+                wavelength: 1.0,
+                damping: 1.0,
+                appearance: (
+                    color: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                color: (1.0, 1.0, 1.0, 1.0),
+                            ),
+                        ],
+                    ),
+                    color_parameter: None,
+                    opacity: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 1.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 0.0,
+                            ),
+                        ],
+                    ),
+                    size: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 1.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 1.0,
+                            ),
+                        ],
+                    ),
+                    material: None,
+                    texture: None,
+                    emission: 1.0,
+                    blend: Alpha,
+                    uv_scale: (1.0, 1.0),
+                    uv_scroll: (0.0, 0.0),
+                ),
+            )),
+        ),
+    ],
+)

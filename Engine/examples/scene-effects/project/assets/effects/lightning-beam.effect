@@ -1,0 +1,85 @@
+(
+    version: 1,
+    name: "Lightning beam",
+    effects: [
+        (
+            source: None,
+            common: (
+                parameters: {},
+                bounds: None,
+                enabled: true,
+                visible: true,
+                auto_play: true,
+                looping: true,
+                duration: 5.0,
+                delay: 0.0,
+                time_scale: 1.0,
+                simulation_space: World,
+                attachment_target: None,
+                visibility_layers: 4294967295,
+                render_distance: 1000.0,
+                quality: Medium,
+                random_seed: 1,
+                priority: 0,
+            ),
+            kind: Beam((
+                branch_probability: 1.0,
+                branch_width_scale: 0.5,
+                pulse_speed: 0.0,
+                endpoint_collision: false,
+                collision_layers: 4294967295,
+                start_target: None,
+                end_target: None,
+                start: (0.0, 0.0, 0.0),
+                end: (0.0, 3.0, 0.0),
+                width: 0.06,
+                segments: 24,
+                noise_amplitude: 0.35,
+                noise_frequency: 3.0,
+                noise_speed: 5.0,
+                branch_count: 0,
+                appearance: (
+                    color: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                color: (0.3, 0.5, 1.0, 1.0),
+                            ),
+                        ],
+                    ),
+                    color_parameter: None,
+                    opacity: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 1.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 0.0,
+                            ),
+                        ],
+                    ),
+                    size: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 1.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 1.0,
+                            ),
+                        ],
+                    ),
+                    material: None,
+                    texture: None,
+                    emission: 1.0,
+                    blend: Additive,
+                    uv_scale: (1.0, 1.0),
+                    uv_scroll: (0.0, 0.0),
+                ),
+            )),
+        ),
+    ],
+)

@@ -1,0 +1,11 @@
+(
+    format_version: 1,
+    asset_id: "7b019ffe-7c70-4591-9936-ff5b361f897d",
+    importer_id: "rustic.image",
+    importer_version: 1,
+    settings: (
+        version: 0,
+        values: {},
+    ),
+    dependencies: [],
+)

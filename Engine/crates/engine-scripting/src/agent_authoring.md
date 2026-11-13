@@ -119,6 +119,59 @@ These are optional references, not installed dependencies or engine API specific
 - Broader design/accessibility reference catalog: https://github.com/jeremylongworth-source/AgentSkills/tree/main/skills
 - Blender workflow reference: https://github.com/Chara-Xh/blender-modeling-skill/tree/main/skills/blender-modeling
 
+## Author scene effects
+
+Use `editor_status` to inspect each object's `effect` component. `object_create`
+accepts an optional `effect`; `object_update` accepts `properties.effect`. These
+values use the typed scene representation: `common` contains playback settings,
+and `kind` contains exactly one variant such as `Particle`, `Trail`, `Beam`,
+`Weather`, or `ScreenFlash`. For example, attach a particle emitter with
+`{"entity_id":"<live UUID>","properties":{"effect":{"kind":{"Particle":{"rate":40}},"common":{"random_seed":42}}}}`.
+Unspecified fields use the engine defaults. Update by reading the existing
+component, changing its fields, then submitting the complete component. Set
+`properties.effect` to null to remove it. Creation, edits and removal participate
+in ordinary scene undo/redo; duplicate retains authored effect configuration.
+Save with `scene_save`. Do not attach generators as gameplay scripts.
+
+Runtime Lua/Luau, JavaScript, Python, C, C++, C#, Java and PHP provide language-native facades for `Effects.types()`,
+`Effects.create(entity,kind)`, `Effects.get(entity)`,
+`Effects.configure(entity,settings)`, `Effects.state(entity)`, and
+`Effects.play/pause/resume/stop/restart/reset/dispose(entity)`. Existing
+`Effects.fade/flash/pulse/shake` helpers remain available. Kind names are exact,
+case-sensitive serialized enum variants returned by `Effects.types()`.
+`configure` merges existing nested fields and rejects unknown property names;
+for example `Effects.configure(id,{kind={Particle={rate=50}}})` in Lua, or
+`Effects.configure(id,{kind:{Particle:{rate:50}}})` in JavaScript. Runtime effects
+advance on the existing scaled scene clock. Runtime edits are temporary; use
+editor component edits and save for authored persistence. Dispose removes the
+effect component, retaining its entity. The facades share the existing query boundary with `effect_types`, `effect_create`, `effect_get`,
+`effect_configure`, `effect_control`, and `effect_state` operations.
+Use `Effects.group` and `Effects.configureGroup` to inspect/edit composite timelines,
+audio tracks, parameters, property bindings and event links. Runtime-only child IDs
+and playback cursors cannot be configured. `Effects.refreshProbe` explicitly requests
+a new six-face reflection capture; a queued request completes on a capable renderer.
+
+Inspect actual viewport output in editor and Play. Do not imply every configured
+advanced renderer option is supported on every backend; consult the Scene Effects
+compatibility documentation before promising GPU simulation, captures, or depth
+features.
+
+Reusable `.effect` assets retain standard adjacent `.rmeta` stable IDs. The runtime
+loads these sources when opening a scene. `Effects.instantiate(assetUUID,parent,
+position)` creates an independent group at local `position` (defaults to origin;
+null parent means scene root). `Effects.spawn(assetUUID,position,lifetime,parent)`
+creates a temporary instance and destroys its whole group after positive lifetime
+seconds on the existing scene clock. Use an explicit lifetime long enough for
+smoke/tails to finish. Group playback controls apply to descendant effects;
+`dispose` removes their effect components while retaining scene entities.
+
+`Effects.sampleWind(position,time,layers)` samples the same global/local wind
+fields as particles; time is seconds and layers defaults to all bits. Subscribe
+to effect events with existing `Events.connect(entity,'EffectCompleted',callback)`
+or `EffectBirth`, `EffectCollision`, `EffectDeath`. Each event supplies an xyz
+position argument and uses the existing bounded signal queue. Completion is
+meaningful for non-looping effects. Cosmetic particle contacts do not apply
+authoritative damage or physics forces.
 ## Exporting a game website
 
 Use File → Build Project… → Website (playable game). Hosted runtime supports all
@@ -139,3 +192,17 @@ agent export tool; use the editor's build dialog.
 ## Physics authoring
 
 Built-in primitives use oriented box collision proxies and unit mass in Play. Anchor floors and ramps, enable can_collide on both bodies, and author friction (0..10, default 0.5) through object_update.part_attributes. Rotated planes/boxes provide slope normals; curved primitives remain boxes and sheared transforms use enclosing AABBs. Use Physics.force once per FixedUpdate with dt, impulse to add velocity, and launch to replace it. Raycasts/sphere casts return rotated surface normals. Physics.ground(entity, maxAngle) reads the last completed fixed step and returns null or {entity, normal, angle, walkable}; it does not implement a character controller. Register Physics.onCollisionEnter/Stay/Exit explicitly from Start; callbacks arrive during Update with (other ID, world normal), using native array callbacks in C/C++/C#/Java. Both bodies need can_touch and can_collide; at least one must be unanchored. Defining OnCollisionEnter lifecycle functions alone does not register them. Inspect logs and test sliding, landing and leaving contact.
+
+Composite roots expose `Effects.group(entity)` and `Effects.configureGroup(entity,settings)`.
+Configuration validates the whole update before applying it. Group source identity,
+source defaults and child entity IDs are readonly at runtime; instantiate an asset
+before editing its group settings. Parameters use tagged values such as
+`{strength:{Scalar:2}}`; setting a parameter key to null removes its override.
+Bindings address authored child track indices and validated property paths.
+Use `Effects.refreshProbe(entity)` to request a fresh six-face capture, including a
+baked probe. Probe capture layers and camera layers are independent. Author
+`part_attributes.visibility_layers` for mesh inclusion, and inspect `effect_group`
+and `material_asset` in `editor_status`. `object_update` and `object_create` accept
+validated composite groups and existing project `.material` asset UUIDs; updates
+share the editor transaction and undo history. Validate the actual backend through
+playtest logs and viewport capture.

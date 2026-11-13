@@ -224,6 +224,7 @@ struct GameplayContext {
     runtime: GameplayRuntime,
     physics: crate::physics::PhysicsWorld,
     audio: engine_core::gameplay::audio::Mixer,
+    effect_audio: crate::effect_audio::EffectAudioRuntime,
     audio_output: crate::audio_output::AudioOutput,
     audio_capture: crate::audio_capture::AudioCapture,
     clips: BTreeMap<(EntityId, String), engine_core::gameplay::animation::Clip>,
@@ -239,6 +240,7 @@ impl Default for GameplayContext {
             runtime: GameplayRuntime::default(),
             physics: crate::physics::PhysicsWorld::default(),
             audio: engine_core::gameplay::audio::Mixer::default(),
+            effect_audio: crate::effect_audio::EffectAudioRuntime::default(),
             audio_output: crate::audio_output::AudioOutput::new(),
             audio_capture: crate::audio_capture::AudioCapture::default(),
             clips: BTreeMap::new(),
@@ -297,6 +299,7 @@ impl SceneRuntime {
             scale: snapshot.local_transform.scale.to_array(),
             part_attributes: snapshot.part_attributes,
             scripts,
+            effect: snapshot.effect,
         }))
     }
     #[allow(clippy::too_many_lines)]
@@ -324,6 +327,8 @@ impl SceneRuntime {
         {
             let mut world = world.lock().map_err(|_| "world lock poisoned")?;
             let mut context = gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
+            context.effect_audio.set_root(snapshot_root)?;
+            load_effect_assets(snapshot_root, &mut world, &logs, &dropped_logs);
             let entities = world.entity_ids().collect::<Vec<_>>();
             for entity in entities {
                 let Some(mesh) = world.mesh(entity).map_err(|e| e.to_string())? else {
@@ -446,6 +451,28 @@ impl SceneRuntime {
                 behaviors.push(behavior);
             }
         }
+        {
+            let mut world = world.lock().map_err(|_| "world lock poisoned")?;
+            world.propagate_transforms();
+            world.update_effects(0.0);
+            let mut context = gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
+            let events = world.take_effect_audio_events();
+            let audio_result = {
+                let GameplayContext {
+                    effect_audio,
+                    audio,
+                    scene,
+                    ..
+                } = &mut *context;
+                effect_audio.dispatch(*scene, &world, events, audio)
+            };
+            if let Err(error) = audio_result {
+                push_log(&logs, &dropped_logs, "warn", &error);
+            }
+            if let Err(error) = emit_effect_events(&world, &mut context.runtime.signals) {
+                push_log(&logs, &dropped_logs, "warn", &error);
+            }
+        }
         Ok(Self {
             gameplay,
             behaviors,
@@ -533,6 +560,14 @@ impl SceneRuntime {
                             ],
                         )?;
                     }
+                    world.propagate_transforms();
+                    #[allow(clippy::cast_possible_truncation, reason = "cosmetic simulation stores seconds as f32 and bounds its integration steps")]
+                    let effect_delta = scaled as f32;
+                    world.update_effects(effect_delta);
+                    let events=world.take_effect_audio_events();
+                    let audio_result={let GameplayContext{effect_audio,audio,scene,..}=&mut *context;effect_audio.dispatch(*scene,&world,events,audio)};
+                    if let Err(error)=audio_result{push_log(&self.logs,&self.dropped_logs,"warn",&error);}
+                    emit_effect_events(&world, &mut context.runtime.signals)?;
                     Ok(())
                 })
         {
@@ -540,7 +575,7 @@ impl SceneRuntime {
                 &self.logs,
                 &self.dropped_logs,
                 "error",
-                &format!("physics step failed: {error}"),
+                &format!("scene simulation step failed: {error}"),
             );
         }
     }
@@ -618,6 +653,14 @@ impl SceneRuntime {
         self.unregister_disabled();
     }
     pub fn stop(&mut self) {
+        if let Ok(mut context) = self.gameplay.lock() {
+            let GameplayContext {
+                effect_audio,
+                audio,
+                ..
+            } = &mut *context;
+            effect_audio.stop(audio);
+        }
         for behavior in &mut self.behaviors {
             let _ = behavior.on_disable();
             let _ = behavior.on_destroy();
@@ -1177,6 +1220,10 @@ impl GameplayHost for RuntimeHost {
                 Some(EngineValue::Vec3(value)) => serde_json::json!(value),
                 Some(EngineValue::Entity(Some(value))) => serde_json::json!(value),
             });
+        }
+        if op.starts_with("effect_") {
+            let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
+            return crate::effect_services::query(&mut world, query);
         }
         if crate::entity_services::handles(op) {
             let mut world = self.world.lock().map_err(|_| "world lock poisoned")?;
@@ -2381,6 +2428,135 @@ impl RuntimeHost {
     }
 }
 
+fn emit_effect_events(
+    world: &SceneWorld,
+    signals: &mut engine_core::gameplay::Signals,
+) -> Result<(), String> {
+    for event in &world.effect_frame().events {
+        let name = match event.kind {
+            engine_world::effects::EffectEventKind::Birth => "EffectBirth",
+            engine_world::effects::EffectEventKind::Collision => "EffectCollision",
+            engine_world::effects::EffectEventKind::Death => "EffectDeath",
+            engine_world::effects::EffectEventKind::Completed => "EffectCompleted",
+        };
+        signals.emit(
+            &engine_core::gameplay::Signal {
+                name: name.into(),
+                source: Some(event.entity),
+            },
+            vec![engine_core::gameplay::Payload::Value(
+                engine_core::gameplay::Value::Vector(event.position.as_dvec3().to_array()),
+            )],
+        )?;
+    }
+    Ok(())
+}
+
+/// Effect sources are indexed through the same authoritative stable sidecars as
+/// other assets. Invalid or missing cosmetics log a warning and retain the scene.
+fn load_effect_assets(
+    root: &Path,
+    world: &mut SceneWorld,
+    logs: &Arc<Mutex<VecDeque<(String, String)>>>,
+    dropped_logs: &Arc<Mutex<u64>>,
+) {
+    let scan = match engine_assets::scan_sidecars(root) {
+        Ok(scan) => scan,
+        Err(error) => {
+            push_log(
+                logs,
+                dropped_logs,
+                "warn",
+                &format!("effect asset scan skipped: {error}"),
+            );
+            return;
+        }
+    };
+    for (path, error) in &scan.corrupt {
+        if path.to_string_lossy().ends_with(".effect.rmeta") {
+            push_log(
+                logs,
+                dropped_logs,
+                "warn",
+                &format!("effect metadata {} skipped: {error}", path.display()),
+            );
+        }
+    }
+    for paths in scan.duplicates.values() {
+        if paths.iter().any(|p| {
+            p.extension()
+                .and_then(|v| v.to_str())
+                .is_some_and(|v| v.eq_ignore_ascii_case("effect"))
+        }) {
+            push_log(
+                logs,
+                dropped_logs,
+                "warn",
+                "effect assets with duplicate stable IDs were skipped; regenerate metadata for copied assets",
+            );
+        }
+    }
+    let mut referenced_assets = BTreeSet::new();
+    for entry in scan.entries {
+        if !entry
+            .source_relative
+            .extension()
+            .and_then(|v| v.to_str())
+            .is_some_and(|v| v.eq_ignore_ascii_case("effect"))
+        {
+            continue;
+        }
+        let path = root.join(&entry.source_relative);
+        let loaded = (|| {
+            let metadata = std::fs::symlink_metadata(&path).map_err(|e| e.to_string())?;
+            if !metadata.is_file() || metadata.file_type().is_symlink() {
+                return Err("effect source must be a regular file".to_string());
+            }
+            if metadata.len() > 4 * 1024 * 1024 {
+                return Err("effect asset exceeds 4 MiB".to_string());
+            }
+            let bytes = std::fs::read(&path).map_err(|e| e.to_string())?;
+            let asset = engine_world::effects::EffectAsset::from_bytes(&bytes)?;
+            for effect in &asset.effects {
+                referenced_assets.extend(crate::effect_services::references(effect));
+            }
+            world
+                .register_effect_asset(entry.meta.asset_id, asset)
+                .map_err(|e| e.to_string())
+        })();
+        if let Err(error) = loaded {
+            push_log(
+                logs,
+                dropped_logs,
+                "warn",
+                &format!(
+                    "effect asset {} skipped: {error}",
+                    entry.source_relative.display()
+                ),
+            );
+        }
+    }
+    referenced_assets.extend(
+        world
+            .entity_ids()
+            .filter_map(|id| world.effect(id).ok().flatten())
+            .flat_map(|effect| crate::effect_services::references(&effect)),
+    );
+    let missing = referenced_assets
+        .into_iter()
+        .filter(|id| !world.has_effect_asset(*id));
+    for id in missing {
+        push_log(
+            logs,
+            dropped_logs,
+            "warn",
+            &format!(
+                "scene references missing effect asset {id}; authored settings are retained, referenced child effects cannot spawn"
+            ),
+        );
+    }
+}
+
 fn bind_model(
     world: &mut SceneWorld,
     context: &mut GameplayContext,
@@ -2662,6 +2838,237 @@ rustic_run(['on_start'=>function(){global $rustic;Input::onClick($rustic->entity
                 "{}",
                 language.display_name()
             );
+        }
+    }
+
+    #[test]
+    fn bundled_effects_showcase_runs_real_scripts_and_replays_without_saving_runtime_state() {
+        let root =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/scene-effects/project");
+        let path = root.join("scene/showcase.scene");
+        let bytes = std::fs::read(&path).unwrap();
+        let scene = load_scene(&bytes).unwrap().document;
+        assert_eq!(
+            scene
+                .entities
+                .iter()
+                .filter_map(|e| e.effect.as_ref().map(|e| e.kind.name()))
+                .collect::<BTreeSet<_>>()
+                .len(),
+            26
+        );
+        let flash = scene
+            .entities
+            .iter()
+            .find(|entity| {
+                entity.effect.as_ref().is_some_and(|e| {
+                    matches!(e.kind, engine_world::effects::EffectKind::ScreenFlash(_))
+                })
+            })
+            .unwrap();
+        let config = flash.effect.as_ref().unwrap();
+        assert!(
+            !config.common.looping,
+            "showcase needs an observable one-shot to verify replay"
+        );
+        let mut runtime = RuntimeScripts::load(&root, &bytes).unwrap();
+        for _ in 0..90 {
+            runtime.fixed_update(1.0 / 60.0);
+            runtime.frame_update(1.0 / 60.0);
+        }
+        {
+            let world = runtime.active.world.lock().unwrap();
+            assert!(!world.effect_frame().particles.is_empty());
+            assert_eq!(
+                world.effect_state(flash.id).unwrap(),
+                Some(engine_world::effects::PlaybackState::Completed)
+            );
+        }
+        runtime.set_input_keys(vec!["ArrowUp".into()]);
+        runtime.fixed_update(1.0 / 60.0);
+        runtime.frame_update(1.0 / 60.0);
+        assert_eq!(
+            runtime
+                .active
+                .world
+                .lock()
+                .unwrap()
+                .effect_state(flash.id)
+                .unwrap(),
+            Some(engine_world::effects::PlaybackState::Playing)
+        );
+        runtime.set_input_keys(Vec::new());
+        runtime.stop();
+        let errors = runtime
+            .drain_logs()
+            .into_iter()
+            .filter(|(level, _)| level == "error")
+            .collect::<Vec<_>>();
+        assert!(errors.is_empty(), "showcase runtime errors: {errors:?}");
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
+    #[test]
+    fn effect_runtime_configuration_is_visible_to_live_editor_inspection() {
+        let temp = tempfile::tempdir().unwrap();
+        let entity = EntitySnapshot {
+            effect: Some(engine_world::EffectComponent::new(
+                engine_world::effects::EffectKind::Weather(
+                    engine_world::effects::WeatherVolume::default(),
+                ),
+            )),
+            ..Default::default()
+        };
+        let id = entity.id;
+        let mut scene = SceneDocument::new("Weather");
+        scene.entities.push(entity);
+        let runtime = RuntimeScripts::load(temp.path(), &scene.to_bytes().unwrap()).unwrap();
+        let mut host = environment_host(&runtime.active.world);
+        host.gameplay_query(serde_json::json!({"op":"effect_configure","entity":id,"settings":{"kind":{"Weather":{"intensity":0.25}}}})).unwrap();
+        let live = runtime.live_entity(id).unwrap().unwrap();
+        let engine_world::effects::EffectKind::Weather(weather) = live.effect.unwrap().kind else {
+            panic!("weather component missing");
+        };
+        assert!((weather.intensity - 0.25).abs() < f32::EPSILON);
+        let engine_world::effects::EffectKind::Weather(authored) =
+            scene.entities[0].effect.as_ref().unwrap().kind.clone()
+        else {
+            panic!("authored component changed");
+        };
+        assert!((authored.intensity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn effect_asset_sidecars_load_by_stable_id_and_invalid_cosmetics_only_warn() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("sparks.effect");
+        let asset = engine_world::effects::EffectAsset::new(
+            "Sparks",
+            vec![engine_world::EffectComponent::default()],
+        );
+        std::fs::write(&path, asset.to_bytes().unwrap()).unwrap();
+        let meta = engine_assets::AssetMeta::new("rustic.effect", 1);
+        engine_assets::save_meta(&engine_assets::sidecar_path(&path), &meta).unwrap();
+        let invalid = temp.path().join("invalid.effect");
+        std::fs::write(&invalid, b"invalid RON").unwrap();
+        engine_assets::save_meta(
+            &engine_assets::sidecar_path(&invalid),
+            &engine_assets::AssetMeta::new("rustic.effect", 1),
+        )
+        .unwrap();
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        let dropped = Arc::new(Mutex::new(0));
+        let mut world = SceneWorld::new();
+        load_effect_assets(temp.path(), &mut world, &logs, &dropped);
+        assert!(world.has_effect_asset(meta.asset_id));
+        assert!(
+            logs.lock()
+                .unwrap()
+                .iter()
+                .any(|(level, message)| level == "warn" && message.contains("invalid.effect"))
+        );
+        let root = world
+            .instantiate_effect_asset(meta.asset_id, None, engine_world::LocalTransform::IDENTITY)
+            .unwrap();
+        assert_eq!(world.descendants(root).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn non_looping_effect_completion_uses_existing_scene_signal_delivery() {
+        let mut effect = engine_world::EffectComponent::default();
+        effect.common.looping = false;
+        effect.common.duration = 0.1;
+        let entity = EntitySnapshot {
+            effect: Some(effect),
+            ..Default::default()
+        };
+        let id = entity.id;
+        let mut world = SceneWorld::new();
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+            .unwrap();
+        world.propagate_transforms();
+        let owner = Owner {
+            entity_bound: true,
+            scene: engine_core::SceneId::new(),
+            entity: id,
+            script: ScriptId::new(),
+        };
+        let mut signals = engine_core::gameplay::Signals::default();
+        signals
+            .connect(
+                owner,
+                "complete".into(),
+                engine_core::gameplay::Signal {
+                    name: "EffectCompleted".into(),
+                    source: Some(id),
+                },
+                true,
+            )
+            .unwrap();
+        world.update_effects(0.2);
+        emit_effect_events(&world, &mut signals).unwrap();
+        let delivered = signals.drain(owner);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].source, Some(id));
+        world.update_effects(0.2);
+        emit_effect_events(&world, &mut signals).unwrap();
+        assert!(signals.drain(owner).is_empty());
+    }
+
+    #[test]
+    fn scene_effects_wrappers_mutate_the_same_live_component() {
+        let fixtures: &[(ScriptLanguage, &str, &[u8])] = &[
+            (ScriptLanguage::Lua54, "effects.lua", br"return {Start=function()
+                Effects.create(nil,'Particle')
+                Effects.configure(nil,{common={looping=false},kind={Particle={rate=55}}})
+                assert(Effects.get(nil).kind.Particle.rate==55)
+                assert(#Effects.types()==26)
+                Effects.play(nil); Effects.pause(nil)
+                assert(Effects.state(nil)=='Paused')
+            end}"),
+            (ScriptLanguage::JavaScript, "effects.js", br"globalThis.behavior={Start(){
+                Effects.create(null,'Particle');
+                Effects.configure(null,{common:{looping:false},kind:{Particle:{rate:55}}});
+                if(Effects.get(null).kind.Particle.rate!==55 || Effects.types().length!==26)throw Error('config');
+                Effects.play(null);Effects.pause(null);
+                if(Effects.state(null)!=='Paused')throw Error('state');
+            }};"),
+            (ScriptLanguage::Python, "effects.py", br"from rustic import *
+def on_start():
+    Effects.create(None,'Particle')
+    Effects.configure(None,{'common':{'looping':False},'kind':{'Particle':{'rate':55}}})
+    assert Effects.get().get('kind').get('Particle').get('rate')==55
+    assert len(Effects.types())==26
+    Effects.play(); Effects.pause()
+    assert Effects.state()=='Paused'
+run(globals())"),
+        ];
+        for (language, name, source) in fixtures {
+            if *language == ScriptLanguage::Python
+                && !engine_scripting::probe_language_toolchain(*language).available
+            {
+                continue;
+            }
+            let mut world = SceneWorld::new();
+            let entity = EntitySnapshot::default();
+            let id = entity.id;
+            world
+                .apply_commands(&[WorldCommand::Spawn(Box::new(entity))])
+                .unwrap();
+            let world = Arc::new(Mutex::new(world));
+            let mut host = environment_host(&world);
+            host.entity = id;
+            let mut behavior =
+                RuntimeBehavior::load(*language, ScriptId::new(), source, name, Box::new(host))
+                    .unwrap();
+            behavior
+                .on_start()
+                .unwrap_or_else(|e| panic!("{} effects: {e}", language.display_name()));
+            assert!(matches!(
+                world.lock().unwrap().effect(id).unwrap().unwrap().kind,
+                engine_world::effects::EffectKind::Particle(_)
+            ));
         }
     }
 

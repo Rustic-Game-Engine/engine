@@ -1,0 +1,11 @@
+(
+    format_version: 1,
+    asset_id: "bfb79098-2fb2-4d65-aa97-ef9185a7b981",
+    importer_id: "rustic.effect",
+    importer_version: 1,
+    settings: (
+        version: 0,
+        values: {},
+    ),
+    dependencies: [],
+)

@@ -215,6 +215,26 @@ class Rustic {
         static Gameplay.Handle followSpeed(String e,Curve path,double speed,String easing,boolean loop,boolean pingPong,boolean orientToPath){return Gameplay.start(Map.of("kind","path","entity",Gameplay.entity(e),"path",path,"speed",speed,"easing",easing,"orient_to_path",orientToPath),loop,0,pingPong);}
     }
     static class Effects{
+        static Object types(){return query(args("effect_types"));}
+        static Object create(String entity,String kind){return query(args("effect_create","entity",Gameplay.entity(entity),"kind",kind));}
+        static Object get(String entity){return query(args("effect_get","entity",Gameplay.entity(entity)));}
+        static Object group(String entity){return query(args("effect_group_get","entity",Gameplay.entity(entity)));}
+        static Object configure(String entity,Object settings){return query(args("effect_configure","entity",Gameplay.entity(entity),"settings",settings));}
+        static Object configureGroup(String entity,Object settings){return query(args("effect_group_configure","entity",Gameplay.entity(entity),"settings",settings));}
+        static long refreshProbe(String entity){return ((Number)query(args("effect_refresh_probe","entity",Gameplay.entity(entity)))).longValue();}
+        static String state(String entity){return (String)query(args("effect_state","entity",Gameplay.entity(entity)));}
+        static String instantiate(String asset,String parent,double[] position){return (String)query(args("effect_instantiate","asset",asset,"parent",parent==null?null:Gameplay.entity(parent),"position",position));}
+        static String instantiate(String asset){return instantiate(asset,null,new double[]{0,0,0});}
+        static String spawn(String asset,double[] position,double lifetime,String parent){return (String)query(args("effect_spawn","asset",asset,"position",position,"lifetime",lifetime,"parent",parent==null?null:Gameplay.entity(parent)));}
+        static Object sampleWind(double[] position,double time,long layers){return query(args("effect_wind","position",position,"time",time,"layers",layers));}
+        static void play(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","play"));}
+        static void pause(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","pause"));}
+        static void resume(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","resume"));}
+        static void stop(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","stop"));}
+        static void restart(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","restart"));}
+        static void reset(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","reset"));}
+        static void dispose(String entity){query(args("effect_control","entity",Gameplay.entity(entity),"action","dispose"));}
+
         static Gameplay.Handle fade(String e,double opacity,double duration){return fade(e,opacity,duration,"Linear");}
         static Gameplay.Handle fade(String e,double opacity,double duration,String easing){return Tween.to(e,"Opacity",opacity,duration,easing);}
         static Gameplay.Handle flash(String e,double[] color,double duration){return flash(e,color,duration,"Linear");}

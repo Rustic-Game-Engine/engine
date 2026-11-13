@@ -236,7 +236,10 @@ fn run_authenticated_session(
                             .map_err(RuntimeServerError::Scripts)?,
                         None => None,
                     };
-                    connection.send(received.request_id, &ProtocolMessage::LiveEntity(live))?;
+                    connection.send(
+                        received.request_id,
+                        &ProtocolMessage::LiveEntity(live.map(Box::new)),
+                    )?;
                     continue;
                 }
                 ProtocolMessage::ReloadScript {
