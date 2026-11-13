@@ -3801,7 +3801,6 @@ mod game_view_tests {
         assert!(!game_scene(&world, 1.0).meshes[0].double_sided);
         let id = world
             .entity_ids()
-            .into_iter()
             .find(|id| world.primitive(*id).unwrap().is_some())
             .unwrap();
         let mut attributes = world.part_attributes(id).unwrap();
