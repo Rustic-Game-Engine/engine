@@ -72,6 +72,10 @@ pub struct Parent(pub EntityId);
 pub struct Children(pub Vec<EntityId>);
 
 /// Common editable properties shared by placed scene objects.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "touch, collision, anchoring and face visibility are independent authored boolean properties"
+)]
 #[derive(Component, Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PartAttributes {
     pub color: [f32; 4],
