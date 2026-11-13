@@ -970,35 +970,7 @@ impl SceneWorld {
                     .map(|transform| (entity, transform.0))
             })
             .collect();
-        let groups: Vec<_> = self
-            .entity_ids()
-            .filter_map(|entity| {
-                let mut group = self.effect_group(entity).ok()??;
-                let ancestors = self.composite_ancestors(entity);
-                group.time_scale = ancestors.iter().fold(1.0_f32, |scale, (_, group)| {
-                    (scale * group.time_scale).min(1000.0)
-                });
-                if ancestors.iter().any(|(id, ancestor)| {
-                    *id != entity && {
-                        let state = self.effect_groups.state(*id, ancestor);
-                        match state {
-                            crate::effects::PlaybackState::Playing => false,
-                            crate::effects::PlaybackState::Completed => {
-                                self.is_physical_effect_ancestor(entity, *id)
-                            }
-                            _ => true,
-                        }
-                    }
-                }) {
-                    group.time_scale = 0.0;
-                }
-                Some((
-                    entity,
-                    transforms.get(&entity)?.w_axis.truncate().to_array(),
-                    group,
-                ))
-            })
-            .collect();
+        let groups = self.effect_group_inputs(&transforms);
         self.effect_groups.update(delta, &groups);
         let restarted = self.effect_groups.take_restarted();
         let completed = self.effect_groups.take_completed();
@@ -1065,6 +1037,40 @@ impl SceneWorld {
         self.update_effect_children(delta);
         self.trigger_effect_group_events(&groups);
         self.update_effect_group_events();
+    }
+
+    fn effect_group_inputs(
+        &self,
+        transforms: &BTreeMap<EntityId, glam::Mat4>,
+    ) -> Vec<(EntityId, [f32; 3], crate::effects::EffectGroup)> {
+        self.entity_ids()
+            .filter_map(|entity| {
+                let mut group = self.effect_group(entity).ok()??;
+                let ancestors = self.composite_ancestors(entity);
+                group.time_scale = ancestors.iter().fold(1.0_f32, |scale, (_, group)| {
+                    (scale * group.time_scale).min(1000.0)
+                });
+                if ancestors.iter().any(|(id, ancestor)| {
+                    *id != entity && {
+                        let state = self.effect_groups.state(*id, ancestor);
+                        match state {
+                            crate::effects::PlaybackState::Playing => false,
+                            crate::effects::PlaybackState::Completed => {
+                                self.is_physical_effect_ancestor(entity, *id)
+                            }
+                            _ => true,
+                        }
+                    }
+                }) {
+                    group.time_scale = 0.0;
+                }
+                Some((
+                    entity,
+                    transforms.get(&entity)?.w_axis.truncate().to_array(),
+                    group,
+                ))
+            })
+            .collect()
     }
 
     fn trigger_effect_group_events(
