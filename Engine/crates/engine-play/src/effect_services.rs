@@ -121,7 +121,7 @@ pub(crate) fn query(world: &mut SceneWorld, value: Value) -> Result<Value, Strin
                 .map_err(|error| error.to_string())?,
         )
         .map_err(|error| error.to_string()),
-        Query::GroupConfigure { entity, settings } => configure_group(world, entity, settings),
+        Query::GroupConfigure { entity, settings } => configure_group(world, entity, &settings),
         Query::Create { entity, kind } => {
             if world.effect(entity).map_err(|e| e.to_string())?.is_some() {
                 return Err(
@@ -136,17 +136,7 @@ pub(crate) fn query(world: &mut SceneWorld, value: Value) -> Result<Value, Strin
                 })?;
             save(world, entity, EffectComponent::new(kind))
         }
-        Query::Configure { entity, settings } => {
-            let effect = world
-                .effect(entity)
-                .map_err(|e| e.to_string())?
-                .ok_or("entity has no effect")?;
-            let mut value = serde_json::to_value(effect).map_err(|e| e.to_string())?;
-            patch(&mut value, &settings, "effect")?;
-            let effect = serde_json::from_value(value)
-                .map_err(|e| format!("invalid effect settings: {e}"))?;
-            save(world, entity, effect)
-        }
+        Query::Configure { entity, settings } => configure_effect(world, entity, &settings),
         Query::Control { entity, action } => control(world, entity, &action),
         Query::RefreshProbe { entity } => world
             .request_reflection_probe_refresh(entity)
@@ -157,6 +147,22 @@ pub(crate) fn query(world: &mut SceneWorld, value: Value) -> Result<Value, Strin
             .map_err(|e| e.to_string())?
             .map_or(Value::Null, |state| json!(format!("{state:?}")))),
     }
+}
+
+fn configure_effect(
+    world: &mut SceneWorld,
+    entity: EntityId,
+    settings: &Value,
+) -> Result<Value, String> {
+    let effect = world
+        .effect(entity)
+        .map_err(|e| e.to_string())?
+        .ok_or("entity has no effect")?;
+    let mut value = serde_json::to_value(effect).map_err(|e| e.to_string())?;
+    patch(&mut value, settings, "effect")?;
+    let effect =
+        serde_json::from_value(value).map_err(|e| format!("invalid effect settings: {e}"))?;
+    save(world, entity, effect)
 }
 
 fn control(world: &mut SceneWorld, entity: EntityId, action: &str) -> Result<Value, String> {
@@ -242,7 +248,7 @@ fn save(
 fn configure_group(
     world: &mut SceneWorld,
     entity: EntityId,
-    settings: Value,
+    settings: &Value,
 ) -> Result<Value, String> {
     if settings.as_object().is_some_and(|fields| {
         ["source", "source_baseline", "child_entities"]
@@ -256,7 +262,7 @@ fn configure_group(
         .map_err(|error| error.to_string())?
         .ok_or("entity has no composite effect timeline; instantiate an effect asset first")?;
     let mut value = serde_json::to_value(group).map_err(|error| error.to_string())?;
-    patch(&mut value, &settings, "group")?;
+    patch(&mut value, settings, "group")?;
     let group: engine_world::effects::EffectGroup = serde_json::from_value(value)
         .map_err(|error| format!("invalid composite settings: {error}"))?;
     group.validate()?;

@@ -979,9 +979,16 @@ impl SceneWorld {
                     (scale * group.time_scale).min(1000.0)
                 });
                 if ancestors.iter().any(|(id, ancestor)| {
-                    *id != entity
-                        && self.effect_groups.state(*id, ancestor)
-                            != crate::effects::PlaybackState::Playing
+                    *id != entity && {
+                        let state = self.effect_groups.state(*id, ancestor);
+                        match state {
+                            crate::effects::PlaybackState::Playing => false,
+                            crate::effects::PlaybackState::Completed => {
+                                self.is_physical_effect_ancestor(entity, *id)
+                            }
+                            _ => true,
+                        }
+                    }
                 }) {
                     group.time_scale = 0.0;
                 }
@@ -1056,15 +1063,22 @@ impl SceneWorld {
             }
         }
         self.update_effect_children(delta);
+        self.trigger_effect_group_events(&groups);
+        self.update_effect_group_events();
+    }
+
+    fn trigger_effect_group_events(
+        &mut self,
+        groups: &[(EntityId, [f32; 3], crate::effects::EffectGroup)],
+    ) {
         let events = self.effects_runtime.frame().events.clone();
-        for (entity, _, group) in &groups {
+        for (entity, _, group) in groups {
             if self.effect_groups.state(*entity, group) == crate::effects::PlaybackState::Playing {
                 for (target, command) in crate::effects::group_trigger_commands(group, &events) {
                     let _ = self.control_effect(target, command);
                 }
             }
         }
-        self.update_effect_group_events();
     }
 
     fn consume_gpu_particle_feedback(&mut self) {
@@ -1113,7 +1127,8 @@ impl SceneWorld {
                     crate::effects::PlaybackState::Stopped
                         | crate::effects::PlaybackState::Disposed
                 ) || (state == crate::effects::PlaybackState::Completed
-                    && !completed.contains(group_id))
+                    && !completed.contains(group_id)
+                    && self.is_physical_effect_ancestor(entity, *group_id))
                 {
                     effect.common.enabled = false;
                 }
@@ -1150,6 +1165,17 @@ impl SceneWorld {
             });
         }
         inputs
+    }
+
+    fn is_physical_effect_ancestor(&self, entity: EntityId, ancestor: EntityId) -> bool {
+        let mut current = Some(entity);
+        while let Some(entity) = current {
+            if entity == ancestor {
+                return true;
+            }
+            current = self.parent(entity).ok().flatten();
+        }
+        false
     }
 
     fn composite_ancestors(
@@ -1394,26 +1420,36 @@ impl SceneWorld {
 
     fn expired_effect_children(&mut self, delta: f32) -> BTreeSet<EntityId> {
         let clocks: BTreeMap<_, _> = self
-            .temporary_effects
+            .temporary_effect_owners
             .keys()
             .filter_map(|entity| {
                 let state = self.effect_state(*entity).ok().flatten()?;
                 let scale = self.effective_effect_time_scale(*entity).ok()?;
                 let enabled = self.composite_ancestors(*entity).iter().all(|(id, group)| {
-                    self.effect_groups.state(*id, group) == crate::effects::PlaybackState::Playing
+                    let state = self.effect_groups.state(*id, group);
+                    state == crate::effects::PlaybackState::Playing
+                        || (state == crate::effects::PlaybackState::Completed
+                            && !self.is_physical_effect_ancestor(*entity, *id))
                 });
                 Some((*entity, (state, scale, enabled)))
             })
             .collect();
         let mut expired = BTreeSet::new();
         for (entity, (_, remaining)) in &mut self.temporary_effects {
+            // Retain authored tracks until the temporary composite ends, so event
+            // links can restart completed or initially stopped tracks.
+            if !self.temporary_effect_owners.contains_key(entity) {
+                continue;
+            }
             let Some((state, scale, enabled)) = clocks.get(entity) else {
                 expired.insert(*entity);
                 continue;
             };
             if matches!(
                 state,
-                crate::effects::PlaybackState::Completed | crate::effects::PlaybackState::Disposed
+                crate::effects::PlaybackState::Completed
+                    | crate::effects::PlaybackState::Disposed
+                    | crate::effects::PlaybackState::Stopped
             ) {
                 expired.insert(*entity);
             } else if *state == crate::effects::PlaybackState::Playing && *enabled {
@@ -1423,20 +1459,16 @@ impl SceneWorld {
                 }
             }
         }
-        for (root, owner) in &self.temporary_effect_owners {
-            if !self.contains(*owner)
-                || expired.contains(root)
-                || self.composite_ancestors(*owner).iter().any(|(id, group)| {
-                    matches!(
-                        self.effect_groups.state(*id, group),
-                        crate::effects::PlaybackState::Completed
-                            | crate::effects::PlaybackState::Stopped
-                            | crate::effects::PlaybackState::Disposed
-                    )
-                })
-            {
-                expired.insert(*root);
-                expired.extend(self.descendants(*root).unwrap_or_default());
+        for _ in 0..8 {
+            let before = expired.len();
+            for (root, owner) in &self.temporary_effect_owners {
+                if !self.contains(*owner) || expired.contains(owner) || expired.contains(root) {
+                    expired.insert(*root);
+                    expired.extend(self.descendants(*root).unwrap_or_default());
+                }
+            }
+            if expired.len() == before {
+                break;
             }
         }
         expired
@@ -2424,5 +2456,131 @@ mod tests {
         world.update_effect_children(0.0);
         assert!(!world.contains(root));
         assert!(!world.contains(child));
+    }
+    #[test]
+    fn composite_completed_track_restarts_target_on_the_next_update() {
+        use crate::effects::*;
+        let mut source = EffectComponent::new(EffectKind::ScreenFlash(ScreenFlash::default()));
+        source.common.looping = false;
+        source.common.duration = 0.05;
+        let mut target = EffectComponent::new(EffectKind::ScreenFlash(ScreenFlash::default()));
+        target.common.auto_play = false;
+        target.common.looping = false;
+        let mut asset = EffectAsset::new("event tracks", vec![source, target]);
+        asset.group_settings = Some(EffectGroupSettings {
+            duration: 2.0,
+            ..Default::default()
+        });
+        asset.trigger_bindings.push(GroupTriggerBinding {
+            source_child: 0,
+            event: CompositeTriggerEvent::Completed,
+            target_child: 1,
+            action: CompositeTriggerAction::Restart,
+        });
+        let mut world = SceneWorld::new();
+        let asset_id = crate::AssetId::new();
+        world.register_effect_asset(asset_id, asset).unwrap();
+        let root = world
+            .instantiate_effect_asset(asset_id, None, LocalTransform::default())
+            .unwrap();
+        let target = world.effect_group(root).unwrap().unwrap().child_entities[1];
+        world.update_effects(0.1);
+        assert_eq!(
+            world.effect_state(target).unwrap(),
+            Some(PlaybackState::Playing)
+        );
+        assert!(
+            !world
+                .effect_frame()
+                .overlays
+                .iter()
+                .any(|overlay| overlay.entity == target)
+        );
+        world.update_effects(0.1);
+        assert!(
+            world
+                .effect_frame()
+                .overlays
+                .iter()
+                .any(|overlay| overlay.entity == target)
+        );
+    }
+    #[test]
+    fn temporary_composite_retains_replay_tracks_and_outlives_natural_owner_completion() {
+        use crate::effects::*;
+        let mut source_track =
+            EffectComponent::new(EffectKind::ScreenFlash(ScreenFlash::default()));
+        source_track.common.looping = false;
+        source_track.common.duration = 0.05;
+        let mut target_track =
+            EffectComponent::new(EffectKind::ScreenFlash(ScreenFlash::default()));
+        target_track.common.auto_play = false;
+        target_track.common.looping = false;
+        let mut child_asset =
+            EffectAsset::new("temporary event tracks", vec![source_track, target_track]);
+        child_asset.group_settings = Some(EffectGroupSettings {
+            duration: 1.0,
+            ..Default::default()
+        });
+        child_asset.trigger_bindings.push(GroupTriggerBinding {
+            source_child: 0,
+            event: CompositeTriggerEvent::Completed,
+            target_child: 1,
+            action: CompositeTriggerAction::Restart,
+        });
+        let mut owner_asset = EffectAsset::new("short owner", vec![EffectComponent::default()]);
+        owner_asset.group_settings = Some(EffectGroupSettings {
+            duration: 0.05,
+            ..Default::default()
+        });
+        let mut world = SceneWorld::new();
+        let child_asset_id = crate::AssetId::new();
+        let owner_asset_id = crate::AssetId::new();
+        world
+            .register_effect_asset(child_asset_id, child_asset)
+            .unwrap();
+        world
+            .register_effect_asset(owner_asset_id, owner_asset)
+            .unwrap();
+        let owner = world
+            .instantiate_effect_asset(owner_asset_id, None, LocalTransform::default())
+            .unwrap();
+        let emitter = world.effect_group(owner).unwrap().unwrap().child_entities[0];
+        world.effects_runtime.emit_event(EffectEvent {
+            entity: emitter,
+            kind: EffectEventKind::Birth,
+            position: Vec3::ZERO,
+            velocity: Vec3::ZERO,
+            child_effect: Some(child_asset_id),
+        });
+        world.update_effect_children(0.0);
+        let temporary = *world.temporary_effect_owners.keys().next().unwrap();
+        let tracks = world
+            .effect_group(temporary)
+            .unwrap()
+            .unwrap()
+            .child_entities;
+        world.update_effects(0.1);
+        assert_eq!(
+            world.effect_group_state(owner).unwrap(),
+            Some(PlaybackState::Completed)
+        );
+        assert!(tracks.iter().all(|track| world.contains(*track)));
+        assert_eq!(
+            world.effect_state(tracks[1]).unwrap(),
+            Some(PlaybackState::Playing)
+        );
+        world.update_effects(0.1);
+        assert!(
+            world
+                .effect_frame()
+                .overlays
+                .iter()
+                .any(|overlay| overlay.entity == tracks[1])
+        );
+        world.control_effect(owner, PlaybackCommand::Stop).unwrap();
+        world.update_effect_children(0.0);
+        assert!(!world.contains(temporary));
+        assert!(tracks.iter().all(|track| !world.contains(*track)));
     }
 }

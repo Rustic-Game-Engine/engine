@@ -118,21 +118,8 @@ pub(super) fn extract_modifier(
             frame.post.overlay[3] = a;
         }
         EffectKind::CameraShake(p) => {
-            let attenuation = if p.radius > 0.0 {
-                (1.0 - center.distance(camera) / p.radius).clamp(0.0, 1.0)
-            } else {
-                1.0
-            };
-            let strength = p.falloff.sample(progress) * attenuation;
-            let seed = input.effect.common.random_seed as f32 * 0.001;
-            let phase = time * p.frequency * std::f32::consts::TAU;
-            let n = Vec3::new(
-                (phase + seed).sin(),
-                (phase * 1.173 + seed * 2.0).sin(),
-                (phase * 0.793 + seed * 3.0).sin(),
-            ) * strength;
-            frame.camera_offset += n * Vec3::from_array(p.position_amplitude);
-            frame.camera_rotation += n * Vec3::from_array(p.rotation_amplitude);
+            let (position, rotation) = camera_shake_impulse(input, camera, time, progress);
+            blend_camera_impulse(frame, p.blend_mode, position, rotation);
         }
         EffectKind::LightPulse(p) => {
             if let Some(target) = p.target {
@@ -145,7 +132,10 @@ pub(super) fn extract_modifier(
                 frame.lights.push(LightModifier {
                     target,
                     color: p.color.sample(phase)[..3].try_into().unwrap_or([1.0; 3]),
-                    intensity: (p.intensity.sample(phase) * jitter).max(0.0),
+                    intensity: (p.intensity.sample(phase)
+                        * jitter
+                        * fade_envelope(time, input.effect.common.duration, p.fade_in, p.fade_out))
+                    .max(0.0),
                 });
             }
         }
@@ -275,6 +265,11 @@ pub(super) fn extract_modifier(
             }
         }
         EffectKind::Decal(p) => frame.decals.push(RenderDecal {
+            shape: p.shape,
+            emissive_map: p.emissive_map,
+            distance_fade: p.distance_fade,
+            render_distance: input.effect.common.render_distance,
+            priority: input.effect.common.priority,
             entity: input.entity,
             transform: input.transform,
             dimensions: p.dimensions,
@@ -368,6 +363,81 @@ fn hash_noise(t: f32, seed: u64) -> f32 {
     let n = n.wrapping_mul(0x9E37_79B9_7F4A_7C15);
     ((n ^ (n >> 32)) as u32) as f32 / u32::MAX as f32
 }
+fn fade_envelope(time: f32, duration: f32, attack: f32, release: f32) -> f32 {
+    let fade_in = if attack > 0.0 {
+        (time / attack).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let fade_out = if release > 0.0 {
+        ((duration - time) / release).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    fade_in * fade_out
+}
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "cosmetic seed-to-phase conversion"
+)]
+pub(super) fn camera_shake_impulse(
+    input: &EffectInput,
+    camera: Vec3,
+    time: f32,
+    progress: f32,
+) -> (Vec3, Vec3) {
+    let EffectKind::CameraShake(p) = &input.effect.kind else {
+        return (Vec3::ZERO, Vec3::ZERO);
+    };
+    let center = input.transform.transform_point3(Vec3::ZERO);
+    let attenuation = if p.radius > 0.0 {
+        (1.0 - center.distance(camera) / p.radius).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    let strength = p.falloff.sample(progress) * attenuation;
+    let seed = input.effect.common.random_seed as f32 * 0.001;
+    let phase = time * p.frequency * std::f32::consts::TAU;
+    let n = Vec3::new(
+        (phase + seed).sin(),
+        (phase * 1.173 + seed * 2.0).sin(),
+        (phase * 0.793 + seed * 3.0).sin(),
+    ) * strength;
+    (
+        n * Vec3::from_array(p.position_amplitude),
+        n * Vec3::from_array(p.rotation_amplitude),
+    )
+}
+pub(super) fn blend_camera_impulse(
+    frame: &mut EffectFrame,
+    mode: super::CameraShakeBlendMode,
+    position: Vec3,
+    rotation: Vec3,
+) {
+    match mode {
+        super::CameraShakeBlendMode::Additive => {
+            frame.camera_offset += position;
+            frame.camera_rotation += rotation;
+        }
+        super::CameraShakeBlendMode::Replace => {
+            frame.camera_offset = position;
+            frame.camera_rotation = rotation;
+        }
+        super::CameraShakeBlendMode::Maximum => {
+            frame.camera_offset = Vec3::select(
+                position.abs().cmpgt(frame.camera_offset.abs()),
+                position,
+                frame.camera_offset,
+            );
+            frame.camera_rotation = Vec3::select(
+                rotation.abs().cmpgt(frame.camera_rotation.abs()),
+                rotation,
+                frame.camera_rotation,
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp)] // Exact compositing identities are intentional here.
 mod tests {
@@ -418,6 +488,56 @@ mod tests {
         assert_eq!(f.post.overlay[3], 0.5);
         extract_modifier(&i, Vec3::ZERO, 2.0, 0.4, &mut f);
         assert_eq!(f.post.overlay[3], 0.75);
+    }
+    #[test]
+    fn light_pulse_explicit_fades_validate_and_preserve_authored_light() {
+        let target = EntityId::new();
+        let mut i = input(EffectKind::LightPulse(LightPulse {
+            target: Some(target),
+            intensity: crate::effects::Curve::linear(2.0, 2.0),
+            fade_in: 1.0,
+            fade_out: 1.0,
+            ..LightPulse::default()
+        }));
+        i.effect.common.duration = 4.0;
+        let authored = i.effect.clone();
+        for (time, expected) in [(0.0, 0.0), (0.5, 1.0), (2.0, 2.0), (3.5, 1.0), (4.0, 0.0)] {
+            let mut frame = EffectFrame::default();
+            extract_modifier(&i, Vec3::ZERO, time, time / 4.0, &mut frame);
+            assert_eq!(frame.lights[0].intensity, expected);
+        }
+        assert_eq!(i.effect, authored);
+        if let EffectKind::LightPulse(pulse) = &mut i.effect.kind {
+            pulse.fade_in = -1.0;
+        }
+        assert!(i.effect.validate().is_err());
+    }
+    #[test]
+    fn camera_blend_modes_replace_or_select_largest_signed_component() {
+        use crate::effects::CameraShakeBlendMode;
+        let mut frame = EffectFrame::default();
+        blend_camera_impulse(
+            &mut frame,
+            CameraShakeBlendMode::Additive,
+            Vec3::new(2.0, -3.0, 1.0),
+            Vec3::X,
+        );
+        blend_camera_impulse(
+            &mut frame,
+            CameraShakeBlendMode::Maximum,
+            Vec3::new(-4.0, 1.0, -2.0),
+            Vec3::Y,
+        );
+        assert_eq!(frame.camera_offset, Vec3::new(-4.0, -3.0, -2.0));
+        assert_eq!(frame.camera_rotation, Vec3::new(1.0, 1.0, 0.0));
+        blend_camera_impulse(
+            &mut frame,
+            CameraShakeBlendMode::Replace,
+            Vec3::Z,
+            Vec3::ZERO,
+        );
+        assert_eq!(frame.camera_offset, Vec3::Z);
+        assert_eq!(frame.camera_rotation, Vec3::ZERO);
     }
     #[test]
     fn shake_is_additive_and_bounded_by_radius() {

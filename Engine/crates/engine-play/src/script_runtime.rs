@@ -224,7 +224,7 @@ struct GameplayContext {
     runtime: GameplayRuntime,
     physics: crate::physics::PhysicsWorld,
     audio: engine_core::gameplay::audio::Mixer,
-    effect_audio:crate::effect_audio::EffectAudioRuntime,
+    effect_audio: crate::effect_audio::EffectAudioRuntime,
     audio_output: crate::audio_output::AudioOutput,
     audio_capture: crate::audio_capture::AudioCapture,
     clips: BTreeMap<(EntityId, String), engine_core::gameplay::animation::Clip>,
@@ -240,7 +240,7 @@ impl Default for GameplayContext {
             runtime: GameplayRuntime::default(),
             physics: crate::physics::PhysicsWorld::default(),
             audio: engine_core::gameplay::audio::Mixer::default(),
-            effect_audio:crate::effect_audio::EffectAudioRuntime::default(),
+            effect_audio: crate::effect_audio::EffectAudioRuntime::default(),
             audio_output: crate::audio_output::AudioOutput::new(),
             audio_capture: crate::audio_capture::AudioCapture::default(),
             clips: BTreeMap::new(),
@@ -456,9 +456,19 @@ impl SceneRuntime {
             world.propagate_transforms();
             world.update_effects(0.0);
             let mut context = gameplay.lock().map_err(|_| "gameplay lock poisoned")?;
-            let events=world.take_effect_audio_events();
-            let audio_result={let GameplayContext{effect_audio,audio,scene,..}=&mut *context;effect_audio.dispatch(*scene,&world,events,audio)};
-            if let Err(error)=audio_result{push_log(&logs,&dropped_logs,"warn",&error);}
+            let events = world.take_effect_audio_events();
+            let audio_result = {
+                let GameplayContext {
+                    effect_audio,
+                    audio,
+                    scene,
+                    ..
+                } = &mut *context;
+                effect_audio.dispatch(*scene, &world, events, audio)
+            };
+            if let Err(error) = audio_result {
+                push_log(&logs, &dropped_logs, "warn", &error);
+            }
             if let Err(error) = emit_effect_events(&world, &mut context.runtime.signals) {
                 push_log(&logs, &dropped_logs, "warn", &error);
             }
@@ -644,7 +654,11 @@ impl SceneRuntime {
     }
     pub fn stop(&mut self) {
         if let Ok(mut context) = self.gameplay.lock() {
-            let GameplayContext { effect_audio, audio, .. } = &mut *context;
+            let GameplayContext {
+                effect_audio,
+                audio,
+                ..
+            } = &mut *context;
             effect_audio.stop(audio);
         }
         for behavior in &mut self.behaviors {

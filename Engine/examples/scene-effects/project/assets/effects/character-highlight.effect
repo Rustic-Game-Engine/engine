@@ -23,12 +23,39 @@
                 priority: 0,
             ),
             kind: Outline((
-                targets: [],
+                targets: [
+                    "72757374-6963-5f6f-7574-6c696e655f31",
+                ],
                 color: (1.0, 0.6, 0.0, 1.0),
                 thickness: 0.03,
                 pulse_speed: 0.0,
                 through_walls: false,
             )),
         ),
+    ],
+    primitives: [
+        Some((
+            kind: "capsule",
+            radius: 0.35,
+            height: 1.8,
+            segments: 24,
+            rings: 12,
+        )),
+    ],
+    part_attributes: [
+        Some((
+            color: (0.22, 0.42, 0.75, 1.0),
+            can_touch: true,
+            can_collide: false,
+            anchored: true,
+            friction: 0.5,
+            visibility_layers: 4294967295,
+        )),
+    ],
+    entity_ids: [
+        "72757374-6963-5f6f-7574-6c696e655f31",
+    ],
+    transforms: [
+        (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0),
     ],
 )

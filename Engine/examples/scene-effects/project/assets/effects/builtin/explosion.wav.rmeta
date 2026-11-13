@@ -1,0 +1,11 @@
+(
+    format_version: 1,
+    asset_id: "72757374-6963-5f76-6678-5f736e645f31",
+    importer_id: "rustic.audio",
+    importer_version: 2,
+    settings: (
+        version: 0,
+        values: {},
+    ),
+    dependencies: [],
+)

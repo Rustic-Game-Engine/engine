@@ -133,7 +133,7 @@ component, changing its fields, then submitting the complete component. Set
 in ordinary scene undo/redo; duplicate retains authored effect configuration.
 Save with `scene_save`. Do not attach generators as gameplay scripts.
 
-Runtime Lua/Luau, JavaScript and Python expose `Effects.types()`,
+Runtime Lua/Luau, JavaScript, Python, C, C++, C#, Java and PHP provide language-native facades for `Effects.types()`,
 `Effects.create(entity,kind)`, `Effects.get(entity)`,
 `Effects.configure(entity,settings)`, `Effects.state(entity)`, and
 `Effects.play/pause/resume/stop/restart/reset/dispose(entity)`. Existing
@@ -144,9 +144,12 @@ for example `Effects.configure(id,{kind={Particle={rate=50}}})` in Lua, or
 `Effects.configure(id,{kind:{Particle:{rate:50}}})` in JavaScript. Runtime effects
 advance on the existing scaled scene clock. Runtime edits are temporary; use
 editor component edits and save for authored persistence. Dispose removes the
-effect component, retaining its entity. Other language SDKs can use the existing
-query boundary with `effect_types`, `effect_create`, `effect_get`,
+effect component, retaining its entity. The facades share the existing query boundary with `effect_types`, `effect_create`, `effect_get`,
 `effect_configure`, `effect_control`, and `effect_state` operations.
+Use `Effects.group` and `Effects.configureGroup` to inspect/edit composite timelines,
+audio tracks, parameters, property bindings and event links. Runtime-only child IDs
+and playback cursors cannot be configured. `Effects.refreshProbe` explicitly requests
+a new six-face reflection capture; a queued request completes on a capable renderer.
 
 Inspect actual viewport output in editor and Play. Do not imply every configured
 advanced renderer option is supported on every backend; consult the Scene Effects

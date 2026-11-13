@@ -90,7 +90,9 @@ fn default_friction() -> f32 {
     0.5
 }
 
-pub(crate) const fn default_visibility_layers() -> u32 { u32::MAX }
+pub(crate) const fn default_visibility_layers() -> u32 {
+    u32::MAX
+}
 
 impl Default for PartAttributes {
     fn default() -> Self {

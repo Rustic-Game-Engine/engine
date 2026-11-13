@@ -23,6 +23,7 @@
                 priority: 0,
             ),
             kind: Ribbon((
+                animation_speed: 0.0,
                 points: [
                     (2.0, 0.0, 0.0),
                     (1.9828898, 0.2610524, 0.0),
@@ -88,6 +89,7 @@
                             ),
                         ],
                     ),
+                    color_parameter: None,
                     opacity: (
                         keys: [
                             (

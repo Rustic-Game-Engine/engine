@@ -23,6 +23,11 @@
                 priority: 0,
             ),
             kind: Trail((
+                start_width: None,
+                end_width: None,
+                corner_vertices: 0,
+                cap_vertices: 0,
+                smoothing: 0,
                 emitting: true,
                 lifetime: 0.5,
                 width: 0.3,
@@ -39,6 +44,7 @@
                             ),
                         ],
                     ),
+                    color_parameter: None,
                     opacity: (
                         keys: [
                             (

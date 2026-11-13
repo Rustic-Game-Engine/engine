@@ -2,7 +2,7 @@ fn blurred_image(uv:vec2<f32>)->vec4<f32>{
  let base=image(uv);if settings.motion.x<=0. {return base;}
  let velocity=textureLoad(motion_vectors,pixel(uv,textureDimensions(motion_vectors)),0).xy;
  let samples=u32(clamp(settings.motion.y,2.,32.));let delta=clamp(velocity*settings.motion.x,vec2<f32>(-0.2),vec2<f32>(0.2));let center_depth=depth_at(uv);var color=vec4<f32>(0.);var weight=0.;
- for(var j=0u;j<samples;j+=1u){let offset=(f32(j)/max(f32(samples)-1.,1.)-0.5)*delta;let p=uv+offset;let sampled=depth_at(p);let w=select(0.05,1.,abs(sampled-center_depth)<max(0.0001,(1.-center_depth)*0.1));color+=image(p)*w;weight+=w;}
+ for(var j=0u;j<samples;j+=1u){let offset=(f32(j)/max(f32(samples)-1.,1.)-0.5)*delta;let p=uv+offset;let sampled=depth_at(p);let w=select(0.05,1.,sampled>=center_depth-max(0.0001,(1.-center_depth)*0.1));color+=image(p)*w;weight+=w;}
  return color/max(weight,0.001);
 }
 @fragment fn fs_main(i:Output)->@location(0) vec4<f32>{

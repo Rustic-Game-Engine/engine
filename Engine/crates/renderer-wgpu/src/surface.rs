@@ -440,10 +440,13 @@ mod tests {
             edge_width: 0.0,
             edge_color: [0.0; 3],
         });
+        let mut background_scene = scene.clone();
+        background_scene.meshes.clear();
+        let background = center(&renderer.render(33, 33, &background_scene).unwrap().unwrap());
         renderer.set_effect_frame(&frame).unwrap();
         assert_eq!(
             center(&renderer.render(33, 33, &scene).unwrap().unwrap()),
-            vec![0, 0, 0]
+            background
         );
         image::RgbaImage::from_pixel(1, 1, image::Rgba([255_u8; 4]))
             .save(&mask_path)

@@ -106,6 +106,9 @@ impl MaterialCache {
                 mesh.textures.metallic = Some(decal.metallic);
                 mesh.textures.pbr = true;
                 mesh.textures.emissive_strength = decal.appearance.emission;
+                if decal.appearance.material.is_none() && decal.emissive_map.is_none() {
+                    mesh.textures.emissive_color = [0.0; 3];
+                }
                 if let Some(id) = decal.appearance.texture {
                     mesh.textures
                         .maps
@@ -118,6 +121,11 @@ impl MaterialCache {
                 }
                 if let Some(id) = decal.orm_map {
                     mesh.textures.orm_map = Some(self.resolve_texture(root, id)?);
+                }
+                if let Some(id) = decal.emissive_map {
+                    mesh.textures
+                        .maps
+                        .insert(TextureMap::Emissive, self.resolve_texture(root, id)?);
                 }
             }
         }
@@ -423,6 +431,21 @@ impl MaterialCache {
             self.boundary = BoundaryParticles::default();
         }
         self.boundary.time = frame.post.time;
+        let gpu_counts: std::collections::BTreeMap<_, _> = frame
+            .gpu_emitters
+            .iter()
+            .map(|emitter| (emitter.entity, emitter.live_count as usize))
+            .collect();
+        let available = 100_000_usize
+            .saturating_sub(
+                frame
+                    .particles
+                    .len()
+                    .saturating_add(gpu_counts.values().sum::<usize>()),
+            )
+            .min(4096);
+        self.boundary.particles.truncate(available);
+
         let active: std::collections::HashSet<_> = frame
             .surfaces
             .iter()
@@ -504,7 +527,10 @@ impl MaterialCache {
                     let normal = cross.normalize_or_zero();
                     let count = (area * modifier.particle_density).ceil().min(4096.0) as usize;
                     for sample in 0..count {
-                        if births >= 512 || budget == 0 || self.boundary.particles.len() >= 4096 {
+                        if births >= 512
+                            || budget == 0
+                            || self.boundary.particles.len() >= available
+                        {
                             break;
                         }
                         budget -= 1;
@@ -714,6 +740,15 @@ mod boundary_tests {
                 .boundary_particles(&scene, &frame, Path::new("."))
                 .unwrap()
                 .is_empty()
+        );
+        frame.particles = vec![particles[0].clone(); 100_000];
+        frame.surfaces[0].dissolve = 0.5;
+        assert!(
+            cache
+                .boundary_particles(&scene, &frame, Path::new("."))
+                .unwrap()
+                .is_empty(),
+            "boundary particles exceeded the shared live budget"
         );
     }
 }

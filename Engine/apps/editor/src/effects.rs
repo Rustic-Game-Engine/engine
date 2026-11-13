@@ -325,8 +325,10 @@ fn edit_value(
                         .and_then(Value::as_array_mut)
                         .is_some_and(|keys| edit_key_graph(ui, keys));
                     let particle_shape = values.contains_key("rate");
+                    let camera_shake = name == "CameraShake";
                     values
                         .iter_mut()
+                        .filter(|(field,_)| name!="ForceField" || !matches!(field.as_str(),"affect_foliage"|"affect_materials"))
                         .fold(graph_changed, |changed, (name, value)| {
                             if name == "shape" {
                                 let before = value.clone();
@@ -362,7 +364,7 @@ fn edit_value(
                             } else if name == "source" {
                                 changed
                             } else {
-                                edit_value(ui, name, value, root, references) | changed
+                                edit_value(ui, if camera_shake && name=="blend_mode" {"shake_blend_mode"} else {name}, value, root, references) | changed
                             }
                         })
                 };
@@ -420,6 +422,8 @@ fn enum_choices(name: &str) -> &'static [&'static str] {
             "Cylinder",
             "MeshSurface",
         ],
+        "shake_blend_mode" => &["Additive", "Replace", "Maximum"],
+        "reset_mode" => &["ReturnToRest", "HoldFinal"],
         "stacking" => &["Composite", "Replace", "Maximum"],
         "quality" => &["Low", "Medium", "High"],
         "blend" | "blend_mode" => &["Alpha", "Additive", "Multiply"],
@@ -1116,6 +1120,7 @@ pub(super) fn append_bounds(
             EffectKind::ForceField(value) | EffectKind::Wind(value) => format!("{:?}", value.shape),
             EffectKind::CollisionVolume(value) => format!("{:?}", value.shape),
             EffectKind::Fog(value) => format!("{:?}", value.shape),
+            EffectKind::Decal(value) => format!("{:?}", value.shape),
             EffectKind::PostProcess(value) => format!("{:?}", value.shape),
             EffectKind::HeatHaze(_) => "Sphere".to_owned(),
             _ => "Box".to_owned(),
@@ -2170,6 +2175,7 @@ fn field_hint(name: &str) -> &'static str {
         }
         "rate_over_distance" => "Particles per world unit of emitter movement.",
         "width"
+        | "distance_fade"
         | "radius"
         | "dimensions"
         | "length"
@@ -2660,7 +2666,7 @@ fn set_effect_dimensions(kind: &mut engine_world::effects::EffectKind, dimension
     use engine_world::effects::EffectKind;
     match kind {
         EffectKind::Particle(value) | EffectKind::MeshParticle(value) => {
-            value.dimensions = dimensions
+            value.dimensions = dimensions;
         }
         EffectKind::Weather(value) => value.emitter.dimensions = dimensions,
         EffectKind::ForceField(value) | EffectKind::Wind(value) => value.dimensions = dimensions,
@@ -2807,7 +2813,7 @@ impl crate::EditorViewer<'_> {
                 (2, EffectKind::Beam(beam)) => beam.start = after.translation.to_array(),
                 (3, EffectKind::Beam(beam)) => beam.end = after.translation.to_array(),
                 (4, EffectKind::Wind(field) | EffectKind::ForceField(field)) => {
-                    field.direction = after.translation.normalize_or_zero().to_array()
+                    field.direction = after.translation.normalize_or_zero().to_array();
                 }
                 _ => {}
             }

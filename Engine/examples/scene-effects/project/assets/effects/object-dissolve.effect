@@ -23,7 +23,13 @@
                 priority: 0,
             ),
             kind: Dissolve((
-                target: None,
+                target: Some("72757374-6963-5f64-6973-736f6c766531"),
+                target_material: None,
+                noise_texture: None,
+                direction_mask: None,
+                direction: (0.0, 0.0, 0.0),
+                threshold: 0.0,
+                particle_density: 0.0,
                 progress: 0.0,
                 edge_width: 0.05,
                 edge_color: (1.0, 0.4, 0.0),
@@ -43,5 +49,29 @@
                 ),
             )),
         ),
+    ],
+    primitives: [
+        Some((
+            kind: "sphere",
+            radius: 0.7,
+            segments: 32,
+            rings: 24,
+        )),
+    ],
+    part_attributes: [
+        Some((
+            color: (0.22, 0.42, 0.75, 1.0),
+            can_touch: true,
+            can_collide: false,
+            anchored: true,
+            friction: 0.5,
+            visibility_layers: 4294967295,
+        )),
+    ],
+    entity_ids: [
+        "72757374-6963-5f64-6973-736f6c766531",
+    ],
+    transforms: [
+        (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 1.0),
     ],
 )

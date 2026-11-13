@@ -62,6 +62,10 @@ fn main_material_and_mesh_shaders_translate_to_webgl2() {
     for (name, source) in [
         ("viewport", super::VIEWPORT_SHADER),
         ("mesh", super::MESH_SHADER),
+        (
+            "portable HDR probe readback",
+            super::probe_capture::READBACK_SHADER,
+        ),
     ] {
         translate_webgl2(source).unwrap_or_else(|error| panic!("WebGL 2 {name}: {error}"));
     }

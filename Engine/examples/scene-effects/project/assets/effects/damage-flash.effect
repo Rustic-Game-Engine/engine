@@ -30,6 +30,8 @@
                 fade_out: 0.4,
                 vignette: 0.5,
                 blend: Alpha,
+                screen_mask: None,
+                stacking: Composite,
             )),
         ),
     ],

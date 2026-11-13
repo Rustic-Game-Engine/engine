@@ -31,6 +31,7 @@ pub(super) fn project(scene: &ViewportScene, decal: &RenderDecal) -> Option<View
         return None;
     }
     let half = Vec3::from_array(decal.dimensions).abs() * 0.5;
+    let planes = projection_planes(decal.shape, half);
     let mut vertices = Vec::new();
     let mut indices = Vec::new();
     let projection_normal = decal
@@ -63,31 +64,29 @@ pub(super) fn project(scene: &ViewportScene, decal: &RenderDecal) -> Option<View
             {
                 continue;
             }
-            for axis in 0..3 {
-                for sign in [-1., 1.] {
-                    if polygon.is_empty() {
-                        break;
-                    }
-                    let mut output = Vec::new();
-                    let mut previous = *polygon.last().unwrap();
-                    let mut previous_distance = half[axis] - previous.position[axis] * sign;
-                    for current in &polygon {
-                        let distance = half[axis] - current.position[axis] * sign;
-                        if (distance >= 0.) != (previous_distance >= 0.) {
-                            let t = previous_distance / (previous_distance - distance);
-                            output.push(ClipVertex {
-                                position: previous.position.lerp(current.position, t),
-                                normal: previous.normal.lerp(current.normal, t).normalize_or_zero(),
-                            });
-                        }
-                        if distance >= 0. {
-                            output.push(*current);
-                        }
-                        previous = *current;
-                        previous_distance = distance;
-                    }
-                    polygon = output;
+            for (normal, extent) in &planes {
+                if polygon.is_empty() {
+                    break;
                 }
+                let mut output = Vec::new();
+                let mut previous = *polygon.last().unwrap();
+                let mut previous_distance = *extent - previous.position.dot(*normal);
+                for current in &polygon {
+                    let distance = *extent - current.position.dot(*normal);
+                    if (distance >= 0.) != (previous_distance >= 0.) {
+                        let t = previous_distance / (previous_distance - distance);
+                        output.push(ClipVertex {
+                            position: previous.position.lerp(current.position, t),
+                            normal: previous.normal.lerp(current.normal, t).normalize_or_zero(),
+                        });
+                    }
+                    if distance >= 0. {
+                        output.push(*current);
+                    }
+                    previous = *current;
+                    previous_distance = distance;
+                }
+                polygon = output;
             }
             if polygon.len() < 3 {
                 continue;
@@ -126,6 +125,80 @@ pub(super) fn project(scene: &ViewportScene, decal: &RenderDecal) -> Option<View
         selected: false,
     })
 }
+
+fn projection_planes(shape: engine_world::effects::VolumeShape, half: Vec3) -> Vec<(Vec3, f32)> {
+    use engine_world::effects::VolumeShape;
+    let mut planes = Vec::new();
+    for axis in 0..3 {
+        for sign in [-1.0, 1.0] {
+            let mut normal = Vec3::ZERO;
+            normal[axis] = sign;
+            planes.push((
+                normal,
+                if shape == VolumeShape::Plane && axis == 1 {
+                    half[axis].min(0.005)
+                } else {
+                    half[axis]
+                },
+            ));
+        }
+    }
+    if matches!(shape, VolumeShape::Sphere | VolumeShape::Cylinder) {
+        let rings = if shape == VolumeShape::Sphere {
+            8_u16
+        } else {
+            2
+        };
+        for ring in 1..rings {
+            let polar = f32::from(ring) / f32::from(rings) * std::f32::consts::PI;
+            for segment in 0_u16..24 {
+                let angle = f32::from(segment) / 24.0 * std::f32::consts::TAU;
+                let direction = Vec3::new(
+                    angle.cos() * polar.sin(),
+                    if shape == VolumeShape::Sphere {
+                        polar.cos()
+                    } else {
+                        0.0
+                    },
+                    angle.sin() * polar.sin(),
+                );
+                planes.push((direction / half.max(Vec3::splat(0.0001)), 1.0));
+            }
+        }
+    }
+    planes
+}
+/// Per-camera fading is applied to a capture/main clone after shared projection.
+pub(super) fn apply_view_fade(
+    scene: &mut ViewportScene,
+    frame: &engine_world::effects::EffectFrame,
+    camera: Vec3,
+) {
+    let settings: std::collections::HashMap<_, _> = frame
+        .decals
+        .iter()
+        .map(|decal| (key(decal.entity), decal))
+        .collect();
+    for mesh in &mut scene.meshes {
+        if let Some(decal) = settings.get(&mesh.instance_key) {
+            let distance = camera.distance(decal.transform.transform_point3(Vec3::ZERO));
+            let fade = if decal.distance_fade > 0.0 {
+                ((decal.render_distance - distance) / decal.distance_fade).clamp(0.0, 1.0)
+            } else if distance <= decal.render_distance {
+                1.0
+            } else {
+                0.0
+            };
+            mesh.color[3] *= fade;
+        }
+    }
+    scene.meshes.sort_by_key(|mesh| {
+        settings
+            .get(&mesh.instance_key)
+            .map_or((false, 0), |decal| (true, decal.priority))
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,6 +241,11 @@ mod tests {
             clear_color: [0.; 4],
         };
         let decal = RenderDecal {
+            shape: engine_world::effects::VolumeShape::Box,
+            emissive_map: None,
+            distance_fade: 5.0,
+            render_distance: 1000.0,
+            priority: 0,
             entity: engine_world::EntityId::new(),
             transform: Mat4::IDENTITY,
             dimensions: [2., 1., 2.],
@@ -185,5 +263,46 @@ mod tests {
         assert!(mesh.vertices.iter().all(|v| v.position[0].abs() <= 1.001
             && v.position[2].abs() <= 1.001
             && (v.position[1] - 0.002).abs() < 0.00001));
+        for shape in [
+            engine_world::effects::VolumeShape::Sphere,
+            engine_world::effects::VolumeShape::Cylinder,
+            engine_world::effects::VolumeShape::Plane,
+        ] {
+            let mut shaped = decal.clone();
+            shaped.shape = shape;
+            let projection = project(&scene, &shaped).unwrap();
+            if shape != engine_world::effects::VolumeShape::Plane {
+                assert!(
+                    projection
+                        .vertices
+                        .iter()
+                        .all(|vertex| vertex.position[0].hypot(vertex.position[2]) <= 1.02)
+                );
+            }
+        }
+        let mut rejected = decal.clone();
+        rejected.layers = 0;
+        assert!(project(&scene, &rejected).is_none());
+        let mut low = decal.clone();
+        low.priority = -1;
+        low.render_distance = 20.0;
+        low.distance_fade = 10.0;
+        let mut high = low.clone();
+        high.entity = engine_world::EntityId::new();
+        high.priority = 5;
+        let mut view = scene.clone();
+        view.meshes = vec![
+            project(&scene, &high).unwrap(),
+            project(&scene, &low).unwrap(),
+        ];
+        let frame = engine_world::effects::EffectFrame {
+            decals: vec![low.clone(), high],
+            ..engine_world::effects::EffectFrame::default()
+        };
+        apply_view_fade(&mut view, &frame, Vec3::new(0.0, 0.0, 15.0));
+        assert_eq!(view.meshes[0].instance_key, key(low.entity));
+        assert!((view.meshes[0].color[3] - 0.5).abs() < f32::EPSILON);
+        apply_view_fade(&mut view, &frame, Vec3::new(0.0, 0.0, 25.0));
+        assert!(view.meshes[0].color[3].abs() < f32::EPSILON);
     }
 }

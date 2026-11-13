@@ -130,6 +130,9 @@ impl Default for VectorCurve {
     }
 }
 impl VectorCurve {
+    pub fn iter(&self) -> std::slice::Iter<'_, Curve> {
+        self.0.iter()
+    }
     pub fn sample(&self, time: f32) -> [f32; 3] {
         self.0.each_ref().map(|curve| curve.sample(time))
     }
@@ -817,6 +820,10 @@ impl Default for FogVolume {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct DecalProjector {
+    pub shape: VolumeShape,
+    pub emissive_map: Option<AssetId>,
+    /// World-space fade band before the common maximum render distance.
+    pub distance_fade: f32,
     pub dimensions: [f32; 3],
     pub appearance: EffectAppearance,
     pub normal_map: Option<AssetId>,
@@ -830,6 +837,9 @@ pub struct DecalProjector {
 impl Default for DecalProjector {
     fn default() -> Self {
         Self {
+            shape: VolumeShape::Box,
+            emissive_map: None,
+            distance_fade: 5.0,
             dimensions: [1.0, 1.0, 1.0],
             appearance: EffectAppearance::default(),
             normal_map: None,
@@ -1124,6 +1134,9 @@ impl Default for LensFlare {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LightPulse {
+    /// Envelope attack and release durations in seconds.
+    pub fade_in: f32,
+    pub fade_out: f32,
     pub target: Option<EntityId>,
     pub intensity: Curve,
     pub color: Gradient,
@@ -1134,6 +1147,8 @@ pub struct LightPulse {
 impl Default for LightPulse {
     fn default() -> Self {
         Self {
+            fade_in: 0.0,
+            fade_out: 0.0,
             target: None,
             intensity: Curve::linear(0.0, 1.0),
             color: Gradient::default(),
@@ -1224,9 +1239,25 @@ impl Default for OutlineEffect {
         }
     }
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraShakeBlendMode {
+    #[default]
+    Additive,
+    Replace,
+    Maximum,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CameraShakeResetMode {
+    #[default]
+    ReturnToRest,
+    /// Retain the last active impulse after completion until Stop/Reset/Restart/Dispose.
+    HoldFinal,
+}
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CameraShake {
+    pub blend_mode: CameraShakeBlendMode,
+    pub reset_mode: CameraShakeResetMode,
     pub target: Option<EntityId>,
     pub position_amplitude: [f32; 3],
     pub rotation_amplitude: [f32; 3],
@@ -1237,6 +1268,8 @@ pub struct CameraShake {
 impl Default for CameraShake {
     fn default() -> Self {
         Self {
+            blend_mode: CameraShakeBlendMode::default(),
+            reset_mode: CameraShakeResetMode::default(),
             target: None,
             position_amplitude: [0.1; 3],
             rotation_amplitude: [0.02; 3],
@@ -1915,7 +1948,22 @@ impl EffectComponent {
             EffectKind::Decal(p) => {
                 dimensions(&p.dimensions)?;
                 appearance(&p.appearance)?;
-                values(&[p.roughness, p.metallic, p.edge_fade, p.angle_fade])
+                values(&[
+                    p.roughness,
+                    p.metallic,
+                    p.edge_fade,
+                    p.angle_fade,
+                    p.distance_fade,
+                ])?;
+                if !(0.0..=1.0).contains(&p.roughness)
+                    || !(0.0..=1.0).contains(&p.metallic)
+                    || !(0.0..=1.0).contains(&p.edge_fade)
+                    || !(-1.0..=1.0).contains(&p.angle_fade)
+                    || p.distance_fade < 0.0
+                {
+                    return Err("invalid decal material, fade or projection angle".into());
+                }
+                Ok(())
             }
             EffectKind::Weather(p) => {
                 values(&[p.accumulation, p.accumulation_lifetime, p.density_falloff])?;
@@ -2077,7 +2125,11 @@ impl EffectComponent {
             EffectKind::LightPulse(p) => {
                 curve(&p.intensity)?;
                 gradient(&p.color)?;
-                values(&[p.frequency, p.randomness, p.phase])
+                values(&[p.frequency, p.randomness, p.phase, p.fade_in, p.fade_out])?;
+                if p.fade_in < 0.0 || p.fade_out < 0.0 {
+                    return Err("light pulse fade durations must be nonnegative".into());
+                }
+                Ok(())
             }
             EffectKind::PostProcess(p) => {
                 dimensions(&p.dimensions)?;

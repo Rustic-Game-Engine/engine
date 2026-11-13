@@ -929,6 +929,150 @@ mod tests {
         assert_eq!(span as usize, super::SCENE_FLOATS * 4);
     }
     #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
+    fn overlay_mask_flare_occlusion_and_motion_blur_change_real_pixels() {
+        use super::*;
+        use crate::{BackendRequest, SceneViewportRenderer, ViewportMesh, ViewportVertex};
+        use engine_world::effects::{
+            BlendMode, OverlayStacking, RenderLensFlare, RenderScreenOverlay,
+        };
+        let root = tempfile::tempdir().unwrap();
+        image::RgbaImage::from_raw(2, 1, vec![0, 0, 0, 255, 255, 255, 255, 255])
+            .unwrap()
+            .save(root.path().join("mask.png"))
+            .unwrap();
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        renderer.set_environment_root(root.path());
+        let mask = engine_world::AssetId::new();
+        renderer.effect_asset_paths.insert(mask, "mask.png".into());
+        let mut scene = ViewportScene {
+            environment: engine_world::SceneEnvironment::default(),
+            camera_position: [0.; 3],
+            view_projection: Mat4::IDENTITY.to_cols_array(),
+            meshes: vec![],
+            lights: vec![],
+            guides: vec![],
+            grid_vertices: vec![],
+            clear_color: [0., 0., 0., 1.],
+        };
+        let mut frame = EffectFrame::default();
+        frame.overlays.push(RenderScreenOverlay {
+            entity: engine_world::EntityId::new(),
+            color: [1., 0., 0., 1.],
+            opacity: 1.,
+            vignette: 0.,
+            blend: BlendMode::Alpha,
+            screen_mask: Some(mask),
+            stacking: OverlayStacking::Composite,
+        });
+        renderer.set_effect_frame(&frame).unwrap();
+        let overlay = renderer.render(32, 32, &scene).unwrap().unwrap();
+        assert_eq!(overlay.rgba8[(16 * 32 + 3) * 4], 0);
+        assert_eq!(
+            overlay.rgba8[(16 * 32 + 28) * 4],
+            255,
+            "white screen mask must expose the overlay"
+        );
+        frame.overlays.clear();
+        frame.flares.push(RenderLensFlare {
+            entity: engine_world::EntityId::new(),
+            light: None,
+            position: Vec3::new(0., 0., 0.5),
+            intensity: 4.,
+            scale: 8.,
+            color: [1., 0., 0.],
+            ghosts: 0,
+            ghost_spacing: 0.3,
+            streak_length: 0.,
+            streak_orientation: 0.,
+            texture: None,
+            occlusion: true,
+            max_distance: 100.,
+            fade_speed: 4.,
+        });
+        frame.post.time = 0.1;
+        renderer.set_effect_frame(&frame).unwrap();
+        let first = renderer.render(32, 32, &scene).unwrap().unwrap();
+        let center = (16 * 32 + 16) * 4;
+        let mut visible = first.clone();
+        for _ in 0..12 {
+            frame.post.time += 0.1;
+            renderer.set_effect_frame(&frame).unwrap();
+            visible = renderer.render(32, 32, &scene).unwrap().unwrap();
+        }
+        assert!(
+            visible.rgba8[center] > first.rgba8[center].saturating_add(15),
+            "flare visibility must fade in over time"
+        );
+        scene.meshes.push(ViewportMesh {
+            instance_key: 709,
+            mesh_key: 709,
+            vertices: [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]]
+                .into_iter()
+                .map(|p| ViewportVertex {
+                    position: [p[0], p[1], 0.25],
+                    normal: [0., 0., -1.],
+                    uv: [0.; 2],
+                })
+                .collect(),
+            indices: vec![0, 2, 1, 0, 3, 2],
+            model: Mat4::IDENTITY.to_cols_array(),
+            color: [0., 0., 0., 1.],
+            selected: false,
+            textures: engine_world::SurfaceTextures {
+                cast_shadows: false,
+                ..engine_world::SurfaceTextures::default()
+            },
+        });
+        frame.post.time += 0.1;
+        renderer.set_effect_frame(&frame).unwrap();
+        let hide_start = renderer.render(32, 32, &scene).unwrap().unwrap();
+        let mut hidden = hide_start.clone();
+        for _ in 0..12 {
+            frame.post.time += 0.1;
+            renderer.set_effect_frame(&frame).unwrap();
+            hidden = renderer.render(32, 32, &scene).unwrap().unwrap();
+        }
+        assert!(
+            hide_start.rgba8[center] > hidden.rgba8[center].saturating_add(30),
+            "depth occlusion must fade the flare out"
+        );
+        frame.flares.clear();
+        scene.environment = engine_world::SceneEnvironment {
+            enabled: true,
+            sky_color: [0.; 3],
+            sun_intensity: 0.,
+            ambient_color: [1.; 3],
+            ambient_intensity: 1.,
+            haze_density: 0.,
+            ..engine_world::SceneEnvironment::default()
+        };
+        scene.meshes[0].color = [1., 0., 0., 1.];
+        scene.meshes[0].model = Mat4::from_translation(Vec3::new(-0.3, 0., 0.)).to_cols_array();
+        renderer.set_effect_frame(&frame).unwrap();
+        renderer.render(32, 32, &scene).unwrap();
+        scene.meshes[0].model = Mat4::from_translation(Vec3::new(0.3, 0., 0.)).to_cols_array();
+        frame.post.motion_blur = 1.;
+        frame.post.motion_blur_samples = 16;
+        renderer.set_effect_frame(&frame).unwrap();
+        let blurred = renderer.render(32, 32, &scene).unwrap().unwrap();
+        frame.post.motion_blur = 0.;
+        renderer.set_effect_frame(&frame).unwrap();
+        let sharp = renderer.render(32, 32, &scene).unwrap().unwrap();
+        assert!(
+            sharp
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(blurred.rgba8.as_chunks::<4>().0)
+                .filter(|(a, b)| a[0] > b[0].saturating_add(10))
+                .count()
+                > 4,
+            "object motion vectors must soften the moving silhouette"
+        );
+    }
+    #[test]
     fn shaders_validate() {
         for body in [
             super::FLARE_SHADER,

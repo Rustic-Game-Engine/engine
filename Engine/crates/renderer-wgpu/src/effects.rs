@@ -451,6 +451,11 @@ fn build_vertices(
         .iter()
         .filter(|p| p.mesh.is_none())
         .collect();
+    let mut emitter_order = std::collections::HashMap::new();
+    for particle in &particles {
+        let rank = emitter_order.len();
+        emitter_order.entry(particle.entity).or_insert(rank);
+    }
     particles.sort_by(|a, b| {
         if a.entity == b.entity {
             match a.sort_mode {
@@ -467,7 +472,7 @@ fn build_vertices(
                     .total_cmp(&a.position.distance_squared(camera)),
             }
         } else {
-            a.entity.cmp(&b.entity)
+            emitter_order[&a.entity].cmp(&emitter_order[&b.entity])
         }
     });
     for particle in particles {
@@ -613,6 +618,21 @@ mod tests {
                 "configured {mode:?} order ignored"
             );
         }
+        let other = engine_world::EntityId::new();
+        let first = frame.particles[0].entity;
+        frame.particles[0].entity = first.max(other);
+        frame.particles[1].entity = first.min(other);
+        let vertices = build_vertices(
+            &frame,
+            Mat4::IDENTITY,
+            Vec3::ZERO,
+            &std::collections::HashMap::new(),
+        )
+        .unwrap();
+        assert!(
+            vertices[0][0].position[2].abs() < f32::EPSILON,
+            "emitter priority/source order must survive per-emitter particle sorting"
+        );
     }
 }
 
@@ -782,7 +802,7 @@ mod gpu_tests {
         let mut multiply = frame.clone();
         multiply.particles[0].blend = BlendMode::Multiply;
         multiply.particles[0].color = [0.5; 4];
-        multiply.particles[0].emission=1.;
+        multiply.particles[0].emission = 1.;
         renderer.set_effect_frame(&multiply).unwrap();
         let darkened = renderer.render(64, 64, &scene).unwrap().unwrap();
         assert!(darkened.rgba8[center + 2] < base.rgba8[center + 2] - 5);

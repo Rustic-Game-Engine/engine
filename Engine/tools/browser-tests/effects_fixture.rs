@@ -236,3 +236,190 @@ return {{
     .unwrap();
     snapshot.remove().unwrap();
 }
+
+fn gallery_asset_inputs(root: &std::path::Path, directory: &std::path::Path) -> Vec<SnapshotInput> {
+    let mut inputs = Vec::new();
+    for entry in fs::read_dir(directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_dir() {
+            inputs.extend(gallery_asset_inputs(root, &path));
+        } else {
+            inputs.push(SnapshotInput::new(
+                path.strip_prefix(root).unwrap(),
+                fs::read(&path).unwrap(),
+            ));
+        }
+    }
+    inputs
+}
+
+fn gallery_controller(stations: &[(engine_world::EntityId, String, f32, bool, bool)]) -> String {
+    let entries = stations
+        .iter()
+        .map(|(id, name, x, moving, burst)| {
+            format!("{{id='{id}',name='{name}',x={x},moving={moving},burst={burst}}}")
+        })
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!(
+        r"local stations={{{entries}}}
+local index,elapsed,running,last_next,last_play=0,0,false,false,false
+return {{
+ Start=function() rustic.log('info','gallery-ready:35') end,
+ FixedUpdate=function(dt)
+  local next_key=rustic.key('ArrowRight').held
+  if next_key and not last_next then
+   if index>0 then Effects.stop(stations[index].id) end
+   index=index%#stations+1;elapsed=0;running=false
+   local s=stations[index]
+   rustic.set_translation(s.x,1.8,-7)
+   rustic.log('info','gallery-selected:'..index..':'..s.name)
+  end
+  last_next=next_key
+  local play=rustic.key('ArrowUp').held
+  if play and not last_play and index>0 then
+   Effects.restart(stations[index].id);elapsed=0;running=true
+   rustic.log('info','gallery-started:'..index)
+  end
+  last_play=play
+  if running and index>0 then
+   elapsed=elapsed+dt
+   local s=stations[index]
+   if s.moving then rustic.edit_object_attribute(s.id,'Position',{{s.x+math.cos(elapsed*3)*0.9,0.6+math.sin(elapsed*3)*0.4,0}}) end
+   if s.burst and elapsed>=0.1 then Effects.pause(s.id);running=false end
+  end
+ end
+}}"
+    )
+}
+
+#[test]
+#[ignore = "requires compiled browser runtime; invoked by tools/browser-tests/presets.mjs"]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one exported end-to-end gallery preserves all preset authoring and resource inputs together"
+)]
+fn write_browser_presets_fixture() {
+    use engine_world::effects::{EffectGroup, presets};
+    use engine_world::{SceneWorld, WorldCommand};
+    let root = PathBuf::from(
+        std::env::var_os("RUSTIC_BROWSER_PRESETS_DIR").expect("set RUSTIC_BROWSER_PRESETS_DIR"),
+    );
+    fs::create_dir_all(root.join("assets/effects")).unwrap();
+    engine_assets::install_builtin_effect_resources(&root).unwrap();
+    let mut world = SceneWorld::new();
+    let mut stations = Vec::new();
+    for (index, mut asset) in presets().into_iter().enumerate() {
+        let x = f32::from(u16::try_from(index).unwrap()) * 50.0;
+        let mut settings = engine_world::effects::EffectGroupSettings::from(
+            &EffectGroup::from_asset(None, &asset),
+        );
+        settings.auto_play = false;
+        asset.group_settings = Some(settings);
+        let moving = asset
+            .effects
+            .iter()
+            .any(|effect| matches!(effect.kind, EffectKind::Trail(_)));
+        let metadata = AssetMeta::new("rustic.effect", 1);
+        let source = root.join(format!("assets/effects/preset-{index}.effect"));
+        fs::write(&source, asset.to_bytes().unwrap()).unwrap();
+        engine_assets::save_meta(&sidecar_path(&source), &metadata).unwrap();
+        world
+            .register_effect_asset(metadata.asset_id, asset.clone())
+            .unwrap();
+        let group = world
+            .instantiate_effect_asset(
+                metadata.asset_id,
+                None,
+                LocalTransform {
+                    translation: Vec3::new(x, 0.4, 0.0),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        let burst = asset.effects.iter().any(|effect| match &effect.kind {
+            EffectKind::Particle(p) | EffectKind::MeshParticle(p) => {
+                p.rate.abs() < f32::EPSILON && !p.bursts.is_empty()
+            }
+            _ => false,
+        });
+        stations.push((group, asset.name, x, moving, burst));
+        world
+            .apply_commands(&[WorldCommand::Spawn(Box::new(EntitySnapshot {
+                name: Some(format!("Preset {} floor", index + 1)),
+                local_transform: LocalTransform {
+                    translation: Vec3::new(x, -0.1, 0.0),
+                    ..Default::default()
+                },
+                primitive: Some(Primitive::Plane { size: [12.0, 12.0] }),
+                part_attributes: PartAttributes {
+                    color: [0.12, 0.15, 0.2, 1.0],
+                    anchored: true,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }))])
+            .unwrap();
+    }
+    assert_eq!(stations.len(), 35);
+    let script_id = ScriptId::new();
+    world
+        .apply_commands(&[
+            WorldCommand::Spawn(Box::new(EntitySnapshot {
+                name: Some("Preset gallery camera".into()),
+                camera: Some(Camera::default()),
+                local_transform: LocalTransform {
+                    translation: Vec3::new(0.0, 1.8, -7.0),
+                    ..Default::default()
+                },
+                scripts: vec![ScriptComponent::new(script_id)],
+                ..Default::default()
+            })),
+            WorldCommand::Spawn(Box::new(EntitySnapshot {
+                light: Some(Light::default()),
+                ..Default::default()
+            })),
+        ])
+        .unwrap();
+    let mut scene =
+        SceneDocument::from_world(engine_world::SceneId::new(), "Preset Gallery", &world).unwrap();
+    scene.environment.enabled = true;
+    scene.environment.ambient_intensity = 0.65;
+    scene.environment.sky_color = [0.03, 0.05, 0.08];
+    let script = gallery_controller(&stations);
+    engine_scripting::validate_lua(script.as_bytes(), "preset-gallery.lua", 1024 * 1024).unwrap();
+    let manifest = ScriptManifest {
+        format_version: engine_scripting::CURRENT_SCRIPT_MANIFEST_VERSION,
+        scripts: vec![ScriptManifestEntry {
+            id: script_id,
+            language: ScriptLanguage::Lua54,
+            relative_path: "scripts/gallery.lua".into(),
+            api_version: ScriptApiVersion::CURRENT,
+            public_properties: vec![],
+        }],
+    };
+    let mut inputs = gallery_asset_inputs(&root, &root.join("assets"));
+    inputs.push(SnapshotInput::new(
+        "config/scripts.ron",
+        ron::ser::to_string(&manifest).unwrap().into_bytes(),
+    ));
+    inputs.push(SnapshotInput::new(
+        "scripts/gallery.lua",
+        script.into_bytes(),
+    ));
+    let snapshot = SnapshotBuilder::new(root.join("stage"))
+        .stage(
+            PlayMode::Standalone,
+            SnapshotInput::new("scene/gallery.scene", scene.to_bytes().unwrap()),
+            &inputs,
+        )
+        .unwrap();
+    export_website(
+        snapshot.root(),
+        &root.join("website"),
+        &runtime_directory(&std::env::current_exe().unwrap()),
+        "Preset Gallery",
+    )
+    .unwrap();
+    snapshot.remove().unwrap();
+}

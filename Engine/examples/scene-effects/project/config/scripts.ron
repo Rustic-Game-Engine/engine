@@ -2,7 +2,7 @@
     format_version: 2,
     scripts: [
         (
-            id: "0a2272f6-0304-4dc8-a66b-e31819988d7c",
+            id: "720c37fa-ebaa-4cfb-93f5-6b5348743bc6",
             language: lua54,
             relative_path: "scripts/orbit.lua",
             api_version: (
@@ -12,7 +12,7 @@
             public_properties: [],
         ),
         (
-            id: "2c6833c0-ce36-41c6-a889-a2d14f20ff6c",
+            id: "ac5ec2ec-1d17-4432-b6e6-c4c4521ed9cb",
             language: lua54,
             relative_path: "scripts/replay.lua",
             api_version: (

@@ -98,7 +98,7 @@ Configuration: `ParticleEmitter`. Behavior: `simulation.rs::simulate_particles; 
 | Opacity over lifetime | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Emission | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Flipbook/sprite-sheet animation | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
-| Soft particle intersection fading, where depth data is available | Partial | Authored `soft_particle_distance` reaches CPU billboard vertices; scene depth gap fades alpha in world units. GPU configurations requesting it explicitly use CPU; capture passes without scene depth keep ordinary blending. Actual depth-intersection pixel regression is still pending. |
+| Soft particle intersection fading, where depth data is available | Working | Authored `soft_particle_distance` reaches CPU billboard vertices; scene depth gap fades alpha in world units. GPU configurations requesting it explicitly use CPU; capture passes without scene depth keep ordinary blending. Actual Vulkan regression verifies a particle intersecting scene depth fades by over 20 display levels. |
 | Collision enabled | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Collision layers | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Collision response | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
@@ -116,13 +116,13 @@ Configuration: `ParticleEmitter`. Behavior: `simulation.rs::simulate_particles; 
 | Maximum active particles | Working | Per-emitter capacity plus a global 100,000-live admission budget preserve existing particles and reject further births. `global_particle_admission_budget_preserves_existing_particles` passes; editor previews show budget exhaustion and newest GPU lifetime occupancy. |
 | Render distance | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Culling | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
-| Particle sorting | Partial | Authored Distance/OldestFirst/YoungestFirst/None modes reach per-emitter CPU batch ordering. Alpha emitters requesting sorting explicitly use CPU; unsorted/additive emitters can use GPU. Renderer mode-ordering regression is still pending. |
+| Particle sorting | Working | Authored Distance/OldestFirst/YoungestFirst/None modes reach per-emitter CPU batch ordering. Alpha emitters requesting sorting explicitly use CPU; unsorted/additive emitters can use GPU. Renderer regression checks generated vertex order for each authored sort mode. |
 | Simulation mode | Working | `gpu.rs`/`gpu_particles.rs`: persistent storage compute plus direct storage billboards; Vulkan native tests verify CPU motion parity in local/world space, ordered fixed ticks, collisions, pause/restart, and ACK retries. Unsupported modules select the complete CPU simulator with a reason. |
 | Quality scaling | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Bounds | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Offscreen simulation behavior | Working | Selectable Simulate/Pause/Clear honors main and probe visibility; offscreen_pause_and_clear_are_distinct_from_simulate. |
 
-Completion action: Implement authored rotation/velocity lifetime modules, weighted 3D mesh variants, selectable offscreen behavior, independently typed sub-emitter triggers and inherited velocities, soft depth fading, and actual compute simulation with a tested CPU fallback.
+Validation: Required properties have consumed paths recorded above. Platform and final workspace verification remain tracked in the cross-cutting checklist.
 
 ## 3. Beam / Lightning Renderer
 
@@ -196,11 +196,11 @@ Configuration: `ParticleEmitter`. Behavior: `simulation.rs::append_cube; rendere
 | Friction | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Collision layers | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Lifetime | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
-| Shadow settings | Missing | Add a typed authored control and connect simulation/render behavior; no corresponding working path located. |
+| Shadow settings | Working | Authored cast/receive flags reach retained PBR mesh batches and real RGB24 world shadow maps (directional, spot and six-face point). Vulkan caster/receiver pixel regression passed; bounded atlas diagnostics report omitted lights. |
 | Maximum instances | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 | Render distance | Working | Authored `ParticleEmitter`/common field is consumed by the behavior path above. |
 
-Completion action: Add weighted mesh choice, per-axis scale/3D rotation, and per-instance shadow settings.
+Validation: weighted mesh/per-axis geometry CPU tests and real Vulkan shadow caster/receiver regression passed.
 
 ## 6. Ribbon / Tube Renderer
 
@@ -265,7 +265,7 @@ Configuration: `CollisionVolume`. Behavior: `simulation.rs::sweep_box / sweep_sp
 | Collision quality | Working | Volume and emitter select Discrete or Swept contact; existing swept_contacts_handle_thin_volumes_and_cylinder_corners covers swept path. |
 | Enabled | Working | Authored `CollisionVolume`/common field is consumed by the behavior path above. |
 
-Completion action: Add authored collision-quality modes with tested tunneling tradeoffs.
+Validation: Required properties have consumed paths recorded above. Platform and final workspace verification remain tracked in the cross-cutting checklist.
 
 ## 9. Projectile Tracer
 
@@ -309,32 +309,32 @@ Configuration: `FogVolume`. Behavior: `modifiers.rs::extract_modifier; post.rs /
 | Volumetric quality | Working | Common Low/Medium/High scales bounded per-volume ray steps. |
 | Raymarch step count or equivalent quality control | Working | Authored `FogVolume`/common field is consumed by the behavior path above. |
 
-Validation: four post stages pass Naga validation; CPU/GPU uniform-size regression guards the shared ABI. Full Vulkan/GLES/browser pixel verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
+Validation: four post stages and CPU/GPU uniform-size regression pass; native Vulkan and GLES verify unclipped HDR, above-one bloom, soft-depth fading, representative fog, distortion and cleanup. Actual Vulkan and GLES overlay-mask, temporal depth-occlusion flare and moving-object motion-blur assertions also pass; dedicated localized haze/shaft pixel assertions remain a coverage limitation; GLES/browser verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
 
 ## 11. Decal Projector
 
-Configuration: `DecalProjector`. Behavior: `decals.rs::project; renderer lib.rs::resolve_effect_textures`. Existing evidence: `projector_clips_receiver_triangles_and_offsets_along_surface`.
+Configuration: `DecalProjector`. Behavior: `decals.rs::project; material.rs::MaterialCache::resolve; decals.rs::apply_view_fade`. Existing evidence: `projector_clips_receiver_triangles_and_offsets_along_surface`.
 
 | Required property | Status | Evidence or remaining work |
 | --- | --- | --- |
-| Projection shape | Partial | Clipped box projector only; no shape selector. |
+| Projection shape | Working | Typed Box/Sphere/Cylinder/Plane selection builds convex clipping planes over actual receiver triangles; curved shapes use bounded tessellation. |
 | Width, height, and depth | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Rotation | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Albedo texture | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Normal map | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Roughness | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Metallic | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
-| Ambient occlusion | Partial | ORM asset field exists but resolve_effect_textures does not bind it. |
-| Emissive map | Missing | Add a typed authored control and connect simulation/render behavior; no corresponding working path located. |
+| Ambient occlusion | Working | Packed ORM resolves through stable asset IDs; linear red channel populates AO atlas slot while G/B provide roughness/metallic. |
+| Emissive map | Working | `emissive_map` resolves to the PBR emissive atlas slot with linear HDR sampling and authored emission strength. |
 | Opacity | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Edge fading | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
 | Angle fading | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
-| Surface layer mask | Partial | Serialized/extracted layers are not tested against receiver layers. |
-| Render priority | Partial | Common priority sorts extraction; generated decal mesh ordering requires verification against overlapping projectors. |
+| Surface layer mask | Working | Projector intersects receiver visibility layers before clipping; CPU test explicitly rejects zero overlap. |
+| Render priority | Working | Per-view helper sorts projected decal meshes stably after receiver meshes by common priority. CPU regression asserts ordering. |
 | Lifetime | Working | Authored `DecalProjector`/common field is consumed by the behavior path above. |
-| Distance fading | Partial | No continuous distance fade; common render distance is not applied to modifiers. |
+| Distance fading | Working | `distance_fade` is a world-unit alpha band before common render distance; main/probe clones evaluate their own camera distance. |
 
-Completion action: Bind ORM/emissive maps, receiver layers, priority/distance fading and projection shape controls; test overlap and PBR normals.
+Validation: The 2026-11-09 Vulkan suite passed 53/53 tests, including expanded receiver-clipping coverage for spherical/cylindrical/plane bounds, layers, priority and distance fade; packed ORM channel mapping; and HDR/source texture pixel rendering. A subsequent shader-only angle/emission refinement still requires the coordinator final backend rerun.
 
 ## 12. Weather Volume
 
@@ -427,7 +427,7 @@ Configuration: `DistortionEffect`. Behavior: `modifiers.rs::extract_modifier; po
 | Screen-space/world-space mode | Working | Screen mode covers the image; world mode intersects each camera ray with the transformed radius. |
 | Lifetime | Working | Authored `DistortionEffect`/common field is consumed by the behavior path above. |
 
-Validation: four post stages pass Naga validation; CPU/GPU uniform-size regression guards the shared ABI. Full Vulkan/GLES/browser pixel verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
+Validation: four post stages and CPU/GPU uniform-size regression pass; native Vulkan and GLES verify unclipped HDR, above-one bloom, soft-depth fading, representative fog, distortion and cleanup. Actual Vulkan and GLES overlay-mask, temporal depth-occlusion flare and moving-object motion-blur assertions also pass; dedicated localized haze/shaft pixel assertions remain a coverage limitation; GLES/browser verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
 
 ## 16. Light Shaft / God Ray
 
@@ -447,7 +447,7 @@ Configuration: `LightShaft`. Behavior: `modifiers.rs::extract_modifier; post.rs:
 | Quality | Working | Common quality scales bounded radial integration samples. |
 | Bounds if localized | Working | Inverse transform, dimensions and shape intersect camera rays to restrict localized shafts. |
 
-Validation: four post stages pass Naga validation; CPU/GPU uniform-size regression guards the shared ABI. Full Vulkan/GLES/browser pixel verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
+Validation: four post stages and CPU/GPU uniform-size regression pass; native Vulkan and GLES verify unclipped HDR, above-one bloom, soft-depth fading, representative fog, distortion and cleanup. Actual Vulkan and GLES overlay-mask, temporal depth-occlusion flare and moving-object motion-blur assertions also pass; dedicated localized haze/shaft pixel assertions remain a coverage limitation; GLES/browser verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
 
 ## 17. Foliage Scatter
 
@@ -468,7 +468,7 @@ Configuration: `FoliageScatter`. Behavior: `simulation.rs scatter branch / appen
 | Wind response | Working | Authored `FoliageScatter`/common field is consumed by the behavior path above. |
 | Render distance | Working | Authored `FoliageScatter`/common field is consumed by the behavior path above. |
 | LOD | Working | Stable density thinning and mesh substitution by minimum main/probe view distance. |
-| Shadow settings | Missing | Add a typed authored control and connect simulation/render behavior; no corresponding working path located. |
+| Shadow settings | Working | Authored cast/receive flags reach retained PBR mesh batches and real RGB24 world shadow maps (directional, spot and six-face point). Vulkan caster/receiver pixel regression passed; bounded atlas diagnostics report omitted lights. |
 | Maximum instances | Working | Authored `FoliageScatter`/common field is consumed by the behavior path above. |
 
 Validation: Weighted target-local receiver sampling, slope/height, alignment and LOD CPU tests passed. Shadow rendering is tracked separately.
@@ -488,11 +488,11 @@ Configuration: `DissolveEffect`. Behavior: `modifiers.rs::extract_modifier; rend
 | Edge emission | Working | Authored `DissolveEffect`/common field is consumed by the behavior path above. |
 | Dissolve direction | Working | `material::effect_direction` normalizes world-space projection over receiver vertices; shader and boundary sampler consume it. |
 | Direction mask | Working | Stable mask identity resolves to effect atlas layer1; red coverage controls dissolve order in color/depth/shadow passes. |
-| Particle spawn density | Working | `MaterialCache::boundary_particles` samples real receiver triangles crossed by the animated threshold; density scales surface-area sampling with bounded births and retained fading particles. |
+| Particle spawn density | Working | `MaterialCache::boundary_particles` samples real receiver triangles crossed by the animated threshold; density scales surface-area sampling with bounded births and retained fading particles. Boundary slots respect the shared 100,000 CPU and GPU live budget and 4,096 boundary-particle cap. |
 | Duration | Working | Authored `DissolveEffect`/common field is consumed by the behavior path above. |
 | Animation curve | Working | Authored `DissolveEffect`/common field is consumed by the behavior path above. |
 
-Validation: CPU boundary-on-receiver/rewind regression test and stable-ID GPU mask reload/restoration pixel assertions are implemented. The coordinator records final test execution; do not infer a pass from test existence. Authored materials remain unchanged because modifiers apply to extracted render recipes.
+Validation: Vulkan 53/53 passed, including CPU boundary-on-receiver/rewind/global-budget regression and stable-ID GPU mask reload/restoration pixel assertions. Authored materials remain unchanged because modifiers apply to extracted render recipes. Final shader refinements are subject to the coordinator backend rerun.
 
 ## 19. Animated Surface Effect
 
@@ -516,7 +516,7 @@ Validation: Native typed controls expose phase, map pickers, strengths and gradi
 
 ## 20. Lens Flare
 
-Configuration: `LensFlare`. Behavior: `post.rs::scene_values / atmosphere.wgsl / flare_visibility.wgsl`. Existing evidence: `shader validation; no dedicated temporal occlusion test`.
+Configuration: `LensFlare`. Behavior: `post.rs::scene_values / atmosphere.wgsl / flare_visibility.wgsl`. Existing evidence: `post::tests::overlay_mask_flare_occlusion_and_motion_blur_change_real_pixels` passes on Vulkan and GLES; verifies temporal fade after a real depth occluder enters the flare ray.
 
 | Required property | Status | Evidence or remaining work |
 | --- | --- | --- |
@@ -533,7 +533,7 @@ Configuration: `LensFlare`. Behavior: `post.rs::scene_values / atmosphere.wgsl /
 | Visibility fade speed | Working | A retained4x1 visibility history exponentially smooths depth occlusion transitions independently of HDR TAA. |
 | Maximum distance | Working | Source-camera distance gates the source before visibility evaluation. |
 
-Validation: four post stages pass Naga validation; CPU/GPU uniform-size regression guards the shared ABI. Full Vulkan/GLES/browser pixel verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
+Validation: four post stages and CPU/GPU uniform-size regression pass; native Vulkan and GLES verify unclipped HDR, above-one bloom, soft-depth fading, representative fog, distortion and cleanup. Actual Vulkan and GLES overlay-mask, temporal depth-occlusion flare and moving-object motion-blur assertions also pass; dedicated localized haze/shaft pixel assertions remain a coverage limitation; GLES/browser verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
 
 ## 21. Light Pulse / Flicker
 
@@ -552,7 +552,7 @@ Configuration: `LightPulse`. Behavior: `modifiers.rs::extract_modifier; renderer
 | Fade in/out | Partial | Can be baked into intensity curve; no explicit fade envelopes. |
 | Random seed | Working | Authored `LightPulse`/common field is consumed by the behavior path above. |
 
-Completion action: Add explicit fade envelopes or document the curve equivalent as a supported alternate workflow.
+Remaining acceptance: Fade in/out. See each row for the exact closure condition.
 
 ## 22. Post-Processing Volume
 
@@ -581,7 +581,7 @@ Configuration: `PostProcessVolume`. Behavior: `modifiers.rs::extract_modifier; p
 | Film grain | Working | Authored `PostProcessVolume`/common field is consumed by the behavior path above. |
 | Colour tint | Working | Authored `PostProcessVolume`/common field is consumed by the behavior path above. |
 
-Validation: four post stages pass Naga validation; CPU/GPU uniform-size regression guards the shared ABI. Full Vulkan/GLES/browser pixel verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
+Validation: four post stages and CPU/GPU uniform-size regression pass; native Vulkan and GLES verify unclipped HDR, above-one bloom, soft-depth fading, representative fog, distortion and cleanup. Actual Vulkan and GLES overlay-mask, temporal depth-occlusion flare and moving-object motion-blur assertions also pass; dedicated localized haze/shaft pixel assertions remain a coverage limitation; GLES/browser verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
 
 ## 23. Outline / Highlight
 
@@ -621,11 +621,11 @@ Configuration: `CameraShake`. Behavior: `modifiers.rs::extract_modifier; rendere
 | Blending | Partial | Impulses sum; there is no authored blend mode. |
 | Reset behavior | Partial | Offsets are extraction-only and clear next frame, but no explicit reset-mode selector. |
 
-Completion action: Expose blend/reset modes and test simultaneous camera-specific impulses with parented cameras.
+Remaining acceptance: Blending, Reset behavior. See each row for the exact closure condition.
 
 ## 25. Screen Flash / Damage Overlay
 
-Configuration: `ScreenFlash`. Behavior: `modifiers.rs::extract_modifier; post.rs / post_common.wgsl / atmosphere.wgsl / temporal.wgsl / final_post.wgsl`. Existing evidence: `alpha/additive/multiply stacking tests`.
+Configuration: `ScreenFlash`. Behavior: `modifiers.rs::extract_modifier; post.rs / post_common.wgsl / atmosphere.wgsl / temporal.wgsl / final_post.wgsl`. Existing evidence: CPU alpha/additive/multiply stacking tests plus Vulkan/GLES `post::tests::overlay_mask_flare_occlusion_and_motion_blur_change_real_pixels` verifies black/white screen-mask coverage.
 
 | Required property | Status | Evidence or remaining work |
 | --- | --- | --- |
@@ -641,7 +641,7 @@ Configuration: `ScreenFlash`. Behavior: `modifiers.rs::extract_modifier; post.rs
 | Priority | Working | Authored `ScreenFlash`/common field is consumed by the behavior path above. |
 | Stacking behavior | Working | Composite/Replace/Maximum policies are independent of alpha/additive/multiply blend. |
 
-Validation: four post stages pass Naga validation; CPU/GPU uniform-size regression guards the shared ABI. Full Vulkan/GLES/browser pixel verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
+Validation: four post stages and CPU/GPU uniform-size regression pass; native Vulkan and GLES verify unclipped HDR, above-one bloom, soft-depth fading, representative fog, distortion and cleanup. Actual Vulkan and GLES overlay-mask, temporal depth-occlusion flare and moving-object motion-blur assertions also pass; dedicated localized haze/shaft pixel assertions remain a coverage limitation; GLES/browser verification is tracked in the final validation record. Camera-depth occlusion cannot query surfaces outside the rendered depth image.
 
 ## 26. Reflection Probe
 
@@ -681,7 +681,7 @@ exact retained byte accounting and six-face source-file hot reload fingerprints.
 | 26 registered component types | Working | `EffectKind::all_defaults`; scene schema `rustic.effect`; ordinary scene entity workflow. |
 | Common lifecycle, delay, duration, looping, seed and playback events | Working | `EffectRuntime::control/update_with_targets`; completion/lifecycle/seed tests; world scripting wrappers. |
 | Common transforms, parenting and attachment IDs | Working | Existing scene transforms and full target-transform map; additive target remap persistence test. |
-| Visibility layers | Partial | Particle/force/collision consumers use masks; render-camera masks and several surface receiver masks remain disconnected. |
+| Visibility layers | Working | Main PBR/CPU/GPU effects filter the active camera mask after independent probe captures; receivers and capture passes retain their own masks. Actual Vulkan capture-only-layer and GPU independent-view readbacks pass. |
 | Common parameters and bounds | Working | `EffectComponent::resolve_parameters`; parameter/prewarm test; conservative bounds-based distance culling for simulation geometry. |
 | Asset create/save/load/instantiate and per-instance overrides | Working | `EffectAsset`, `EffectSource`, engine asset classification, editor load/save/reset/shared-update; `loading_changed_assets_refreshes_defaults_without_losing_saved_overrides`. |
 | Composite child timing/reorder/duplicate/delete/playback | Working | Asset child list plus editor timeline and world grouped lifecycle; composite persistence/completion tests. |
@@ -699,7 +699,7 @@ exact retained byte accounting and six-face source-file hot reload fingerprints.
 | CPU pooling across entity destruction | Working | `EffectRuntime.particle_pool` retains at most 64 cleared buffers and 100,000 total slots, reuses storage after removal/disappearance, and releases it on unload. Pooling pointer/capacity reuse, RNG determinism and unload-release regression passes in the 39-test CPU suite. |
 | GPU particle simulation | Working | Persistent compute/storage and direct HDR billboard draws are capability-gated by compute/vertex-storage flags and limits. Four native Vulkan tests pass: shader/ABI, CPU motion parity and lifecycle/ACKs, collision parity, actual HDR pixel readback with independent capture views/layers/render distances. Browser/WebGL uses CPU fallback; no compute support is advertised there. |
 | Mesh particle rendering | Working | Existing PBR mesh/material extraction and batched procedural cube fallback; needs weighted meshes/3D variation/shadow control above. |
-| HDR/PBR pipeline | Partial | PBR geometry and baked HDR probe input exist; post effects operate after an RGBA8 resolved target and cannot recover clipped HDR values. |
+| HDR/PBR pipeline | Working | Scene, atmosphere, temporal and bloom passes retain linear RGBA16F until final tone mapping. Vulkan pixel/readback regression preserves emission above 3.7 and verifies a bloom halo; material, light, depth and reflection tests cover retained PBR paths. |
 | Capability fallback | Partial | CPU particle/render path works without compute; fog uses bounded fragment raymarch. Actual browser/WebGL fallback rendering has not been visually verified here. |
 | Preset library | Partial | Named editable preset library exists; no captured visual approval/evidence for every required preset, material, texture and category. |
 | Actual runtime showcase | Working | `examples/scene-effects/project`; generated through engine-project example. Every-type visual quality and interaction acceptance remains unverified. |
@@ -709,10 +709,10 @@ exact retained byte accounting and six-face source-file hot reload fingerprints.
 | Tests/build/lint | Partial | Simulation tests passed 15 plus explicit performance smoke before follow-on changes. Global coordinator owns current full-workspace check/test/strict Clippy results. Never infer final green status from this snapshot. |
 | Windows installer | Missing | Required Windows PowerShell installer has not been produced in this Linux environment; a fresh `dist/RusticGameEngine-Setup-*.exe` is required by repository instructions. |
 
-## Priority closure order
+## Final validation remaining
 
-1. Finish particle feature model/simulation plus a real capability-gated GPU path; verify parity against CPU for supported modules and route unsupported module combinations to CPU explicitly.
-2. Repair disconnected render properties (fog speed/anisotropy, shaft distance, flare texture, decal ORM/layers, probe capture settings) before adding more inspector controls.
-3. Complete surface sampling, weighted variants, weather accumulation and specialized material masks, then targeted gizmos and composite bindings/audio.
-4. Capture actual runtime/browser evidence for all 26 effects and required presets. Verify old scene loading, parent changes, asset replacement, scene unload and repeated resource churn.
-5. Regenerate public references from final behavior, finish strict workspace validation and build the required Windows installer. Re-audit this checklist before reporting 100% completion.
+1. Complete the pending soft-depth/sorting and final authored-mode regressions listed in individual rows.
+2. Capture real exported WebGL lifecycle and all-35-preset output. Retain the screenshot/measurement artifacts; source serialization alone is insufficient.
+3. Run the final full-workspace checks, tests, strict Clippy and dependency checks against the same final sources.
+4. Regenerate public references after the final typed fields and rerun the standalone documentation checks.
+5. Produce the required fresh Windows installer before reporting full repository completion.

@@ -108,7 +108,9 @@ impl EntitySnapshot {
         if let Some(effect) = &self.effect {
             effect.validate().map_err(WorldError::InvalidArgument)?;
         }
-        if let Some(group) = &self.effect_group { group.validate().map_err(WorldError::InvalidArgument)?; }
+        if let Some(group) = &self.effect_group {
+            group.validate().map_err(WorldError::InvalidArgument)?;
+        }
         for script in &self.scripts {
             script
                 .validate()
@@ -777,7 +779,10 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                 |value| snapshot.effect = Some(value),
             ),
             EFFECT_GROUP_SCHEMA => assign_or_preserve(
-                &raw, entity.id, diagnostics, &mut snapshot.unknown_components,
+                &raw,
+                entity.id,
+                diagnostics,
+                &mut snapshot.unknown_components,
                 |value| snapshot.effect_group = Some(value),
             ),
             PART_ATTRIBUTES_SCHEMA => assign_or_preserve(

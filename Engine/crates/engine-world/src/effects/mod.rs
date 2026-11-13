@@ -284,6 +284,11 @@ pub struct RenderReflectionProbe {
 }
 #[derive(Clone, Debug)]
 pub struct RenderDecal {
+    pub shape: VolumeShape,
+    pub emissive_map: Option<AssetId>,
+    pub distance_fade: f32,
+    pub render_distance: f32,
+    pub priority: i32,
     pub entity: EntityId,
     pub transform: Mat4,
     pub dimensions: [f32; 3],

@@ -86,7 +86,9 @@ jobs:
           cargo test --locked --manifest-path apps/luau-host/Cargo.toml
       - name: Verify rendered lighting and viewport
         if: ${{ !cancelled() }}
-        run: cargo test --locked -p renderer-wgpu -- --include-ignored
+        # HDR targets, shadow maps and six-face captures retain significant GPU memory.
+        # Serial device tests keep software-driver CI within a bounded resource budget.
+        run: cargo test --locked -p renderer-wgpu -- --include-ignored --test-threads=1
       - name: Check all targets
         if: ${{ !cancelled() }}
         run: cargo check --locked --workspace --all-targets

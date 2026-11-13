@@ -34,6 +34,7 @@ Configuration type: `EffectAppearance`.
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
 | `color` | `Gradient` | `Gradient::default()` | RGBA linear color |
+| `color_parameter` | `Option<GradientParameter>` | `None` | color parameter |
 | `opacity` | `Curve` | `Curve::linear(1.0, 0.0)` | opacity |
 | `size` | `Curve` | `Curve::constant(1.0)` | size |
 | `material` | `Option<AssetId>` | `None` | material |
@@ -91,7 +92,7 @@ Configuration type: `ParticleEmitter`.
 | `start_scale` | `[[f32; 3]; 2]` | `[[1.0; 3]; 2]` | start scale |
 | `start_rotation` | `[[f32; 3]; 2]` | `[[0.0; 3], [0.0, 0.0, std::f32::consts::TAU]]` | start rotation |
 | `angular_velocity_range` | `[[f32; 3]; 2]` | `[[0.0; 3]; 2]` | angular velocity range |
-| `velocity_over_lifetime` | `[Curve; 3]` | `std::array::from_fn(&#124;_&#124; Curve::constant(0.0))` | velocity over lifetime |
+| `velocity_over_lifetime` | `VectorCurve` | `VectorCurve::default()` | velocity over lifetime |
 | `rotation_over_lifetime` | `Curve` | `Curve::constant(0.0)` | rotation over lifetime |
 | `mesh_variants` | `Vec<WeightedParticleMesh>` | `Vec::new()` | mesh variants |
 | `sub_emitters` | `Vec<ParticleSubEmitter>` | `Vec::new()` | sub emitters |
@@ -202,7 +203,7 @@ Configuration type: `ParticleEmitter`.
 | `start_scale` | `[[f32; 3]; 2]` | `[[1.0; 3]; 2]` | start scale |
 | `start_rotation` | `[[f32; 3]; 2]` | `[[0.0; 3], [0.0, 0.0, std::f32::consts::TAU]]` | start rotation |
 | `angular_velocity_range` | `[[f32; 3]; 2]` | `[[0.0; 3]; 2]` | angular velocity range |
-| `velocity_over_lifetime` | `[Curve; 3]` | `std::array::from_fn(&#124;_&#124; Curve::constant(0.0))` | velocity over lifetime |
+| `velocity_over_lifetime` | `VectorCurve` | `VectorCurve::default()` | velocity over lifetime |
 | `rotation_over_lifetime` | `Curve` | `Curve::constant(0.0)` | rotation over lifetime |
 | `mesh_variants` | `Vec<WeightedParticleMesh>` | `Vec::new()` | mesh variants |
 | `sub_emitters` | `Vec<ParticleSubEmitter>` | `Vec::new()` | sub emitters |
@@ -343,6 +344,9 @@ Configuration type: `DecalProjector`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `shape` | `VolumeShape` | `VolumeShape::Box` | shape |
+| `emissive_map` | `Option<AssetId>` | `None` | emissive map |
+| `distance_fade` | `f32` | `5.0` | scene units before common render distance |
 | `dimensions` | `[f32; 3]` | `[1.0, 1.0, 1.0]` | scene units, XYZ |
 | `appearance` | `EffectAppearance` | `EffectAppearance::default()` | appearance |
 | `normal_map` | `Option<AssetId>` | `None` | normal map |
@@ -546,6 +550,8 @@ Configuration type: `LightPulse`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `fade_in` | `f32` | `0.0` | fade in |
+| `fade_out` | `f32` | `0.0` | fade out |
 | `target` | `Option<EntityId>` | `None` | target |
 | `intensity` | `Curve` | `Curve::linear(0.0, 1.0)` | intensity |
 | `color` | `Gradient` | `Gradient::default()` | RGBA linear color |
@@ -602,6 +608,8 @@ Configuration type: `CameraShake`.
 
 | Field | Type | Default | Units / interpretation |
 | --- | --- | --- | --- |
+| `blend_mode` | `CameraShakeBlendMode` | `CameraShakeBlendMode::default()` | blend mode |
+| `reset_mode` | `CameraShakeResetMode` | `CameraShakeResetMode::default()` | reset mode |
 | `target` | `Option<EntityId>` | `None` | target |
 | `position_amplitude` | `[f32; 3]` | `[0.1; 3]` | scene units, XYZ |
 | `rotation_amplitude` | `[f32; 3]` | `[0.02; 3]` | radians, XYZ |
@@ -723,3 +731,18 @@ Configuration type: `EffectGroup`.
 | `trigger_bindings` | `Vec<super::GroupTriggerBinding>` | `Vec::new()` | trigger bindings |
 | `child_entities` | `Vec<EntityId>` | `Vec::new()` | child entities |
 | `source_baseline` | `Option<Box<EffectGroupDefaults>>` | `None` | source baseline |
+
+## Random color gradients and vector curves
+
+`appearance.color_parameter` is optional. `None` preserves the existing `appearance.color` gradient. `GradientParameter::Gradient(gradient)` evaluates one gradient; `BetweenGradients { min, max }` chooses a stable seeded interpolation factor for each particle and evaluates both gradients at the same normalized age. Replaying the same seed and time steps reproduces the choices. The advanced color parameter uses the CPU fallback.
+
+`VectorCurve` serializes transparently as three scalar curves in X, Y, Z order. For example, `velocity_over_lifetime` is `[curveX, curveY, curveZ]`, retaining the existing array representation. Every curve has finite time/value keys and defaults to zero. Curve evaluation clamps outside its endpoints and supports unsorted authored keys.
+
+
+## Projection and impulse modes
+
+`DecalProjector.shape` accepts `Box`, `Sphere`, `Cylinder` or `Plane`. Sphere clipping uses a convex plane approximation with 24 azimuth and eight polar divisions; cylinder clipping uses 24 side planes. Plane uses a thin local Y slab. All shapes respect the projector transform and dimensions. `distance_fade` controls a continuous fade band before `common.render_distance`; `emissive_map` is an optional stable texture asset ID. ORM channels are red ambient occlusion, green roughness and blue metallic.
+
+`LightPulse.fade_in` and `fade_out` are explicit envelopes in seconds, multiplying the existing intensity curve; zero preserves the authored curve alone. Looping envelopes follow each cycle.
+
+`CameraShakeBlendMode` is `Additive` (default), `Replace` or `Maximum`. Impulses are applied in priority order. Maximum selects the largest absolute component while preserving its sign. `CameraShakeResetMode` is `ReturnToRest` (default) or `HoldFinal`; HoldFinal retains the last active offset after natural completion until an explicit stop/reset/restart/dispose. These render offsets never overwrite authored camera transforms.

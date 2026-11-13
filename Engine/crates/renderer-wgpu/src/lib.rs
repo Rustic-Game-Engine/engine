@@ -18,9 +18,10 @@ mod sky;
 mod sprites;
 mod surface;
 
+#[cfg(not(target_os = "emscripten"))]
+use engine_rhi::SurfaceState;
 use engine_rhi::{
     BindingKind, RendererBackend, ShaderBinding, ShaderReflection, ShaderStage, SurfaceLifecycle,
-    SurfaceState,
 };
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -118,6 +119,7 @@ fn sample_map(layer: u32, uv: vec2<f32>, fallback: vec4<f32>) -> vec4<f32> {
     if !has_map(layer) { return fallback; }
     return textureSampleLevel(maps, map_sampler, uv, i32(layer), 0.0);
 }
+fn effect_texcoord(animated:vec2<f32>,base:vec2<f32>)->vec2<f32>{let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,base,1,0.).r,uniforms.effect_options.y>0.5);var uv=animated;if uniforms.effect_misc.x<0.5{uv=mix(base,animated,mask);}if uniforms.effect_options.z>0.5{uv+=(textureSampleLevel(effect_maps,map_sampler,uv+vec2<f32>(uniforms.effect_misc.y),2,0.).rg*2.-vec2<f32>(1.))*uniforms.effect_options.w*mask;}return uv;}
 struct VertexInput {
     @location(0) position: vec3<f32>,
     @location(1) normal: vec3<f32>,
@@ -136,11 +138,10 @@ struct VertexOutput {
     let uv=input.uv-vec2<f32>(0.5);
     output.uv = vec2<f32>(uv.x*cosine-uv.y*sine,uv.x*sine+uv.y*cosine)+vec2<f32>(0.5);
     output.uv = (output.uv * surface.uv.xy + surface.uv.zw) * uniforms.surface_uv.xy + uniforms.surface_uv.zw;
-    output.local_position=input.position;
-    if uniforms.effect_options.z>0.5{let distortion=textureSampleLevel(effect_maps,map_sampler,output.uv+vec2<f32>(uniforms.effect_misc.y),2,0.).rg*2.-vec2<f32>(1.);output.uv+=distortion*uniforms.effect_options.w;}
+    let base_uv=input.uv*surface.uv.xy+surface.uv.zw;output.local_position=vec3<f32>(base_uv,0.);let geometry_uv=effect_texcoord(output.uv,base_uv);
     var position = input.position+uniforms.wind.xyz*input.position.y*input.position.y;
     if uniforms.lighting.y < 0.5 && has_map(5u) {
-        position += input.normal * (sample_map(5u, output.uv, vec4<f32>(0.5)).r - 0.5) * surface.strength.x;
+        position += input.normal * (sample_map(5u, geometry_uv, vec4<f32>(0.5)).r - 0.5) * surface.strength.x;
     }
     output.position = uniforms.model_view_projection * vec4<f32>(position, 1.0);
     output.normal = normalize((uniforms.normal_matrix * vec4<f32>(input.normal, 0.0)).xyz);
@@ -208,11 +209,11 @@ fn brdf(n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, uv: vec2<f3
     result += coat * coat_f * coat_a2 / max(3.14159265*coat_d*coat_d*4.0*nv,0.001) * max(dot(coat_n,l),0.0);
     return result;
 }
-fn dissolve_order(input:VertexOutput)->f32{var order=fract(sin(dot(floor(input.world_position*max(uniforms.surface_effect.y,1.)),vec3<f32>(12.9898,78.233,37.719)))*43758.5453);if uniforms.effect_options.x>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.uv*uniforms.surface_effect.y,0,0.).r;}if dot(uniforms.effect_direction.xyz,uniforms.effect_direction.xyz)>0.{order=clamp(dot(input.world_position,uniforms.effect_direction.xyz)+uniforms.effect_direction.w,0.,1.);}if uniforms.effect_options.y>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.uv,1,0.).r;}return order;}
-fn surface_discard(input:VertexOutput){if uniforms.effect_misc.x>0.5&&uniforms.effect.x>0.&&dissolve_order(input)<uniforms.effect.x{discard;}let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,input.uv,1,0.).r,uniforms.effect_options.y>0.5);let alpha=uniforms.color.a*surface.base_color.a*sample_map(0u,input.uv,vec4<f32>(1.)).a*mix(1.,uniforms.effect_color.a,mask);if alpha<=0.001||(surface.factors.w>=0.&&alpha<surface.factors.w){discard;}}
-@fragment fn fs_shadow_encodedDepth(input:VertexOutput)->@location(0) vec4<f32>{surface_discard(input);let encoded=u32(clamp(input.position.z,0.,1.)*16777215.);return vec4<f32>(f32(encoded&255u),f32((encoded>>8u)&255u),f32((encoded>>16u)&255u),255.)/255.;}
-@fragment fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    surface_discard(input);let dissolve_noise=dissolve_order(input);
+fn dissolve_order(input:VertexOutput)->f32{var order=fract(sin(dot(floor(input.world_position*max(uniforms.surface_effect.y,1.)),vec3<f32>(12.9898,78.233,37.719)))*43758.5453);if uniforms.effect_options.x>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.uv*uniforms.surface_effect.y,0,0.).r;}if dot(uniforms.effect_direction.xyz,uniforms.effect_direction.xyz)>0.{order=clamp(dot(input.world_position,uniforms.effect_direction.xyz)+uniforms.effect_direction.w,0.,1.);}if uniforms.effect_options.y>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r;}return order;}
+fn surface_discard(input:VertexOutput){if uniforms.effect_misc.x>0.5&&uniforms.effect.x>0.&&dissolve_order(input)<uniforms.effect.x{discard;}let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r,uniforms.effect_options.y>0.5);let alpha=uniforms.color.a*surface.base_color.a*sample_map(0u,input.uv,vec4<f32>(1.)).a*mix(1.,uniforms.effect_color.a,mask);if alpha<=0.001||(surface.factors.w>=0.&&alpha<surface.factors.w){discard;}}
+@fragment fn fs_shadow_encodedDepth(raw:VertexOutput)->@location(0) vec4<f32>{var input=raw;input.uv=effect_texcoord(raw.uv,raw.local_position.xy);surface_discard(input);let encoded=u32(clamp(input.position.z,0.,1.)*16777215.);return vec4<f32>(f32(encoded&255u),f32((encoded>>8u)&255u),f32((encoded>>16u)&255u),255.)/255.;}
+@fragment fn fs_main(raw: VertexOutput) -> @location(0) vec4<f32> {
+    var input=raw;input.uv=effect_texcoord(raw.uv,raw.local_position.xy);surface_discard(input);let dissolve_noise=dissolve_order(input);
     let geometric = normalize(input.normal);
     let n = mapped_normal(input.uv, geometric, input.world_position, 1u);
     let coat_n = mapped_normal(input.uv, geometric, input.world_position, 9u);
@@ -220,8 +221,8 @@ fn surface_discard(input:VertexOutput){if uniforms.effect_misc.x>0.5&&uniforms.e
     // Authored material factors are linear (including glTF baseColorFactor).
     // Color textures are decoded on upload; do not decode either factor twice.
     var color = uniforms.color * surface.base_color * sample_map(0u, input.uv, vec4<f32>(1.0));
-    let influence=select(1.,textureSampleLevel(effect_maps,map_sampler,input.uv,1,0.).r,uniforms.effect_options.y>0.5);color*=mix(vec4<f32>(1.),uniforms.effect_color,influence);
-    if uniforms.effect.z > 0.5 {let edge=min(min(input.uv.x,1.-input.uv.x),min(input.uv.y,1.-input.uv.y));color.a*=smoothstep(0.,max(uniforms.effect.y,0.001),edge);}
+    let influence=select(1.,textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r,uniforms.effect_options.y>0.5);color*=mix(vec4<f32>(1.),uniforms.effect_color,influence);
+    if uniforms.effect.z > 0.5 {let edge=min(min(input.uv.x,1.-input.uv.x),min(input.uv.y,1.-input.uv.y));color.a*=smoothstep(0.,max(uniforms.effect.y,0.001),edge);color.a*=smoothstep(uniforms.effect_misc.y,min(1.,uniforms.effect_misc.y+0.1),dot(geometric,normalize(uniforms.effect_direction.xyz+vec3<f32>(0.000001))));}
     let v = normalize(uniforms.camera.xyz-input.world_position+vec3<f32>(0.000001));
     let ao = mix(1.,clamp(sample_map(4u,input.uv,vec4<f32>(1.0)).r,0.0,1.0),surface.factors.x);
     var radiance = color.rgb * uniforms.ambient.rgb * uniforms.ambient.w * ao;
@@ -249,7 +250,7 @@ fn surface_discard(input:VertexOutput){if uniforms.effect_misc.x>0.5&&uniforms.e
         radiance += light.color_intensity.rgb*light.color_intensity.w*attenuation*response*select(1.,sample_shadow(i,input.world_position,dot(n,direction)),uniforms.lighting.z>0.5);
     }
     radiance += sample_map(6u,input.uv,vec4<f32>(select(0.,1.,surface.factors.z>0.5))).rgb*surface.emissive_color.rgb*surface.strength.y;
-    radiance += color.rgb * uniforms.effect.w;
+    radiance += color.rgb * uniforms.effect.w * influence;
     if uniforms.effect.x > 0.0 && dissolve_noise < uniforms.effect.x + uniforms.effect.y { radiance += uniforms.edge.rgb * uniforms.edge.w; }
     for(var index=0u;index<4u;index+=1u){
         let probe=uniforms.probe_position[index];if probe.w<=0. {continue;}
@@ -1599,6 +1600,11 @@ impl SceneViewportRenderer {
                     )
                 })
         });
+        decals::apply_view_fade(
+            &mut visible_scene,
+            &self.effect_frame,
+            glam::Vec3::from_array(scene.camera_position),
+        );
         let scene = &visible_scene;
         self.sky.prepare(
             &self.context.device,
@@ -2340,7 +2346,11 @@ impl SceneViewportRenderer {
                 modifier.dissolve,
                 modifier.edge_width,
                 0.0,
-                modifier.emission,
+                if modifier.is_dissolve {
+                    0.
+                } else {
+                    modifier.emission
+                },
             ]);
             values.extend(modifier.edge_color);
             values.push(modifier.emission);
@@ -2350,7 +2360,12 @@ impl SceneViewportRenderer {
             .iter()
             .find(|d| decals::key(d.entity) == key)
         {
-            values.extend([0.0, decal.edge_fade, 1.0, decal.appearance.emission]);
+            values.extend([
+                0.0,
+                decal.edge_fade,
+                1.0,
+                (decal.appearance.emission - 1.).max(0.),
+            ]);
             values.extend([0.0, 0.0, decal.roughness, decal.metallic]);
         } else {
             values.extend([0.0; 8]);
@@ -2463,6 +2478,19 @@ impl SceneViewportRenderer {
         });
         values.extend(wind.to_array());
         values.push(0.);
+        if let Some(decal) = self
+            .effect_frame
+            .decals
+            .iter()
+            .find(|d| decals::key(d.entity) == key)
+        {
+            let direction = decal
+                .transform
+                .transform_vector3(glam::Vec3::Y)
+                .normalize_or_zero();
+            values[716..719].copy_from_slice(&direction.to_array());
+            values[729] = decal.angle_fade;
+        }
         values
     }
     fn write_instance(
@@ -3135,6 +3163,7 @@ fn render_with_context(
     clippy::too_many_lines,
     reason = "surface rendering mirrors the auditable offscreen M2 fixture without leaking backend resources"
 )]
+#[cfg(not(target_os = "emscripten"))]
 fn encode_surface_mesh(
     context: &BackendContext,
     color_format: wgpu::TextureFormat,
@@ -3711,6 +3740,10 @@ mod tests {
 
     #[test]
     #[ignore = "requires a physical or software graphics adapter"]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one retained renderer compares sun, point and spot occlusion against matching unshadowed frames"
+    )]
     fn world_space_shadows_obey_caster_and_receiver_flags_in_pixels() {
         let quad =
             |key: u64, x: f32, z: f32, size: f32, color: [f32; 4], casts: bool| ViewportMesh {
@@ -3730,6 +3763,7 @@ mod tests {
                 selected: false,
                 textures: engine_world::SurfaceTextures {
                     cast_shadows: casts,
+                    receive_shadows: key == 1,
                     ..Default::default()
                 },
             };
@@ -3779,6 +3813,56 @@ mod tests {
             unshadowed.rgba8, ignored.rgba8,
             "receive_shadows=false must restore direct illumination"
         );
+        scene.environment.sun_intensity = 0.;
+        scene.meshes[0].textures.receive_shadows = true;
+        for kind in [
+            engine_world::LightKind::Point,
+            engine_world::LightKind::Spot,
+        ] {
+            scene.meshes[1].textures.cast_shadows = false;
+            scene.lights = vec![engine_world::RenderLight {
+                entity: engine_world::EntityId::new(),
+                transform: glam::Mat4::from_translation(glam::Vec3::new(-1., 0., -0.3))
+                    .to_cols_array(),
+                kind,
+                color: [1.; 3],
+                intensity: 3.,
+                range: 10.,
+                spot_outer_angle_radians: 1.1,
+                casts_shadows: true,
+            }];
+            let baseline = renderer.render(64, 64, &scene).unwrap().unwrap();
+            scene.meshes[1].textures.cast_shadows = true;
+            let occluded = renderer.render(64, 64, &scene).unwrap().unwrap();
+            let darker = baseline
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(occluded.rgba8.as_chunks::<4>().0)
+                .filter(|(a, b)| a[0] > b[0].saturating_add(15))
+                .count();
+            assert!(
+                darker > 10,
+                "{kind:?} shadow failed: {darker} darkened pixels"
+            );
+            let expected = if kind == engine_world::LightKind::Point {
+                6
+            } else {
+                1
+            };
+            assert_eq!(
+                renderer.shadow_stats().maps,
+                expected,
+                "point must render all six cube faces"
+            );
+            scene.lights[0].casts_shadows = false;
+            let disabled = renderer.render(64, 64, &scene).unwrap().unwrap();
+            assert_eq!(
+                baseline.rgba8, disabled.rgba8,
+                "{kind:?} cast-shadow flag must restore illumination"
+            );
+        }
     }
 
     #[test]
@@ -4133,7 +4217,15 @@ mod tests {
                 100.0,
             );
             let mut scene = ViewportScene {
-                environment: engine_world::SceneEnvironment::default(),
+                environment: engine_world::SceneEnvironment {
+                    enabled: true,
+                    sky_color: [0.; 3],
+                    ambient_color: [1.; 3],
+                    ambient_intensity: 1.,
+                    sun_intensity: 0.,
+                    haze_density: 0.,
+                    ..engine_world::SceneEnvironment::default()
+                },
                 camera_position: eye.to_array(),
                 view_projection: (projection * view).to_cols_array(),
                 meshes: vec![mesh.clone()],
@@ -4151,14 +4243,24 @@ mod tests {
                     .try_into()
                     .unwrap()
             };
+            let fully_covered_blue = baseline
+                .rgba8
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[2])
+                .max()
+                .unwrap();
             let mut surface_pixels = 0;
             for y in 1..255 {
                 for x in 1..255 {
                     // Exclude the antialiased silhouette, where orange may
-                    // legitimately share a pixel with the original surface.
-                    if (y - 1..=y + 1)
-                        .all(|ny| (x - 1..=x + 1).all(|nx| pixel(&baseline, nx, ny)[2] > 32))
-                    {
+                    // legitimately share a pixel with the original surface. Flat
+                    // ambient lighting gives an exact full-coverage reference;
+                    // HDR tone mapping makes partially covered edges nonlinear.
+                    if (y - 1..=y + 1).all(|ny| {
+                        (x - 1..=x + 1).all(|nx| pixel(&baseline, nx, ny)[2] == fully_covered_blue)
+                    }) {
                         surface_pixels += 1;
                         assert_eq!(
                             pixel(&selected, x, y),

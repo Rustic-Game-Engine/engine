@@ -367,6 +367,7 @@ struct Instance {
     gpu_capacity: u32,
     gpu_overflow: bool,
     gpu_last_frame: Option<GpuParticleEmitterFrame>,
+    camera_impulse: (Vec3, Vec3),
 }
 
 impl Instance {
@@ -399,6 +400,7 @@ impl Instance {
             gpu_capacity: 0,
             gpu_overflow: false,
             gpu_last_frame: None,
+            camera_impulse: (Vec3::ZERO, Vec3::ZERO),
         }
     }
     fn reset(&mut self) {
@@ -419,6 +421,7 @@ impl Instance {
         self.gpu_next_slot = 0;
         self.gpu_overflow = false;
         self.gpu_last_frame = None;
+        self.camera_impulse = (Vec3::ZERO, Vec3::ZERO);
     }
 }
 
@@ -1610,7 +1613,23 @@ impl EffectRuntime {
             if target.is_some() && self.camera_target.is_some() && target != self.camera_target {
                 continue;
             }
-            if let Some(state) = self.instances.get(&input.entity)
+            if let EffectKind::CameraShake(shake) = &input.effect.kind
+                && shake.reset_mode == super::CameraShakeResetMode::HoldFinal
+                && input.effect.common.enabled
+                && input.effect.common.visible
+                && input.effect.common.visibility_layers & self.visibility_layers != 0
+                && let Some(state) = self.instances.get(&input.entity)
+                && state.state == PlaybackState::Completed
+            {
+                super::modifiers::blend_camera_impulse(
+                    &mut self.frame,
+                    shake.blend_mode,
+                    state.camera_impulse.0,
+                    state.camera_impulse.1,
+                );
+                continue;
+            }
+            if let Some(state) = self.instances.get_mut(&input.entity)
                 && input.effect.common.enabled
                 && input.effect.common.visible
                 && (!matches!(
@@ -1636,6 +1655,14 @@ impl EffectRuntime {
                         transform: input.transform,
                         field: field.clone(),
                     });
+                }
+                if matches!(input.effect.kind, EffectKind::CameraShake(_)) {
+                    state.camera_impulse = super::modifiers::camera_shake_impulse(
+                        input,
+                        camera,
+                        elapsed,
+                        (elapsed / input.effect.common.duration.max(0.001)).clamp(0.0, 1.0),
+                    );
                 }
                 super::modifiers::extract_modifier(
                     input,
@@ -3621,6 +3648,82 @@ mod geometry_tests {
         );
         assert!(frame.events.iter().all(|e| e.child_effect.is_none()));
     }
+    #[test]
+    fn camera_priority_targets_hold_completion_and_reset_preserve_authored_transforms() {
+        use super::super::{CameraShake, CameraShakeBlendMode, CameraShakeResetMode, Curve};
+        let camera = EntityId::new();
+        let make = |target, priority, blend_mode, reset_mode, amplitude| EffectInput {
+            entity: EntityId::new(),
+            transform: Mat4::IDENTITY,
+            effect: EffectComponent {
+                common: super::super::EffectCommon {
+                    duration: 0.2,
+                    looping: false,
+                    priority,
+                    ..super::super::EffectCommon::default()
+                },
+                kind: EffectKind::CameraShake(CameraShake {
+                    target: Some(target),
+                    blend_mode,
+                    reset_mode,
+                    position_amplitude: [amplitude; 3],
+                    rotation_amplitude: [0.0; 3],
+                    frequency: 1.0,
+                    falloff: Curve::linear(1.0, 1.0),
+                    ..CameraShake::default()
+                }),
+                ..EffectComponent::default()
+            },
+        };
+        let low = make(
+            camera,
+            0,
+            CameraShakeBlendMode::Additive,
+            CameraShakeResetMode::ReturnToRest,
+            5.0,
+        );
+        let high = make(
+            camera,
+            10,
+            CameraShakeBlendMode::Replace,
+            CameraShakeResetMode::HoldFinal,
+            0.2,
+        );
+        let other = make(
+            EntityId::new(),
+            100,
+            CameraShakeBlendMode::Replace,
+            CameraShakeResetMode::HoldFinal,
+            100.0,
+        );
+        let inputs = [other, high.clone(), low];
+        let authored = inputs.clone();
+        let mut runtime = EffectRuntime::new();
+        runtime.set_camera_target(Some(camera));
+        let active = runtime.update(0.1, &inputs, Vec3::ZERO).camera_offset;
+        let expected = super::super::modifiers::camera_shake_impulse(&high, Vec3::ZERO, 0.1, 0.5).0;
+        assert!(active.abs_diff_eq(expected, 1e-6));
+        assert!(active.length() > 0.0);
+        assert!(
+            runtime
+                .update(0.15, &inputs, Vec3::ZERO)
+                .camera_offset
+                .abs_diff_eq(active, 1e-6)
+        );
+        runtime.control(high.entity, PlaybackCommand::Reset);
+        assert_eq!(
+            runtime.update(0.0, &inputs, Vec3::ZERO).camera_offset,
+            Vec3::ZERO
+        );
+        assert!(
+            inputs
+                .iter()
+                .zip(&authored)
+                .all(|(a, b)| a.transform == b.transform && a.effect == b.effect)
+        );
+        assert_eq!(runtime.state(high.entity), PlaybackState::Stopped);
+    }
+
     #[test]
     fn gpu_commands_queue_fixed_steps_until_renderer_acknowledges() {
         let mut input = emitter();

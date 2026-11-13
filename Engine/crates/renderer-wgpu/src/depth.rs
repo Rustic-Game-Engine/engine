@@ -25,21 +25,23 @@ struct Surface {uv:vec4<f32>,strength:vec4<f32>,mask:vec4<u32>,base_color:vec4<f
 @group(1) @binding(2) var<uniform> surface:Surface;
 @group(1) @binding(3) var effect_maps:texture_2d_array<f32>;
 fn mapped(layer:u32,uv:vec2<f32>,fallback:vec4<f32>)->vec4<f32>{if (surface.mask.x&(1u<<layer))!=0u{return textureSampleLevel(maps,map_sampler,uv,i32(layer),0.);}return fallback;}
-struct Output {@builtin(position) position:vec4<f32>,@location(0) previous:vec4<f32>,@location(1) world:vec3<f32>,@location(2) uv:vec2<f32>};
+fn effect_texcoord(animated:vec2<f32>,base:vec2<f32>)->vec2<f32>{let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,base,1,0.).r,camera.effect_options.y>0.5);var uv=animated;if camera.misc.x<0.5{uv=mix(base,animated,mask);}if camera.effect_options.z>0.5{uv+=(textureSampleLevel(effect_maps,map_sampler,uv+vec2<f32>(camera.misc.y),2,0.).rg*2.-vec2<f32>(1.))*camera.effect_options.w*mask;}return uv;}
+struct Output {@builtin(position) position:vec4<f32>,@location(0) previous:vec4<f32>,@location(1) world:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) base_uv:vec2<f32>};
 @vertex fn vs_main(@location(0) p:vec3<f32>,@location(1) normal:vec3<f32>,@location(2) uv:vec2<f32>,@location(3) previous:vec3<f32>)->Output {
  let sine=sin(camera.effect.x);let cosine=cos(camera.effect.x);let q=uv-vec2<f32>(0.5);
  let rotated=vec2<f32>(q.x*cosine-q.y*sine,q.x*sine+q.y*cosine)+vec2<f32>(0.5);
  var texcoord=(rotated*surface.uv.xy+surface.uv.zw)*camera.uv.xy+camera.uv.zw;
- if camera.effect_options.z>0.5{texcoord+=(textureSampleLevel(effect_maps,map_sampler,texcoord+vec2<f32>(camera.misc.y),2,0.).rg*2.-vec2<f32>(1.))*camera.effect_options.w;}
- let displacement=camera.wind.xyz*p.y*p.y+normal*(mapped(5u,texcoord,vec4<f32>(0.5)).r-0.5)*surface.strength.x;
- var o:Output;o.position=camera.current*vec4<f32>(p+displacement,1.);o.previous=camera.previous*vec4<f32>(previous+displacement-camera.wind.xyz*p.y*p.y+camera.previous_wind.xyz*previous.y*previous.y,1.);o.world=(camera.model*vec4<f32>(p+displacement,1.)).xyz;o.uv=texcoord;return o;
+ let base_uv=uv*surface.uv.xy+surface.uv.zw;let geometry_uv=effect_texcoord(texcoord,base_uv);
+ let displacement=camera.wind.xyz*p.y*p.y+normal*(mapped(5u,geometry_uv,vec4<f32>(0.5)).r-0.5)*surface.strength.x;
+ var o:Output;o.position=camera.current*vec4<f32>(p+displacement,1.);o.previous=camera.previous*vec4<f32>(previous+displacement-camera.wind.xyz*p.y*p.y+camera.previous_wind.xyz*previous.y*previous.y,1.);o.world=(camera.model*vec4<f32>(p+displacement,1.)).xyz;o.uv=texcoord;o.base_uv=base_uv;return o;
 }
 struct DepthMotion {@location(0) depth:vec4<f32>,@location(1) motion:vec4<f32>};
 @fragment fn fs_main(i:Output)->DepthMotion {
- let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,i.uv,1,0.).r,camera.effect_options.y>0.5);let alpha=camera.effect.z*surface.base_color.a*mapped(0u,i.uv,vec4<f32>(1.)).a*mix(1.,camera.tint.a,mask);
+ let uv=effect_texcoord(i.uv,i.base_uv);
+ let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,i.base_uv,1,0.).r,camera.effect_options.y>0.5);let alpha=camera.effect.z*surface.base_color.a*mapped(0u,uv,vec4<f32>(1.)).a*mix(1.,camera.tint.a,mask);
  if alpha<=0.001 || (surface.factors.w>=0. && alpha<surface.factors.w){discard;}
  var noise=fract(sin(dot(floor(i.world*max(camera.effect.y,1.)),vec3<f32>(12.9898,78.233,37.719)))*43758.5453);
- if camera.effect_options.x>0.5{noise=textureSampleLevel(effect_maps,map_sampler,i.uv*camera.effect.y,0,0.).r;}if dot(camera.direction.xyz,camera.direction.xyz)>0.{noise=clamp(dot(i.world,camera.direction.xyz)+camera.direction.w,0.,1.);}if camera.effect_options.y>0.5{noise=textureSampleLevel(effect_maps,map_sampler,i.uv,1,0.).r;}
+ if camera.effect_options.x>0.5{noise=textureSampleLevel(effect_maps,map_sampler,uv*camera.effect.y,0,0.).r;}if dot(camera.direction.xyz,camera.direction.xyz)>0.{noise=clamp(dot(i.world,camera.direction.xyz)+camera.direction.w,0.,1.);}if camera.effect_options.y>0.5{noise=textureSampleLevel(effect_maps,map_sampler,uv,1,0.).r;}
  if camera.misc.x>0.5&&camera.options.w>0. && noise<camera.options.w {discard;}
  let depth=u32(clamp(i.position.z,0.,1.)*16777215.);
  var o:DepthMotion;o.depth=vec4<f32>(f32(depth&255u),f32((depth>>8u)&255u),f32((depth>>16u)&255u),255.)/255.;

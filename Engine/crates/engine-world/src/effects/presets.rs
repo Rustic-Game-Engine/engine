@@ -180,6 +180,14 @@ impl EffectAsset {
                 return Err("effect child attributes require finite color and friction within their supported ranges".into());
             }
         }
+        let timeline = super::EffectGroup::from_asset(None, self);
+        if self
+            .sound_cues
+            .iter()
+            .any(|cue| cue.delay >= timeline.duration)
+        {
+            return Err("sound cue delay must occur before the composite duration".into());
+        }
         super::validate_group_bindings(&self.parameters, &self.bindings, &self.effects)?;
         super::validate_group_triggers(&self.trigger_bindings, self.effects.len())?;
         Ok(())
@@ -902,7 +910,7 @@ pub fn presets() -> Vec<EffectAsset> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EffectAsset, presets};
+    use super::{EffectAsset, EffectSoundCue, explosion_sound_asset, presets};
     use crate::EntityId;
     use crate::effects::{BeamRenderer, EffectComponent, EffectKind, ParticleEmitter};
     use glam::Mat4;
@@ -988,5 +996,35 @@ mod tests {
         let mut invalid = asset;
         invalid.version = 2;
         assert!(invalid.to_bytes().is_err());
+    }
+    #[test]
+    fn explicit_group_duration_rejects_audio_outside_timeline_before_registration() {
+        let mut asset = EffectAsset::new("invalid timeline", vec![EffectComponent::default()]);
+        asset.group_settings = Some(super::super::EffectGroupSettings {
+            duration: 1.0,
+            ..Default::default()
+        });
+        asset.sound_cues.push(EffectSoundCue {
+            asset: explosion_sound_asset(),
+            delay: 2.0,
+            volume: 1.0,
+            pitch: 1.0,
+            spatial: false,
+            looping: false,
+        });
+        assert!(
+            asset
+                .validate()
+                .unwrap_err()
+                .contains("before the composite duration")
+        );
+        let mut world = crate::SceneWorld::new();
+        let id = crate::AssetId::new();
+        assert!(world.register_effect_asset(id, asset.clone()).is_err());
+        assert!(!world.has_effect_asset(id));
+        asset.sound_cues[0].delay = 0.5;
+        assert!(asset.validate().is_ok());
+        world.register_effect_asset(id, asset).unwrap();
+        assert!(world.has_effect_asset(id));
     }
 }

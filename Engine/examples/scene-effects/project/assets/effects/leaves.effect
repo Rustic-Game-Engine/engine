@@ -23,8 +23,74 @@
                 priority: 0,
             ),
             kind: Weather((
+                splash_effect: None,
+                accumulation: 0.0,
+                accumulation_lifetime: 30.0,
+                max_accumulation: 1024,
+                density_falloff: 0.0,
                 weather: Leaves,
                 emitter: (
+                    soft_particle_distance: 0.0,
+                    cast_shadows: true,
+                    receive_shadows: true,
+                    sorting: Distance,
+                    turbulence: 0.0,
+                    simulation_mode: Cpu,
+                    initial_velocity: (0.0, 0.0, 0.0),
+                    start_scale: ((1.0, 1.0, 1.0), (1.0, 1.0, 1.0)),
+                    start_rotation: ((0.0, 0.0, 0.0), (0.0, 0.0, 6.2831855)),
+                    angular_velocity_range: ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+                    velocity_over_lifetime: ((
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 0.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 0.0,
+                            ),
+                        ],
+                    ), (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 0.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 0.0,
+                            ),
+                        ],
+                    ), (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 0.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 0.0,
+                            ),
+                        ],
+                    )),
+                    rotation_over_lifetime: (
+                        keys: [
+                            (
+                                time: 0.0,
+                                value: 0.0,
+                            ),
+                            (
+                                time: 1.0,
+                                value: 0.0,
+                            ),
+                        ],
+                    ),
+                    mesh_variants: [],
+                    sub_emitters: [],
+                    offscreen_behavior: Simulate,
+                    collision_quality: Swept,
+                    generate_events: true,
                     prewarm: false,
                     prewarm_time: 5.0,
                     max_particles: 1000,
@@ -55,6 +121,7 @@
                                 ),
                             ],
                         ),
+                        color_parameter: None,
                         opacity: (
                             keys: [
                                 (

@@ -23,6 +23,11 @@
                 priority: 0,
             ),
             kind: Beam((
+                branch_probability: 1.0,
+                branch_width_scale: 0.5,
+                pulse_speed: 0.0,
+                endpoint_collision: false,
+                collision_layers: 4294967295,
                 start_target: None,
                 end_target: None,
                 start: (0.0, 0.0, 0.0),
@@ -42,6 +47,7 @@
                             ),
                         ],
                     ),
+                    color_parameter: None,
                     opacity: (
                         keys: [
                             (

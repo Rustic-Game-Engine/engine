@@ -448,6 +448,7 @@ impl SceneViewportRenderer {
                         })
                 })
         });
+        super::decals::apply_view_fade(&mut scene, &self.effect_frame, probe.capture_position);
         scene.lights.truncate(match probe.quality {
             QualityLevel::Low => 8,
             QualityLevel::Medium => 16,
@@ -934,6 +935,208 @@ pub struct ReflectionProbeReadback {
     pub resolution: u32,
     pub faces: [Vec<[f32; 4]>; 6],
 }
+// GLES/WebGL readPixels of RGBA16F cube attachments is not portable. Encode
+// the original binary16 components into normalized byte channels on the GPU.
+pub(super) const READBACK_SHADER: &str = r"
+struct Params { face:u32, pair:u32, side:f32, pad:u32 };
+@group(0) @binding(0) var captured:texture_cube<f32>;
+@group(0) @binding(1) var nearest_sampler:sampler;
+@group(0) @binding(2) var<uniform> params:Params;
+@vertex fn vs_main(@builtin(vertex_index) index:u32)->@builtin(position) vec4<f32> {
+ let points=array<vec2<f32>,3>(vec2<f32>(-1.,-1.),vec2<f32>(3.,-1.),vec2<f32>(-1.,3.));
+ return vec4<f32>(points[index],0.,1.);
+}
+fn face_direction(face:u32, uv:vec2<f32>)->vec3<f32> {
+ switch face {
+  case 0u:{return vec3<f32>(1.,-uv.y,-uv.x);}
+  case 1u:{return vec3<f32>(-1.,-uv.y,uv.x);}
+  case 2u:{return vec3<f32>(uv.x,1.,uv.y);}
+  case 3u:{return vec3<f32>(uv.x,-1.,-uv.y);}
+  case 4u:{return vec3<f32>(uv.x,-uv.y,1.);}
+  default:{return vec3<f32>(-uv.x,-uv.y,-1.);}
+ }
+}
+@fragment fn fs_main(@builtin(position) pixel:vec4<f32>)->@location(0) vec4<f32> {
+ let uv=pixel.xy/params.side*2.-1.;
+ let value=textureSampleLevel(captured,nearest_sampler,face_direction(params.face,uv),0.);
+ let pair=select(value.xy,value.zw,params.pair==1u);
+ let bits=pack2x16float(pair);
+ return vec4<f32>(vec4<u32>(bits&255u,(bits>>8u)&255u,(bits>>16u)&255u,(bits>>24u)&255u))/255.;
+}";
+
+fn encode_hdr_readback(
+    device: &wgpu::Device,
+    cube: &wgpu::Texture,
+    resolution: u32,
+    buffer: &wgpu::Buffer,
+    padded_row: u32,
+    encoder: &mut wgpu::CommandEncoder,
+) -> Result<(), RendererError> {
+    super::validate_and_reflect_wgsl(READBACK_SHADER)?;
+    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("portable-HDR-probe-readback-layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            },
+        ],
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("portable-HDR-probe-readback-pipeline-layout"),
+        bind_group_layouts: &[Some(&layout)],
+        immediate_size: 0,
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("portable-HDR-probe-readback-shader"),
+        source: wgpu::ShaderSource::Wgsl(READBACK_SHADER.into()),
+    });
+    let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("portable-HDR-probe-readback-pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    });
+    let staging = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("portable-HDR-probe-byte-staging"),
+        size: wgpu::Extent3d {
+            width: resolution,
+            height: resolution,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let target = staging.create_view(&wgpu::TextureViewDescriptor::default());
+    let source = cube.create_view(&wgpu::TextureViewDescriptor {
+        dimension: Some(wgpu::TextureViewDimension::Cube),
+        ..wgpu::TextureViewDescriptor::default()
+    });
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+    for face in 0..6u32 {
+        for pair in 0..2u32 {
+            let data: Vec<u8> = [face, pair, (resolution as f32).to_bits(), 0]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            // Each pass retains immutable camera parameters until GPU completion.
+            let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("portable-HDR-probe-readback-parameters"),
+                contents: &data,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("portable-HDR-probe-readback-bindings"),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&source),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: uniform.as_entire_binding(),
+                    },
+                ],
+            });
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("portable-HDR-probe-readback-encode"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &target,
+                        resolve_target: None,
+                        depth_slice: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &staging,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: u64::from(face * 2 + pair)
+                            * u64::from(padded_row)
+                            * u64::from(resolution),
+                        bytes_per_row: Some(padded_row),
+                        rows_per_image: Some(resolution),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: resolution,
+                    height: resolution,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) struct PendingProbeReadback {
     buffer: wgpu::Buffer,
     receiver: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
@@ -959,11 +1162,11 @@ impl SceneViewportRenderer {
             return Ok(false);
         };
         let resolution = texture.resolution;
-        let padded_row = (resolution * 8).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+        let padded_row = (resolution * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
             * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let buffer = self.context.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("explicit-six-face-probe-readback"),
-            size: u64::from(padded_row) * u64::from(resolution) * 6,
+            size: u64::from(padded_row) * u64::from(resolution) * 12,
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -973,27 +1176,14 @@ impl SceneViewportRenderer {
                 .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                     label: Some("probe-readback-copy"),
                 });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture.cube,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(padded_row),
-                    rows_per_image: Some(resolution),
-                },
-            },
-            wgpu::Extent3d {
-                width: resolution,
-                height: resolution,
-                depth_or_array_layers: 6,
-            },
-        );
+        encode_hdr_readback(
+            &self.context.device,
+            &texture.cube,
+            resolution,
+            &buffer,
+            padded_row,
+            &mut encoder,
+        )?;
         self.context.queue.submit([encoder.finish()]);
         let (sender, receiver) = std::sync::mpsc::channel();
         buffer
@@ -1044,15 +1234,17 @@ impl SceneViewportRenderer {
             .map_err(|error| RendererError::Gpu(error.to_string()))?;
         let row = pending.padded_row as usize;
         let side = pending.resolution as usize;
-        let face_bytes = row * side;
+        let pair_bytes = row * side;
         let faces = std::array::from_fn(|face| {
             let mut pixels = Vec::with_capacity(side * side);
             for y in 0..side {
-                let start = face * face_bytes + y * row;
-                for pixel in mapped[start..start + side * 8].as_chunks::<8>().0.iter() {
+                for x in 0..side {
                     pixels.push(std::array::from_fn(|channel| {
-                        half::f16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]])
-                            .to_f32()
+                        let start = (face * 2 + channel / 2) * pair_bytes
+                            + y * row
+                            + x * 4
+                            + (channel % 2) * 2;
+                        half::f16::from_le_bytes([mapped[start], mapped[start + 1]]).to_f32()
                     }));
                 }
             }

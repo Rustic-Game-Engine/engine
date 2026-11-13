@@ -23,6 +23,13 @@
                 priority: 0,
             ),
             kind: Shockwave((
+                expansion_speed: None,
+                edge_softness: 0.0,
+                align_to_surface: false,
+                surface_layers: 4294967295,
+                displacement_strength: 0.0,
+                displacement_frequency: 4.0,
+                screen_distortion: 0.0,
                 target: None,
                 source_velocity: (0.0, 0.0, 0.0),
                 wake_angle: 0.6,
@@ -46,6 +53,7 @@
                             ),
                         ],
                     ),
+                    color_parameter: None,
                     opacity: (
                         keys: [
                             (

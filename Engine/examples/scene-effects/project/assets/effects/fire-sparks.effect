@@ -23,6 +23,67 @@
                 priority: 0,
             ),
             kind: Particle((
+                soft_particle_distance: 0.0,
+                cast_shadows: true,
+                receive_shadows: true,
+                sorting: r#None,
+                turbulence: 0.0,
+                simulation_mode: Auto,
+                initial_velocity: (0.0, 0.0, 0.0),
+                start_scale: ((1.0, 1.0, 1.0), (1.0, 1.0, 1.0)),
+                start_rotation: ((0.0, 0.0, 0.0), (0.0, 0.0, 6.2831855)),
+                angular_velocity_range: ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)),
+                velocity_over_lifetime: ((
+                    keys: [
+                        (
+                            time: 0.0,
+                            value: 0.0,
+                        ),
+                        (
+                            time: 1.0,
+                            value: 0.0,
+                        ),
+                    ],
+                ), (
+                    keys: [
+                        (
+                            time: 0.0,
+                            value: 0.0,
+                        ),
+                        (
+                            time: 1.0,
+                            value: 0.0,
+                        ),
+                    ],
+                ), (
+                    keys: [
+                        (
+                            time: 0.0,
+                            value: 0.0,
+                        ),
+                        (
+                            time: 1.0,
+                            value: 0.0,
+                        ),
+                    ],
+                )),
+                rotation_over_lifetime: (
+                    keys: [
+                        (
+                            time: 0.0,
+                            value: 0.0,
+                        ),
+                        (
+                            time: 1.0,
+                            value: 0.0,
+                        ),
+                    ],
+                ),
+                mesh_variants: [],
+                sub_emitters: [],
+                offscreen_behavior: Simulate,
+                collision_quality: Swept,
+                generate_events: false,
                 prewarm: false,
                 prewarm_time: 5.0,
                 max_particles: 1000,
@@ -39,7 +100,7 @@
                 gravity: (0.0, -1.0, 0.0),
                 force: (0.0, 0.0, 0.0),
                 drag: 0.1,
-                wind_influence: 1.0,
+                wind_influence: 0.0,
                 noise: 0.0,
                 angular_velocity: 0.0,
                 inherit_velocity: 0.0,
@@ -53,6 +114,7 @@
                             ),
                         ],
                     ),
+                    color_parameter: None,
                     opacity: (
                         keys: [
                             (
