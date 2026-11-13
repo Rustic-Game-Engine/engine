@@ -27,6 +27,13 @@ script registration is not involved. Create these files in your game's project,
 then use **File → Build Project… → Windows game (.exe)** with **Create a custom
 installer** enabled. No manifest means the standard wizard is used.
 
+The `kind` field explicitly selects a compiled front end. Manifests without
+`kind` retain the companion HTTP installer API format; they do not require .NET
+or generate `custom-installer/`. The two manifest schemas are separate: use the
+examples below only for a compiled UI. Compiled manifests do not also generate
+the Python companion bundle. A portable export with setup disabled does not
+compile the UI or export the compiled manifest as an HTTP configuration.
+
 Install the **.NET 8 SDK** on the build machine and put `dotnet` on PATH before
 opening the editor. Publishing restores Microsoft WebView2 from NuGet and the
 Windows/.NET runtime packs, requiring network access on the first build. Players

@@ -21,9 +21,19 @@ fn configuration(root: &Path) -> Result<Option<(Manifest, PathBuf)>, String> {
         return Ok(None);
     }
     let manifest_path = project_path(root, "scripts/install/installer.json")?;
-    let manifest: Manifest =
+    let value: serde_json::Value =
         serde_json::from_slice(&fs::read(manifest_path).map_err(|e| e.to_string())?)
             .map_err(|e| format!("scripts/install/installer.json: {e}"))?;
+    let object = value
+        .as_object()
+        .ok_or("scripts/install/installer.json must be a JSON object.")?;
+    // The companion HTTP installer uses the same filename with a different schema.
+    // Only an explicit kind opts into a compiled front end.
+    if !object.contains_key("kind") {
+        return Ok(None);
+    }
+    let manifest: Manifest = serde_json::from_value(value)
+        .map_err(|e| format!("scripts/install/installer.json: {e}"))?;
     let (entry, extension) = match &manifest {
         Manifest::Web { entry } => (entry, "html"),
         Manifest::Csharp { entry } => (entry, "cs"),
@@ -43,6 +53,10 @@ fn configuration(root: &Path) -> Result<Option<(Manifest, PathBuf)>, String> {
 
 pub(super) fn validate(root: &Path) -> Result<(), String> {
     configuration(root).map(|_| ())
+}
+
+pub(super) fn enabled(root: &Path) -> Result<bool, String> {
+    configuration(root).map(|configuration| configuration.is_some())
 }
 
 pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<(), String> {
@@ -180,6 +194,27 @@ mod tests {
             )
             .unwrap();
             assert!(configuration(root.path()).unwrap().is_some());
+            let output = tempfile::tempdir().unwrap();
+            super::super::export_custom_installer(root.path(), output.path(), &Settings::default())
+                .unwrap();
+            assert!(!output.path().join("scripts/install").exists());
+        }
+    }
+    #[test]
+    fn companion_api_manifest_does_not_opt_into_compiled_ui() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("scripts/install");
+        fs::create_dir_all(&install).unwrap();
+        for manifest in [
+            "{}",
+            r#"{"title":"My Game","payload":"../../game","screens":[]}"#,
+        ] {
+            fs::write(install.join("installer.json"), manifest).unwrap();
+            assert!(!enabled(root.path()).unwrap());
+            validate(root.path()).unwrap();
+            let output = tempfile::tempdir().unwrap();
+            export(root.path(), output.path(), &Settings::default()).unwrap();
+            assert!(!output.path().join("custom-installer").exists());
         }
     }
     #[test]
@@ -192,7 +227,7 @@ mod tests {
             r#"{"kind":"unknown","entry":"index.html"}"#,
             r#"{"kind":"web","entry":"missing.html"}"#,
             r#"{"kind":"web","entry":"../../outside.html"}"#,
-            "{}",
+            "null",
         ] {
             fs::write(install.join("installer.json"), manifest).unwrap();
             assert!(configuration(root.path()).is_err());

@@ -372,13 +372,14 @@ impl ExternalBehavior {
     }
 }
 
-/// HTML/CSS entry content with sandboxed inline JavaScript lifecycle callbacks.
+/// UI content with sandboxed standalone or inline JavaScript lifecycle callbacks.
 pub struct WebBehavior {
     inner: JavaScriptBehavior,
+    source_name: String,
 }
 
 impl WebBehavior {
-    /// Validates the document and creates its sandboxed inline-script behavior.
+    /// Validates UI content and creates its sandboxed JavaScript behavior.
     ///
     /// # Errors
     /// Returns structural HTML/CSS or JavaScript diagnostics.
@@ -412,7 +413,15 @@ impl WebBehavior {
         validate_web(source, source_name)?;
         let text = std::str::from_utf8(source)
             .map_err(|error| ExternalRuntimeError::InvalidUtf8("HTML/CSS", error.to_string()))?;
-        let script = extract_inline_scripts(text)?;
+        let script = if std::path::Path::new(source_name)
+            .extension()
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("js") || extension.eq_ignore_ascii_case("mjs")
+            }) {
+            text.to_owned()
+        } else {
+            extract_inline_scripts(text)?
+        };
         let script = if script.trim().is_empty() {
             "globalThis.behavior = {};".to_owned()
         } else {
@@ -426,7 +435,14 @@ impl WebBehavior {
             instruction_budget,
         )
         .map_err(web_javascript_error)?;
-        Ok(Self { inner })
+        Ok(Self {
+            inner,
+            source_name: source_name.to_owned(),
+        })
+    }
+
+    pub fn source_name(&self) -> &str {
+        &self.source_name
     }
 
     pub const fn script_id(&self) -> ScriptId {
@@ -959,6 +975,14 @@ fn validate_source_bytes(
 }
 
 fn validate_web(source: &[u8], source_name: &str) -> Result<(), ExternalRuntimeError> {
+    if std::path::Path::new(source_name)
+        .extension()
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("js") || extension.eq_ignore_ascii_case("mjs")
+        })
+    {
+        return validate_javascript(source, source_name, 1024 * 1024).map_err(web_javascript_error);
+    }
     let text = std::str::from_utf8(source)
         .map_err(|error| ExternalRuntimeError::InvalidUtf8("HTML/CSS", error.to_string()))?;
     let lower = text.to_ascii_lowercase();
@@ -1838,6 +1862,26 @@ for line in sys.stdin:
                 panic!("{} invocation failed: {error}", language.display_name())
             });
         }
+    }
+
+    #[test]
+    fn standalone_ui_javascript_is_validated_without_html_parsing() {
+        validate_external(
+            ScriptLanguage::Web,
+            b"globalThis.behavior={Start(){print('</script>');}};",
+            "ui/hud.js",
+            1024,
+        )
+        .unwrap();
+        assert!(
+            validate_external(
+                ScriptLanguage::Web,
+                b"globalThis.behavior={",
+                "ui/hud.mjs",
+                1024
+            )
+            .is_err()
+        );
     }
 
     #[test]
