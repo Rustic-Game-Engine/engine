@@ -7,7 +7,14 @@ not parse requests, build commands, serialize JSON, or print responses.
 
 ## Setup and attachment
 
-1. Install .NET SDK 10 or newer on PATH. Restart the editor after changing PATH.
+1. Install .NET SDK 10 or newer. On Windows, select **C#** in Rustic Setup or
+   **Language Toolchain Manager** from the Start menu to install the SDK. Rustic
+   automatically checks the default Windows location, `%ProgramFiles%\dotnet`,
+   the per-user `.dotnet` folder, and PATH. Standard system and per-user .NET
+   folders are checked on macOS and Linux too. For a custom location, set
+   `DOTNET_ROOT` to the folder containing `dotnet` and reopen Rustic so it
+   inherits the new variable. Run `dotnet --list-sdks` using that installation
+   to check that it lists version 10 or newer.
    Run `cargo xtask doctor` from the Engine folder to check discovery.
 2. Open your game project and scene. Select a **Part** object for this movement example.
 3. Use **Programming > New Script > Object Component Script** and select C#.

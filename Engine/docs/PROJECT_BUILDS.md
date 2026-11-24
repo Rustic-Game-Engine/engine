@@ -15,6 +15,8 @@ Build on Windows with `rustic-runtime.exe` beside the editor. Installed engine d
 5. Optionally use **Browse…** beside the license, setup icon, and wizard image fields to select a plain text (`.txt`) license, `.ico` setup icon, and `.bmp` wizard image. The file explorer starts in your project folder and stores the selected path relative to it. Copy files from outside the project into it before selecting them; otherwise the dialog reports an error and keeps the previous value. You can also type or clear these optional paths directly. For example, `branding/license.txt`, `branding/setup.ico`, and `branding/wizard.bmp`. Inno Setup validates image formats/dimensions; its standard large wizard image is 164 × 314 pixels. The compiled wizard displays these images; the editor preview displays text.
 6. Click **Build Project**. For the standard wizard, distribute `setup.exe`; for a custom UI, distribute the complete `custom-installer/` folder described below. Alternatively, distribute the complete `game/` folder containing `<Application name>.exe` and `data/`. Launch the game by opening the executable; the editor is not required.
 
+The standard installer uses Inno Setup. If your game uses C# behaviors, install .NET SDK 10 or newer on the computer that runs the game.
+
 Setup installs per user into `%LOCALAPPDATA%\Programs\<Application name>`, adds a Start menu shortcut and an uninstaller, and optionally offers a desktop shortcut. The generated `installer.iss` is kept beside setup for inspection. The setup icon customizes the installer, not the game executable's embedded icon. These are unsigned builds; signing and store publication are separate steps.
 
 The game opens its own window and isolated simulation, forwards keyboard, primary mouse and touch input, and stops the simulation when the window closes. Logs are written under `%LOCALAPPDATA%\RusticGames\<Application name>\logs` on Windows. Lua 5.4, JavaScript and HTML/CSS script support are bundled. Available sibling DLLs and `rustic-luau-host.exe` are copied. Other external script languages still require their supported toolchains on the player's machine; test the result on a clean machine.
@@ -34,8 +36,10 @@ examples below only for a compiled UI. Compiled manifests do not also generate
 the Python companion bundle. A portable export with setup disabled does not
 compile the UI or export the compiled manifest as an HTTP configuration.
 
-Install the **.NET 8 SDK** on the build machine and put `dotnet` on PATH before
-opening the editor. Publishing restores Microsoft WebView2 from NuGet and the
+Install **.NET SDK 8 or newer** on the build machine. Rustic checks PATH and
+standard .NET installation folders automatically. For a custom installation,
+set `DOTNET_ROOT` to the folder containing `dotnet.exe` before opening Rustic.
+Publishing restores Microsoft WebView2 from NuGet and the
 Windows/.NET runtime packs, requiring network access on the first build. Players
 do not need .NET. Web interfaces require the **Microsoft Edge WebView2 Runtime**
 on the player's Windows machine; install it from Microsoft if startup reports it
@@ -185,7 +189,7 @@ C# runs as native code with the player's account privileges. Installer sources
 are independent of game behaviors; do not register them in `config/scripts.ron`.
 Portable Windows builds and website/Android exports do not use this UI.
 
-If publishing fails, check the .NET 8 SDK and the reported NuGet/compiler output.
+If publishing fails, check the .NET SDK and the reported NuGet/compiler output.
 If the web page is blank, check relative asset paths and script errors in WebView2
 developer tools. If installation fails, display the bridge error/exit code, check
 the chosen directory is writable and the complete distribution is present, or run
@@ -309,7 +313,7 @@ The test exports a real scene and checks rendering, Lua/JavaScript startup, keyb
 ## Troubleshooting
 
 - **Build is disabled:** check the Required messages. Read-only editors cannot build; close the other writable editor and reopen the project. Windows packaging requires a Windows host and its bundled runtime. Inno Setup is configured automatically only when creating setup; a missing default compiler does not disable the build. Static website and Android exports require the engine's compiled `browser-runtime/` resources; hosted websites require the native runtime.
-- **Inno Setup configuration failed:** check the displayed error, internet access to GitHub releases, and permission to install in your local Programs folder and update your user PATH, then retry **Build Project**. A failed signature check stops installation. You can also install Inno Setup 6 manually and enter its existing absolute `ISCC.exe` path. Invalid custom paths are reported in **Required**; reset the field to `ISCC.exe` for automatic setup. Inspect compiler failures for invalid version or image resources.
+- **Inno Setup configuration failed:** check the displayed error, internet access to GitHub releases, and permission to install in your local Programs folder and update your user PATH, then retry **Build Project**. A failed signature check stops installation. You can also install Inno Setup 6 manually and enter its existing absolute `ISCC.exe` path. Invalid custom paths are reported in **Required**; reset the field to `ISCC.exe` for automatic setup. If compilation fails, the build dialog shows the compiler path, exit status and output. Use the output to check your app version or installer images.
 - **Browser runtime missing:** install a distribution that includes `browser-runtime/` or build those engine resources from source. There is no project `web/` source folder to configure.
 - **Website fails to load:** serve the whole generated `website/` directory over HTTP/HTTPS, check browser WebGL 2/WebAssembly support, and inspect the displayed error and browser console.
 - **Unsupported script:** select Hosted runtime for a website using external languages; static web/Android builds require Lua 5.4/JavaScript/HTML behaviors.

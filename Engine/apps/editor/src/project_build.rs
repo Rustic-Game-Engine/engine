@@ -471,9 +471,10 @@ fn readiness(root: &Path, settings: &Settings) -> Vec<String> {
             }
             if settings.installer
                 && !automatic_compiler(&settings.compiler)
-                && find_program(&settings.compiler).is_none()
+                && !(Path::new(&settings.compiler).is_absolute()
+                    && Path::new(&settings.compiler).is_file())
             {
-                missing.push("The custom Inno Setup compiler path does not exist. Use ISCC.exe for automatic setup.".into());
+                missing.push("Enter an existing absolute path to ISCC.exe, or use ISCC.exe for automatic setup.".into());
             }
             if settings.installer
                 && let Err(error) = installer_ui::validate(root)
@@ -608,9 +609,6 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
             export_custom_installer(root, output, settings)?;
             if settings.installer {
                 let compiler = ensure_installer_compiler(&settings.compiler)?;
-                if !available(&compiler.to_string_lossy(), "/?") {
-                    return Err("Inno Setup compiler could not run. Check the custom compiler path or repair the Inno Setup installation.".into());
-                }
                 for (source, target, extension) in [
                     (&settings.license, "license.txt", ""),
                     (&settings.icon, "setup.ico", "ico"),
@@ -725,14 +723,15 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
 }
 
 fn run_command(command: &mut Command) -> Result<(), String> {
+    let tool = command.get_program().to_string_lossy();
     let output = command
         .output()
-        .map_err(|e| format!("Could not start build tool: {e}"))?;
+        .map_err(|e| format!("Could not start {tool}: {e}"))?;
     if output.status.success() {
         return Ok(());
     }
     Err(format!(
-        "Build tool exited with {}.\n{}\n{}",
+        "{tool} exited with {}.\n{}\n{}",
         output.status,
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)

@@ -2,6 +2,14 @@ use std::ffi::{OsStr, OsString};
 use std::path::PathBuf;
 
 pub(super) fn find_executable(candidates: &[&str]) -> Option<PathBuf> {
+    find_executable_matching(candidates, Vec::new, |_| true)
+}
+
+pub(super) fn find_executable_matching(
+    candidates: &[&str],
+    extra_directories: impl FnOnce() -> Vec<PathBuf>,
+    matches: impl FnMut(&std::path::Path) -> bool,
+) -> Option<PathBuf> {
     let paths = std::env::var_os("PATH");
     let extensions: Vec<OsString> = if cfg!(windows) {
         std::env::var_os("PATHEXT")
@@ -13,16 +21,20 @@ pub(super) fn find_executable(candidates: &[&str]) -> Option<PathBuf> {
     } else {
         vec![OsString::new()]
     };
-    find_with_fallback(candidates, paths.as_deref(), &extensions, || {
-        #[cfg(windows)]
-        {
-            windows_install_directories()
-        }
-        #[cfg(not(windows))]
-        {
-            Vec::new()
-        }
-    })
+    find_with_fallback(
+        candidates,
+        paths.as_deref(),
+        &extensions,
+        || {
+            let directories = extra_directories();
+            #[cfg(windows)]
+            let mut directories = directories;
+            #[cfg(windows)]
+            directories.extend(windows_install_directories());
+            directories
+        },
+        matches,
+    )
 }
 
 fn find_with_fallback(
@@ -30,28 +42,33 @@ fn find_with_fallback(
     paths: Option<&OsStr>,
     extensions: &[OsString],
     fallback: impl FnOnce() -> Vec<PathBuf>,
+    mut matches: impl FnMut(&std::path::Path) -> bool,
 ) -> Option<PathBuf> {
     let process_directories = paths.map(std::env::split_paths).into_iter().flatten();
-    find_in_directories(candidates, process_directories, extensions)
-        .or_else(|| find_in_directories(candidates, fallback(), extensions))
+    let mut seen = std::collections::HashSet::new();
+    let mut check =
+        |path: &std::path::Path| path.is_file() && seen.insert(path.to_path_buf()) && matches(path);
+    find_in_directories(candidates, process_directories, extensions, &mut check)
+        .or_else(|| find_in_directories(candidates, fallback(), extensions, check))
 }
 
 fn find_in_directories(
     candidates: &[&str],
     directories: impl IntoIterator<Item = PathBuf>,
     extensions: &[OsString],
+    mut matches: impl FnMut(&std::path::Path) -> bool,
 ) -> Option<PathBuf> {
     for directory in directories {
         for candidate in candidates {
             let direct = directory.join(candidate);
-            if direct.is_file() {
+            if matches(&direct) {
                 return Some(direct);
             }
             for extension in extensions {
                 let mut filename = OsString::from(candidate);
                 filename.push(extension);
                 let path = directory.join(filename);
-                if path.is_file() {
+                if matches(&path) {
                     return Some(path);
                 }
             }
@@ -149,7 +166,13 @@ mod tests {
             std::fs::write(&executable, []).unwrap();
             for paths in [None, Some(stale_path.as_os_str())] {
                 assert_eq!(
-                    find_with_fallback(&[compiler], paths, &extensions, || vec![installed.clone()]),
+                    find_with_fallback(
+                        &[compiler],
+                        paths,
+                        &extensions,
+                        || vec![installed.clone()],
+                        |_| true
+                    ),
                     Some(executable.clone())
                 );
             }
@@ -163,9 +186,13 @@ mod tests {
         std::fs::write(&executable, []).unwrap();
         let paths = std::env::join_paths([root.path()]).unwrap();
         assert_eq!(
-            find_with_fallback(&["clang++"], Some(&paths), &[".exe".into()], || {
-                panic!("installed locations should only be searched after PATH")
-            }),
+            find_with_fallback(
+                &["clang++"],
+                Some(&paths),
+                &[".exe".into()],
+                || panic!("installed locations should only be searched after PATH"),
+                |_| true,
+            ),
             Some(executable)
         );
     }
@@ -175,9 +202,13 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let executable = root.path().join("clang++.exe");
         let probe = || {
-            find_with_fallback(&["clang++"], None, &[".exe".into()], || {
-                vec![root.path().into()]
-            })
+            find_with_fallback(
+                &["clang++"],
+                None,
+                &[".exe".into()],
+                || vec![root.path().into()],
+                |_| true,
+            )
         };
         assert_eq!(probe(), None);
         std::fs::write(root.path().join("clang.exe"), []).unwrap();
@@ -186,6 +217,28 @@ mod tests {
         assert_eq!(probe(), Some(executable.clone()));
         std::fs::remove_file(executable).unwrap();
         assert_eq!(probe(), None);
+    }
+
+    #[test]
+    fn an_unusable_dotnet_on_path_does_not_hide_an_installed_sdk() {
+        let root = tempfile::tempdir().unwrap();
+        let on_path = root.path().join("dotnet.exe");
+        std::fs::write(on_path, []).unwrap();
+        let fallback = root.path().join("Program Files/dotnet");
+        std::fs::create_dir_all(&fallback).unwrap();
+        let installed = fallback.join("dotnet.exe");
+        std::fs::write(&installed, []).unwrap();
+        let paths = std::env::join_paths([root.path()]).unwrap();
+        assert_eq!(
+            find_with_fallback(
+                &["dotnet.exe"],
+                Some(&paths),
+                &[OsString::new()],
+                || vec![fallback],
+                |path| path == installed,
+            ),
+            Some(installed)
+        );
     }
 
     #[test]

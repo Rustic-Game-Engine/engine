@@ -58,9 +58,8 @@ function Assert-WinGetInitialized([int]$ExitCode) {
     }
 }
 
-function Invoke-WinGet([string]$Executable, [string[]]$Arguments) {
-    # Native '& winget' can make PowerShell allocate a hidden console even when
-    # Setup started PowerShell with CREATE_NO_WINDOW. Keep WinGet console-free too.
+function Invoke-ToolchainProcess([string]$Executable, [string[]]$Arguments) {
+    # Keep native tools console-free when launched by Setup.
     $info = [System.Diagnostics.ProcessStartInfo]::new()
     $info.FileName = $Executable
     # Callers supply only fixed flags and catalog package IDs, with no whitespace.
@@ -75,16 +74,53 @@ function Invoke-WinGet([string]$Executable, [string[]]$Arguments) {
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         $process.WaitForExit()
-        $output = $stdout.GetAwaiter().GetResult()
-        $errors = $stderr.GetAwaiter().GetResult()
-        if ($output) { Write-Host $output.TrimEnd() }
-        if ($errors) { Write-Host $errors.TrimEnd() }
-        return $process.ExitCode
+        return [pscustomobject]@{
+            ExitCode = $process.ExitCode
+            Output = $stdout.GetAwaiter().GetResult()
+            Errors = $stderr.GetAwaiter().GetResult()
+        }
     }
     finally { $process.Dispose() }
 }
 
+function Invoke-WinGet([string]$Executable, [string[]]$Arguments) {
+    $result = Invoke-ToolchainProcess $Executable $Arguments
+    if ($result.Output) { Write-Host $result.Output.TrimEnd() }
+    if ($result.Errors) { Write-Host $result.Errors.TrimEnd() }
+    return $result.ExitCode
+}
+
+function Test-DotNetSdkInstalled {
+    $candidates = @(
+        Get-Command dotnet.exe -CommandType Application -All -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.Source }
+        if ($env:DOTNET_ROOT) { Join-Path $env:DOTNET_ROOT 'dotnet.exe' }
+        foreach ($root in @($env:ProgramW6432, $env:ProgramFiles, ${env:ProgramFiles(x86)})) {
+            if ($root) {
+                Join-Path $root 'dotnet\dotnet.exe'
+                Join-Path $root 'dotnet\x64\dotnet.exe'
+            }
+        }
+        if ($env:USERPROFILE) { Join-Path $env:USERPROFILE '.dotnet\dotnet.exe' }
+        if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA 'Microsoft\dotnet\dotnet.exe' }
+    )
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        try {
+            $result = Invoke-ToolchainProcess $candidate @('--list-sdks')
+            if ($result.ExitCode -eq 0 -and $result.Output -match '(?m)^[ \t]*[1-9][0-9]+\.[^\s]+ \[[^\r\n]+\]\r?$') {
+                return $true
+            }
+        } catch {
+            # A stale or broken host can precede a usable installation.
+            Write-Verbose "Could not check ${candidate}: $($_.Exception.Message)"
+        }
+    }
+    return $false
+}
+
 function Test-ToolchainInstalled($Entry) {
+    if ($Entry.Package -eq $catalog.CSharp.Package) { return (Test-DotNetSdkInstalled) }
     foreach ($commandName in $Entry.Commands) {
         if (Get-Command $commandName -ErrorAction SilentlyContinue) { return $true }
     }
@@ -161,6 +197,11 @@ try {
                 $failure = "$($entry.Name) (WinGet exit code $packageExitCode)"
                 Write-Host "Failed: $failure"
                 $failures.Add($failure)
+            }
+            elseif ($language -eq 'CSharp' -and -not (Test-DotNetSdkInstalled)) {
+                $message = '.NET SDK 10 or newer was not found after installation. Check Program Files\dotnet or set DOTNET_ROOT to the SDK installation directory.'
+                Write-Host "Failed: $message"
+                $failures.Add($message)
             }
         }
 
