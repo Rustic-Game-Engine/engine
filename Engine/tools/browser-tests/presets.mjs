@@ -37,7 +37,16 @@ try {
  const tap=async key=>{await page.keyboard.down(key);await frames(2);await page.keyboard.up(key);await frames(2);};
  await page.goto(`http://127.0.0.1:${server.address().port}`);
  await waitLog('gallery-ready:35');await page.locator('#game').focus();
- assert.match(await page.locator('#gpu').evaluate(canvas=>canvas.getContext('webgl2')?.getParameter(WebGL2RenderingContext.VERSION)||''),/WebGL 2/i);
+ const graphics = await page.locator('#gpu').evaluate(canvas => {
+  const gl = canvas.getContext('webgl2');
+  if (!gl) throw new Error('WebGL 2 context is unavailable');
+  const debug = gl.getExtension('WEBGL_debug_renderer_info');
+  return {
+   version: gl.getParameter(gl.VERSION),
+   renderer: gl.getParameter(debug ? debug.UNMASKED_RENDERER_WEBGL : gl.RENDERER),
+  };
+ });
+ assert.match(graphics.version, /WebGL 2/i);
  if(artifact)await mkdir(artifact,{recursive:true});
  const results=[];
  for(let index=1;index<=35;index++){
@@ -56,14 +65,15 @@ try {
   await frames(sampledFrames);
   const presentationMsPerFrame = (performance.now() - started) / sampledFrames;
   const late = await compare();
+  const jsHeapBytes = await page.evaluate(() => performance.memory?.usedJSHeapSize ?? null);
   if(artifact)await page.locator('#game').screenshot({path:join(artifact,`${slug}-late.png`)});
-  results.push({index,name,early,late,viewport:page.viewportSize(),sampledFrames,presentationMsPerFrame});
+  results.push({index,name,early,late,viewport:page.viewportSize(),sampledFrames,presentationMsPerFrame,jsHeapBytes});
   // These checks establish real rendered output, not subjective artistic approval.
   assert.ok(Math.max(early.changed,late.changed)>5,`Preset ${index} ${name} produced no visible pixels: ${JSON.stringify({early,late})}`);
   console.log(`PASS preset ${index}/35 ${name}: early=${early.changed} late=${late.changed} changed pixels`);
  }
  assert.deepEqual(errors,[],'Preset gallery raised browser errors');
- if(artifact)await writeFile(join(artifact,'presets.json'),JSON.stringify({backend:'WebGL2 CPU fallback',presets:results},null,2));
+ if(artifact)await writeFile(join(artifact,'presets.json'),JSON.stringify({graphics,particleSimulation:'CPU fallback',timing:'Observed browser presentation interval',presets:results},null,2));
  console.log('PASS: all 35 shipped presets produced actual exported WebGL output');
 }finally{
  if(browser)await browser.close();if(server)await new Promise(done=>server.close(done));

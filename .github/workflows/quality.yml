@@ -130,7 +130,19 @@ jobs:
           npm ci --prefix tools/browser-tests
           npm exec --prefix tools/browser-tests -- playwright install --with-deps chromium
       - name: Play an exported game without a game server
+        env:
+          RUSTIC_BROWSER_EFFECTS_ARTIFACT_DIR: ${{ runner.temp }}/browser-effects
+          RUSTIC_BROWSER_PRESETS_ARTIFACT_DIR: ${{ runner.temp }}/browser-presets
         run: npm test --prefix tools/browser-tests
+      - name: Preserve browser effects evidence
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: browser-effects
+          path: |
+            ${{ runner.temp }}/browser-effects
+            ${{ runner.temp }}/browser-presets
+          if-no-files-found: ignore
       - name: Hosted native website rendering and Python input
         run: EGL_PLATFORM=surfaceless cargo test --locked -p rustic-runtime --profile dev-fast native_website_streams_rendered_frames_and_executes_python_input -- --ignored
 
