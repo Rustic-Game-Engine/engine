@@ -628,6 +628,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
                 }
                 fs::write(output.join("installer.iss"), installer_script(settings))
                     .map_err(|e| e.to_string())?;
+                // ISCC exits with code 1 after printing help. Check the compile itself.
                 run_command(
                     Command::new(compiler)
                         .current_dir(output)

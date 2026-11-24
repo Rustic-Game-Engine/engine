@@ -17,7 +17,8 @@ New-Item -ItemType Directory -Path $mockBin -Force | Out-Null
 
 # A real native executable exercises native exit codes, including signed NTSTATUS.
 # It never installs software or accesses the network.
-Add-Type -OutputAssembly (Join-Path $mockBin 'winget.exe') -OutputType ConsoleApplication -TypeDefinition @'
+$mockTool = Join-Path $testRoot 'mock-tool.exe'
+Add-Type -OutputAssembly $mockTool -OutputType ConsoleApplication -TypeDefinition @'
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -50,6 +51,7 @@ public class MockWinGet {
     }
 }
 '@
+Copy-Item $mockTool (Join-Path $mockBin 'winget.exe')
 
 function Assert-Equal($Actual, $Expected, [string]$Message) {
     if ($Actual -ne $Expected) { throw "$Message (expected $Expected, got $Actual)" }
@@ -72,7 +74,7 @@ function New-TestProcess([string]$Mode) {
     if ($Mode -eq 'installed') {
         $sdkRoot = Join-Path $caseRoot 'dotnet'
         New-Item -ItemType Directory -Path $sdkRoot | Out-Null
-        Copy-Item (Join-Path $mockBin 'winget.exe') (Join-Path $sdkRoot 'dotnet.exe')
+        Copy-Item $mockTool (Join-Path $sdkRoot 'dotnet.exe')
     }
     $info.EnvironmentVariables['RUSTIC_TEST_MODE'] = $Mode
     $info.EnvironmentVariables['RUSTIC_TEST_CALLS'] = Join-Path $caseRoot 'calls.txt'
