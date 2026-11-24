@@ -848,18 +848,11 @@ mod tests {
     }
 
     fn device() -> (wgpu::Device, wgpu::Queue) {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN | wgpu::Backends::GL,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-        let (_, device, queue) = pollster::block_on(super::super::initialize_adapter(
-            &instance,
-            None,
-            false,
-            "particle-parity-test",
+        let context = pollster::block_on(crate::BackendContext::initialize(
+            crate::BackendRequest::Auto,
         ))
-        .unwrap();
-        (device, queue)
+        .expect("particle tests need a suitable graphics adapter");
+        (context.device, context.queue)
     }
     fn map(device: &wgpu::Device, buffer: &wgpu::Buffer) -> Vec<u8> {
         let (sender, receiver) = mpsc::sync_channel(1);
