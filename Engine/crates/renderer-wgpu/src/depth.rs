@@ -70,6 +70,7 @@ struct Instance {
 }
 pub(super) struct DepthCapture {
     pipeline: wgpu::RenderPipeline,
+    double_sided_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     targets: Option<Targets>,
     instances: HashMap<u64, Instance>,
@@ -103,7 +104,7 @@ impl DepthCapture {
             bind_group_layouts: &[Some(&layout), Some(surface_layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let mut pipeline_descriptor = wgpu::RenderPipelineDescriptor {
             label: Some("effects-depth-motion-pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -175,9 +176,14 @@ impl DepthCapture {
             }),
             multiview_mask: None,
             cache: None,
-        });
+        };
+        let pipeline = device.create_render_pipeline(&pipeline_descriptor);
+        pipeline_descriptor.label = Some("effects-depth-motion-double-sided");
+        pipeline_descriptor.primitive.cull_mode = None;
+        let double_sided_pipeline = device.create_render_pipeline(&pipeline_descriptor);
         Ok(Self {
             pipeline,
+            double_sided_pipeline,
             layout,
             targets: None,
             instances: HashMap::new(),
@@ -420,12 +426,16 @@ impl DepthCapture {
             timestamp_writes: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
         for mesh in &scene.meshes {
             if let (Some(gpu), Some(instance)) = (
                 meshes.get(&mesh.mesh_key),
                 self.instances.get(&mesh.instance_key),
             ) {
+                pass.set_pipeline(if mesh.double_sided {
+                    &self.double_sided_pipeline
+                } else {
+                    &self.pipeline
+                });
                 pass.set_bind_group(0, &instance.group, &[]);
                 pass.set_bind_group(1, surfaces.group(&mesh.textures), &[]);
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));

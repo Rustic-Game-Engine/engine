@@ -115,6 +115,7 @@ pub(super) fn project(scene: &ViewportScene, decal: &RenderDecal) -> Option<View
         return None;
     }
     Some(ViewportMesh {
+        double_sided: false,
         textures: engine_world::SurfaceTextures::default(),
         instance_key: key(decal.entity),
         mesh_key: key(decal.entity),
@@ -205,6 +206,7 @@ mod tests {
     #[test]
     fn projector_clips_receiver_triangles_and_offsets_along_surface() {
         let mesh = ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures::default(),
             instance_key: 1,
             mesh_key: 1,

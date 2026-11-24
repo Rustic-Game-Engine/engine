@@ -288,6 +288,7 @@ mod tests {
             camera_position: [0.0; 3],
             view_projection: glam::Mat4::IDENTITY.to_cols_array(),
             meshes: vec![super::super::ViewportMesh {
+                double_sided: false,
                 textures: SurfaceTextures {
                     material: Some(meta.asset_id),
                     roughness: Some(0.9),
@@ -669,6 +670,7 @@ mod boundary_tests {
             camera_position: [0.0; 3],
             view_projection: glam::Mat4::IDENTITY.to_cols_array(),
             meshes: vec![super::super::ViewportMesh {
+                double_sided: false,
                 instance_key: super::super::effect_geometry_key(target, 0),
                 mesh_key: 1,
                 vertices: [[-1.0, -1.0, 0.0], [1.0, -1.0, 0.0], [0.0, 1.0, 0.0]]

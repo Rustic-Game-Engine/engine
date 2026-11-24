@@ -1289,6 +1289,8 @@ impl SceneViewportRenderer {
             &context.device,
             &bind_layout,
             &surfaces.layout,
+            &reflections.layout,
+            &shadows.layout,
             ViewportPass::DoubleSided,
             "rustic-viewport-double-sided-pipeline",
         );
@@ -3831,6 +3833,7 @@ mod tests {
     fn world_space_shadows_obey_caster_and_receiver_flags_in_pixels() {
         let quad =
             |key: u64, x: f32, z: f32, size: f32, color: [f32; 4], casts: bool| ViewportMesh {
+                double_sided: false,
                 instance_key: key,
                 mesh_key: key,
                 vertices: [[-size, -size], [size, -size], [size, size], [-size, size]]
@@ -4621,6 +4624,7 @@ pub fn append_effect_frame(scene: &mut ViewportScene, frame: &engine_world::effe
     {
         let key = effect_geometry_key(geometry.entity, index);
         scene.meshes.push(ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures {
                 effect_source: Some(geometry.entity),
                 material: geometry.material,
@@ -4746,7 +4750,6 @@ fn base_game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportSce
                 .part_attributes(primitive.entity)
                 .unwrap_or_default()
                 .double_sided,
-            textures: world.resolved_textures(primitive.entity),
             instance_key: key,
             mesh_key: key,
             vertices: mesh
@@ -4861,6 +4864,7 @@ pub fn append_mesh_particle_models(
                         .hash(&mut h);
                     let key = h.finish();
                     ViewportMesh {
+                        double_sided: false,
                         textures: engine_world::SurfaceTextures {
                             effect_source: Some(particle.entity),
                             material: particle.material,

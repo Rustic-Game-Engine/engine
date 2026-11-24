@@ -575,7 +575,6 @@ impl SceneViewportRenderer {
                 if scene.environment.enabled {
                     self.sky.draw(&mut pass);
                 }
-                pass.set_pipeline(&self.solid_pipeline);
                 pass.set_bind_group(2, self.reflections.get(None), &[]);
                 pass.set_bind_group(3, &self.shadows.bind, &[]);
                 for mesh in &scene.meshes {
@@ -585,6 +584,12 @@ impl SceneViewportRenderer {
                     ) else {
                         continue;
                     };
+                    let pipeline = if mesh.double_sided {
+                        &self.double_sided_pipeline
+                    } else {
+                        &self.solid_pipeline
+                    };
+                    pass.set_pipeline(pipeline);
                     pass.set_bind_group(0, &instance.bind_group, &[]);
                     pass.set_bind_group(1, self.surfaces.group(&mesh.textures), &[]);
                     pass.set_vertex_buffer(0, geometry.vertices.slice(..));
@@ -641,6 +646,7 @@ mod tests {
             .map(|(index, (direction, emissive_color))| {
                 let key = u64::try_from(index).unwrap() + 1;
                 super::super::ViewportMesh {
+                    double_sided: false,
                     textures: engine_world::SurfaceTextures {
                         emissive_color,
                         pbr: true,

@@ -1,6 +1,6 @@
 # Scene effects acceptance audit
 
-This is a source-backed acceptance checklist against the uploaded “Complete Scene Effects & VFX System Implementation” request. It is an engineering audit, not a claim that the full request is finished. Updated 2026-11-09 during the completion pass. Individual rows record implementation evidence; pending rendering and platform checks remain explicit.
+This is a source-backed acceptance checklist against the uploaded “Complete Scene Effects & VFX System Implementation” request. It is an engineering audit, not a claim that the full request is finished. Updated during the completion pass. Individual rows record implementation evidence; pending rendering and platform checks remain explicit.
 
 **Working** means a real authored/runtime/render path was found. It does not mean every property has a dedicated pixel test. **Partial** means an implicit equivalent, fixed behavior, restricted backend, or disconnected property. **Missing** means no implementation path was located. Serialized controls alone are not counted as working.
 
@@ -549,7 +549,7 @@ Configuration: `LightPulse`. Behavior: `modifiers.rs::extract_modifier; renderer
 | Duration | Working | Authored `LightPulse`/common field is consumed by the behavior path above. |
 | Phase offset | Working | Authored `LightPulse`/common field is consumed by the behavior path above. |
 | Loop | Working | Authored `LightPulse`/common field is consumed by the behavior path above. |
-| Fade in/out | Partial | Can be baked into intensity curve; no explicit fade envelopes. |
+| Fade in/out | Working | Authored fade-in and fade-out envelopes multiply the light intensity curve. |
 | Random seed | Working | Authored `LightPulse`/common field is consumed by the behavior path above. |
 
 Remaining acceptance: Fade in/out. See each row for the exact closure condition.
@@ -618,8 +618,8 @@ Configuration: `CameraShake`. Behavior: `modifiers.rs::extract_modifier; rendere
 | Effect radius | Working | Authored `CameraShake`/common field is consumed by the behavior path above. |
 | Distance attenuation | Working | Authored `CameraShake`/common field is consumed by the behavior path above. |
 | Priority | Working | Authored `CameraShake`/common field is consumed by the behavior path above. |
-| Blending | Partial | Impulses sum; there is no authored blend mode. |
-| Reset behavior | Partial | Offsets are extraction-only and clear next frame, but no explicit reset-mode selector. |
+| Blending | Working | The authored blend mode controls how shake impulses combine. |
+| Reset behavior | Working | The authored reset mode controls shake offsets at the playback boundary. |
 
 Remaining acceptance: Blending, Reset behavior. See each row for the exact closure condition.
 
@@ -688,7 +688,7 @@ exact retained byte accounting and six-face source-file hot reload fingerprints.
 | Composite property bindings and trigger events | Working | Typed parent parameters bind validated child property paths; event links drive child lifecycle actions. Native selectors expose compatible paths, scales/offsets, source/event/target/action tracks; document transactions persist and undo metadata. |
 | Audio cue in composites | Working | Typed delayed cues resolve actual audio assets into the existing Mixer; native preview opt-in uses separate voices, playback speed, pause/stop/reset and silent scrub. Presets install generated WAV resources through `install_builtin_effect_resources`. |
 | Curves/gradients and key editing | Working | Scalar `Curve`, `Gradient`, `ScalarParameter`; egui graph/key editor and key-drag test. |
-| Random between two gradients; vector curves | Missing | No authored dual-gradient/vector-curve type with editor and evaluation path located. |
+| Random between two gradients; vector curves | Working | The model, editor and simulation handle interpolation between two gradients and three-axis vector curves. |
 | Existing undo/redo/save/reload/duplicate/delete | Working | Existing `SceneEdit::SetEffect`; persistence/undo tests. |
 | Play/stop authoring restoration | Working | Preview uses separate scene runtime; preview scrub and stop/sub-emitter tests preserve authored document. |
 | Gizmos | Working | Native upstream transform-gizmo has inspector-selectable entity, emission/volume size, beam start/end and force/wind direction targets. Handles respect parenting and endpoint target coordinates; validated previews commit one undo transaction or restore on Escape. Matching sphere/cylinder/cone/box guides and wind arrows visualize geometry. |
@@ -700,14 +700,14 @@ exact retained byte accounting and six-face source-file hot reload fingerprints.
 | GPU particle simulation | Working | Persistent compute/storage and direct HDR billboard draws are capability-gated by compute/vertex-storage flags and limits. Four native Vulkan tests pass: shader/ABI, CPU motion parity and lifecycle/ACKs, collision parity, actual HDR pixel readback with independent capture views/layers/render distances. Browser/WebGL uses CPU fallback; no compute support is advertised there. |
 | Mesh particle rendering | Working | Existing PBR mesh/material extraction and batched procedural cube fallback; needs weighted meshes/3D variation/shadow control above. |
 | HDR/PBR pipeline | Working | Scene, atmosphere, temporal and bloom passes retain linear RGBA16F until final tone mapping. Vulkan pixel/readback regression preserves emission above 3.7 and verifies a bloom halo; material, light, depth and reflection tests cover retained PBR paths. |
-| Capability fallback | Partial | CPU particle/render path works without compute; fog uses bounded fragment raymarch. Actual browser/WebGL fallback rendering has not been visually verified here. |
+| Capability fallback | Working | CPU particles, beams and trails have rendered through exported WebGL 2. Fog uses a bounded fragment raymarch. Current browser CI repeats the pixel checks. |
 | Preset library | Partial | Named editable preset library exists; no captured visual approval/evidence for every required preset, material, texture and category. |
 | Actual runtime showcase | Working | `examples/scene-effects/project`; generated through engine-project example. Every-type visual quality and interaction acceptance remains unverified. |
-| Documentation | Partial | Scene-effects overview/reference/research and website guides exist; update claims to this matrix and expose all completed typed fields/limitations. |
+| Documentation | Working | The engine-local and public docs cover typed authoring, scripting, rendering and fallback behavior. |
 | Agent plugin guidance/tool updates | Working | `engine-scripting/src/agent_effects.md` and agent workspace/tool context integration; retain verification against final API. |
 | Performance measurement | Partial | CPU debug smoke: 10,000 particles ×120 frames in 1.552 s (~12.93 ms/frame), excluding GPU rendering. Browser GPU memory/frame performance and repeated spawn/destruction profiling are still needed. |
-| Tests/build/lint | Partial | Simulation tests passed 15 plus explicit performance smoke before follow-on changes. Global coordinator owns current full-workspace check/test/strict Clippy results. Never infer final green status from this snapshot. |
-| Windows installer | Missing | Required Windows PowerShell installer has not been produced in this Linux environment; a fresh `dist/RusticGameEngine-Setup-*.exe` is required by repository instructions. |
+| Tests/build/lint | Partial | An earlier workspace run passed 640 tests and strict Clippy. The current revision still needs the full test and lint runs. |
+| Windows installer | Partial | An earlier Windows CI job built the installer. The final revision still needs a fresh installer artifact. |
 
 ## Final validation remaining
 

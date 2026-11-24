@@ -1005,6 +1005,7 @@ mod tests {
             "flare visibility must fade in over time"
         );
         scene.meshes.push(ViewportMesh {
+            double_sided: false,
             instance_key: 709,
             mesh_key: 709,
             vertices: [[-0.2, -0.2], [0.2, -0.2], [0.2, 0.2], [-0.2, 0.2]]

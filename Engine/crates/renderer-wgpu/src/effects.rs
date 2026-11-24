@@ -746,6 +746,7 @@ mod gpu_tests {
         frame.post.bloom = 0.;
         let mut intersection_scene = scene.clone();
         intersection_scene.meshes.push(crate::ViewportMesh {
+            double_sided: false,
             instance_key: 941,
             mesh_key: 941,
             vertices: [[-1., -1.], [1., -1.], [1., 1.], [-1., 1.]]
