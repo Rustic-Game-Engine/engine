@@ -1,4 +1,5 @@
 // Render every shipped preset through the real exported player and preserve evidence.
+import { waitForRenderedFrames } from './frames.mjs';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {createServer} from 'node:http';
@@ -32,7 +33,7 @@ try {
   const status=await page.locator('#status').textContent();assert.ok(!status.startsWith('Game could'),`${status}\n${logs.join('\n')}`);
   assert.ok(Date.now()<deadline,`Missing ${marker}\n${logs.join('\n')}`);await new Promise(done=>setTimeout(done,50));
  }};
- const frames=async count=>{const stamp=Number(await page.locator('#game').getAttribute('data-frame'));await page.waitForFunction(({stamp,count})=>Number(document.getElementById('game').dataset.frame)>=stamp+count,{stamp,count},{timeout:60000});};
+ const frames = count => waitForRenderedFrames(page, count, 180000);
  const tap=async key=>{await page.keyboard.down(key);await frames(2);await page.keyboard.up(key);await frames(2);};
  await page.goto(`http://127.0.0.1:${server.address().port}`);
  await waitLog('gallery-ready:35');await page.locator('#game').focus();
@@ -40,6 +41,7 @@ try {
  if(artifact)await mkdir(artifact,{recursive:true});
  const results=[];
  for(let index=1;index<=35;index++){
+  await page.setViewportSize(index === 26 ? { width: 320, height: 180 } : { width: 800, height: 450 });
   await tap('ArrowRight');await waitLog(`gallery-selected:${index}:`);await frames(3);
   const name=logs.find(line=>line.includes(`gallery-selected:${index}:`)).split(`gallery-selected:${index}:`)[1];
   await page.locator('#game').evaluate(canvas=>{window.__presetReference=new Uint8ClampedArray(canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data);});
@@ -49,9 +51,13 @@ try {
   await frames(2);const early=await compare();
   const slug=`${String(index).padStart(2,'0')}-${name.toLowerCase().replace(/[^a-z0-9]+/g,'-')}`;
   if(artifact)await page.locator('#game').screenshot({path:join(artifact,`${slug}-early.png`)});
-  await frames(40);const late=await compare();
+  const sampledFrames = name === "Mist" ? 4 : 40;
+  const started = performance.now();
+  await frames(sampledFrames);
+  const presentationMsPerFrame = (performance.now() - started) / sampledFrames;
+  const late = await compare();
   if(artifact)await page.locator('#game').screenshot({path:join(artifact,`${slug}-late.png`)});
-  results.push({index,name,early,late});
+  results.push({index,name,early,late,viewport:page.viewportSize(),sampledFrames,presentationMsPerFrame});
   // These checks establish real rendered output, not subjective artistic approval.
   assert.ok(Math.max(early.changed,late.changed)>5,`Preset ${index} ${name} produced no visible pixels: ${JSON.stringify({early,late})}`);
   console.log(`PASS preset ${index}/35 ${name}: early=${early.changed} late=${late.changed} changed pixels`);

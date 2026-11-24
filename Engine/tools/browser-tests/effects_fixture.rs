@@ -41,7 +41,10 @@ fn write_browser_effects_fixture() {
         ..EntitySnapshot::default()
     });
     scene.entities.push(EntitySnapshot {
-        light: Some(Light::default()),
+        light: Some(Light {
+            casts_shadows: false,
+            ..Light::default()
+        }),
         ..EntitySnapshot::default()
     });
     scene.entities.push(EntitySnapshot {
@@ -257,7 +260,8 @@ fn gallery_controller(stations: &[(engine_world::EntityId, String, f32, bool, bo
     let entries = stations
         .iter()
         .map(|(id, name, x, moving, burst)| {
-            format!("{{id='{id}',name='{name}',x={x},moving={moving},burst={burst}}}")
+            let freeze_at = if name == "Muzzle flash" { 0.02 } else { 0.1 };
+            format!("{{id='{id}',name='{name}',x={x},moving={moving},burst={burst},freeze_at={freeze_at}}}")
         })
         .collect::<Vec<_>>()
         .join(",\n");
@@ -272,7 +276,7 @@ return {{
    if index>0 then Effects.stop(stations[index].id) end
    index=index%#stations+1;elapsed=0;running=false
    local s=stations[index]
-   rustic.set_translation(s.x,1.8,-7)
+   rustic.set_translation(s.x,1.1,-4)
    rustic.log('info','gallery-selected:'..index..':'..s.name)
   end
   last_next=next_key
@@ -286,7 +290,7 @@ return {{
    elapsed=elapsed+dt
    local s=stations[index]
    if s.moving then rustic.edit_object_attribute(s.id,'Position',{{s.x+math.cos(elapsed*3)*0.9,0.6+math.sin(elapsed*3)*0.4,0}}) end
-   if s.burst and elapsed>=0.1 then Effects.pause(s.id);running=false end
+   if s.burst and elapsed>=s.freeze_at then Effects.pause(s.id);running=false end
   end
  end
 }}"
@@ -352,6 +356,11 @@ fn write_browser_presets_fixture() {
                     ..Default::default()
                 },
                 primitive: Some(Primitive::Plane { size: [12.0, 12.0] }),
+                textures: Some(engine_world::SurfaceTextures {
+                    cast_shadows: false,
+                    receive_shadows: false,
+                    ..Default::default()
+                }),
                 part_attributes: PartAttributes {
                     color: [0.12, 0.15, 0.2, 1.0],
                     anchored: true,
@@ -360,6 +369,31 @@ fn write_browser_presets_fixture() {
                 ..Default::default()
             }))])
             .unwrap();
+        for (offset, shade) in [(-1.2, 0.2), (1.2, 0.45)] {
+            world
+                .apply_commands(&[WorldCommand::Spawn(Box::new(EntitySnapshot {
+                    name: Some(format!("Preset {} backdrop", index + 1)),
+                    local_transform: LocalTransform {
+                        translation: Vec3::new(x + offset, 1.2, 2.0),
+                        ..Default::default()
+                    },
+                    primitive: Some(Primitive::RectangularPrism {
+                        size: [2.4, 2.4, 0.1],
+                    }),
+                    textures: Some(engine_world::SurfaceTextures {
+                        cast_shadows: false,
+                        receive_shadows: false,
+                        ..Default::default()
+                    }),
+                    part_attributes: PartAttributes {
+                        color: [shade, shade, shade, 1.0],
+                        anchored: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }))])
+                .unwrap();
+        }
     }
     assert_eq!(stations.len(), 35);
     let script_id = ScriptId::new();
@@ -376,7 +410,10 @@ fn write_browser_presets_fixture() {
                 ..Default::default()
             })),
             WorldCommand::Spawn(Box::new(EntitySnapshot {
-                light: Some(Light::default()),
+                light: Some(Light {
+                    casts_shadows: false,
+                    ..Light::default()
+                }),
                 ..Default::default()
             })),
         ])

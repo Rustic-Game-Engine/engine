@@ -737,7 +737,6 @@ impl AuthoringDocument {
         let children = asset.instances_with_ids(None);
         let group = EntitySnapshot {
             name: Some(asset.name.clone()),
-            folder: true,
             parent,
             effect_group: Some(
                 engine_world::effects::EffectGroup::from_asset_with_children(

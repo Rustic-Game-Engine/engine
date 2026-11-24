@@ -111,11 +111,13 @@ pub extern "C" fn rustic_tick(width: u32, height: u32, seconds: f64) {
         game.session.render_world(|world| {
             world.submit_gpu_particle_feedback(context, &acknowledgements);
         })?;
+        let (width, height) = (frame.width, frame.height);
         game.ui.composite_rgba(width, height, &mut frame.rgba8)?;
         std::fs::write("/frame.rgba", frame.rgba8).map_err(|e| e.to_string())?;
         std::fs::write(
             "/frame.json",
-            serde_json::to_vec(&[width, height]).map_err(|e| e.to_string())?,
+            serde_json::to_vec(&(width, height, game.renderer.stats().frame_count))
+                .map_err(|e| e.to_string())?,
         )
         .map_err(|e| e.to_string())?;
         Ok::<(), String>(())

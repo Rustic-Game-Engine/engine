@@ -697,6 +697,7 @@ impl SceneWorld {
                 }
                 WorldCommand::SetEffectGroup { entity, value } => {
                     self.insert_or_remove(*entity, value.as_deref().cloned());
+                    self.mark_subtree_dirty(*entity);
                     if value.is_none() {
                         self.effect_groups.remove(*entity);
                     }
@@ -1388,7 +1389,6 @@ impl SceneWorld {
         let children = asset.instances_with_ids(Some(asset_id));
         let root = EntitySnapshot {
             name: Some(asset.name.clone()),
-            folder: true,
             parent,
             local_transform: transform,
             effect_group: Some(crate::effects::EffectGroup::from_asset_with_children(
@@ -1534,7 +1534,6 @@ impl SceneWorld {
             group.auto_play = true;
             let root = EntitySnapshot {
                 name: Some(format!("{} (sub-emitter)", asset.name)),
-                folder: true,
                 local_transform: LocalTransform {
                     translation: event.position,
                     ..Default::default()
@@ -1800,9 +1799,13 @@ impl SceneWorld {
             let Ok(entity) = self.ecs_entity(id) else {
                 continue;
             };
-            // Folders only organize the scene tree. They deliberately contribute no
-            // spatial transform to themselves or their descendants.
-            let local = if self.ecs.get::<Folder>(entity).is_some() {
+            // Legacy composite roots were saved with a folder marker.
+            let local = if self.ecs.get::<Folder>(entity).is_some()
+                && self
+                    .ecs
+                    .get::<crate::effects::EffectGroup>(entity)
+                    .is_none()
+            {
                 LocalTransform::IDENTITY
             } else {
                 self.ecs

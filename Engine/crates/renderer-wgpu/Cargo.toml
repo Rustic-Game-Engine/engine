@@ -22,6 +22,10 @@ wgpu.workspace = true
 [target.'cfg(not(target_os = "emscripten"))'.dependencies]
 winit.workspace = true
 
+# FXC cannot compile the GPU collision simulation on Direct3D 12.
+[target.'cfg(all(target_os = "windows", target_arch = "x86_64", target_env = "msvc"))'.dependencies]
+wgpu = { workspace = true, features = ["static-dxc"] }
+
 [lints]
 workspace = true
 

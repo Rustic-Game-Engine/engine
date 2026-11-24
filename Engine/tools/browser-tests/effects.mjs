@@ -1,4 +1,5 @@
 // Exercise actual exported WASM/WebGL effects. No mocked runtime or canvas frames.
+import { waitForRenderedFrames } from "./frames.mjs";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -59,7 +60,7 @@ try {
   await page.waitForFunction(() => document.getElementById("game").dataset.frame, null, { timeout: 60000 });
   assert.equal(await page.locator("#status").isVisible(), false);
   assert.match(await page.locator("#gpu").evaluate(canvas => canvas.getContext("webgl2")?.getParameter(WebGL2RenderingContext.VERSION) || ""), /WebGL 2/i, "Effects did not use a real WebGL 2 context");
-  const pixels = async () => page.locator("#game").evaluate(canvas => {
+  const samplePixels = canvas => {
     const data = canvas.getContext("2d").getImageData(0, 0, canvas.width, canvas.height).data;
     let orange = 0, violet = 0, cyan = 0, blue = 0;
     for (let i = 0; i < data.length; i += 4) {
@@ -70,7 +71,16 @@ try {
       blue += b;
     }
     return { orange, violet, cyan, meanBlue: blue / (data.length / 4), image: canvas.toDataURL() };
-  });
+  };
+  const pixels = () => page.locator("#game").evaluate(samplePixels);
+  // The simulation log can arrive before the GPU readback of that frame.
+  const deadline = Date.now() + 60000;
+  while (true) {
+    const { orange, violet, cyan } = await pixels();
+    if (orange > 12 && violet > 12 && cyan > 12) break;
+    assert.ok(Date.now() < deadline, `Effects missing from the canvas: ${JSON.stringify({ orange, violet, cyan })}`);
+    await new Promise(done => setTimeout(done, 100));
+  }
   const baseline = await pixels();
   assert.ok(baseline.orange > 12, `Orange particle pixels missing: ${JSON.stringify({ ...baseline, image: undefined })}`);
   assert.ok(baseline.violet > 12, "Violet beam pixels missing");
@@ -79,11 +89,9 @@ try {
   await page.keyboard.down("ArrowDown");
   await waitLog("vfx-paused");
   await page.keyboard.up("ArrowDown");
-  const pausedStamp = await page.locator("#game").getAttribute("data-frame");
-  await page.waitForFunction(stamp => Number(document.getElementById("game").dataset.frame) > Number(stamp) + 100, pausedStamp, { timeout: 60000 });
+  await waitForRenderedFrames(page, 100, 180000);
   const paused = await pixels();
-  const stableStamp = await page.locator("#game").getAttribute("data-frame");
-  await page.waitForFunction(stamp => Number(document.getElementById("game").dataset.frame) > Number(stamp) + 150, stableStamp, { timeout: 60000 });
+  await waitForRenderedFrames(page, 150, 180000);
   assert.equal((await pixels()).image, paused.image, "Paused effect rendering changed despite frozen simulation");
   await page.keyboard.down("ArrowDown");
   await waitLog("vfx-resumed");

@@ -437,3 +437,48 @@ fn completed_sub_effect_cleanup_preserves_other_post_and_light_modifiers() {
         .expect("unrelated pulse remains after child cleanup");
     assert!((modifier.intensity - 1.5).abs() < f32::EPSILON);
 }
+
+#[test]
+fn translated_composite_children_keep_their_world_position_after_legacy_reload() {
+    let mut world = SceneWorld::new();
+    let asset = presets().remove(0);
+    let asset_id = AssetId::new();
+    world.register_effect_asset(asset_id, asset).unwrap();
+    let offset = glam::Vec3::new(50.0, 3.0, -4.0);
+    let root = world
+        .instantiate_effect_asset(
+            asset_id,
+            None,
+            LocalTransform {
+                translation: offset,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let mut document = SceneDocument::from_world(SceneId::new(), "Placed effect", &world).unwrap();
+    let child = document
+        .entities
+        .iter()
+        .find(|item| item.parent == Some(root))
+        .unwrap();
+    let child_id = child.id;
+    let expected = offset + child.local_transform.translation;
+    let position = |world: &SceneWorld| {
+        world
+            .world_transform(child_id)
+            .unwrap()
+            .0
+            .transform_point3(glam::Vec3::ZERO)
+    };
+    assert_eq!(position(&world), expected);
+
+    document
+        .entities
+        .iter_mut()
+        .find(|item| item.id == root)
+        .unwrap()
+        .folder = true;
+    let legacy = load_scene(&document.to_bytes().unwrap()).unwrap();
+    assert!(!legacy.has_errors(), "{:?}", legacy.diagnostics);
+    assert_eq!(position(&legacy.document.create_world().unwrap()), expected);
+}

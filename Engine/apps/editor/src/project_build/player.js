@@ -90,12 +90,15 @@ function frame(timestamp) {
     Module._rustic_tick(width, height, delta);
     if (exists("/error.txt")) throw new Error(Module.FS.readFile("/error.txt", { encoding: "utf8" }));
     if (!exists("/frame.json")) { requestAnimationFrame(frame); return; }
-    const [w, h] = JSON.parse(Module.FS.readFile("/frame.json", { encoding: "utf8" }));
-    if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
-    const pixels = Module.FS.readFile("/frame.rgba");
-    context.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
+    const [w, h, sequence] = JSON.parse(Module.FS.readFile("/frame.json", { encoding: "utf8" }));
+    const completedFrame = String(sequence ?? timestamp);
+    if (canvas.dataset.frame !== completedFrame) {
+      if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+      const pixels = Module.FS.readFile("/frame.rgba");
+      context.putImageData(new ImageData(new Uint8ClampedArray(pixels), w, h), 0, 0);
+      canvas.dataset.frame = completedFrame;
+    }
     if (exists("/audio.f32")) playAudio(Module.FS.readFile("/audio.f32"));
-    canvas.dataset.frame = String(timestamp);
     requestAnimationFrame(frame);
   } catch (error) { fail(error); }
 }

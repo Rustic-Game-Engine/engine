@@ -1214,7 +1214,6 @@ struct ViewportTargets {
 #[cfg(target_os = "emscripten")]
 struct PendingViewportReadback {
     receiver: mpsc::Receiver<Result<(), String>>,
-    started: std::time::Instant,
 }
 
 /// Persistent engine-owned editor viewport renderer.
@@ -1509,6 +1508,7 @@ impl SceneViewportRenderer {
             self.post_settings = post_settings;
             self.effect_frame = effect_frame;
             self.set_environment_root(root);
+            self.stats.frame_count = previous.frame_count;
             self.stats.device_generations = previous.device_generations.saturating_add(1);
             self.stats.pipeline_generations = previous.pipeline_generations.saturating_add(1);
         }
@@ -1517,12 +1517,6 @@ impl SceneViewportRenderer {
                 "invalid scene environment or camera position".to_owned(),
             ));
         }
-        self.sky.prepare(
-            &self.context.device,
-            &self.context.queue,
-            &self.environment_root,
-            scene,
-        )?;
         #[cfg(target_os = "emscripten")]
         if let Some(pending) = &self.pending_readback {
             self.context
@@ -1531,11 +1525,7 @@ impl SceneViewportRenderer {
                 .map_err(|e| RendererError::Gpu(e.to_string()))?;
             match pending.receiver.try_recv() {
                 Ok(result) => result.map_err(RendererError::Gpu)?,
-                Err(mpsc::TryRecvError::Empty)
-                    if pending.started.elapsed() < Duration::from_secs(10) =>
-                {
-                    return Ok(None);
-                }
+                Err(mpsc::TryRecvError::Empty) => return Ok(None),
                 Err(error) => {
                     return Err(RendererError::Gpu(format!(
                         "browser GPU readback did not complete: {error}"
@@ -1551,6 +1541,12 @@ impl SceneViewportRenderer {
             self.pending_readback = None;
             return Ok(Some(self.completed_frame(width, height, rgba8)));
         }
+        self.sky.prepare(
+            &self.context.device,
+            &self.context.queue,
+            &self.environment_root,
+            scene,
+        )?;
         let mut resolved_scene = scene.clone();
         resolve_effect_textures(
             &mut resolved_scene,
@@ -1953,10 +1949,7 @@ impl SceneViewportRenderer {
                 .map_async(wgpu::MapMode::Read, move |result| {
                     let _ = sender.send(result.map_err(|error| error.to_string()));
                 });
-            self.pending_readback = Some(PendingViewportReadback {
-                receiver,
-                started: std::time::Instant::now(),
-            });
+            self.pending_readback = Some(PendingViewportReadback { receiver });
             Ok(None)
         }
         #[cfg(not(target_os = "emscripten"))]
