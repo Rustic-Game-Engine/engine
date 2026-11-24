@@ -724,7 +724,7 @@ fn build(root: &Path, output: &Path, settings: &Settings, runtime: &Path) -> Res
 }
 
 fn run_command(command: &mut Command) -> Result<(), String> {
-    let tool = command.get_program().to_string_lossy();
+    let tool = command.get_program().to_string_lossy().into_owned();
     let output = command
         .output()
         .map_err(|e| format!("Could not start {tool}: {e}"))?;
