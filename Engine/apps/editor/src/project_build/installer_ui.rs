@@ -63,6 +63,8 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
     let Some((manifest, entry)) = configuration(root)? else {
         return Ok(());
     };
+    let (dotnet, _) = engine_scripting::find_dotnet_sdk(8)
+        .ok_or("Install .NET SDK 8 or newer to build a custom installer. For a custom SDK location, set DOTNET_ROOT to the folder containing dotnet.exe.")?;
     let sources = tempfile::tempdir().map_err(|e| e.to_string())?;
     let destination = output.join("custom-installer");
     fs::create_dir(&destination).map_err(|e| e.to_string())?;
@@ -105,7 +107,8 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
     }
     // A self-contained publish avoids requiring the .NET runtime on player machines.
     run_command(
-        Command::new("dotnet")
+        Command::new(dotnet)
+            .current_dir(sources.path())
             .arg("publish")
             .arg(sources.path().join("Installer.csproj"))
             .args([
@@ -119,7 +122,7 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
             ])
             .arg(&destination),
     )
-    .map_err(|e| format!("Custom installer UI requires the .NET 8 SDK and NuGet access: {e}"))?;
+    .map_err(|e| format!("Could not publish the custom installer UI. Check NuGet access and the compiler output: {e}"))?;
     if !destination.join("setup.exe").is_file() {
         return Err("Custom installer publish did not produce setup.exe.".into());
     }

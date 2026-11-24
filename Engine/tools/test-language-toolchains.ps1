@@ -17,7 +17,8 @@ New-Item -ItemType Directory -Path $mockBin -Force | Out-Null
 
 # A real native executable exercises native exit codes, including signed NTSTATUS.
 # It never installs software or accesses the network.
-Add-Type -OutputAssembly (Join-Path $mockBin 'winget.exe') -OutputType ConsoleApplication -TypeDefinition @'
+$mockTool = Join-Path $testRoot 'mock-tool.exe'
+Add-Type -OutputAssembly $mockTool -OutputType ConsoleApplication -TypeDefinition @'
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -25,6 +26,11 @@ public class MockWinGet {
     [DllImport("kernel32.dll")] static extern IntPtr GetConsoleWindow();
     public static int Main(string[] args) {
         if (GetConsoleWindow() != IntPtr.Zero) return 92;
+        if (args[0] == "--list-sdks") {
+            string hosts = Path.GetFileName(Path.GetDirectoryName(typeof(MockWinGet).Assembly.Location));
+            if (hosts != "bin") Console.WriteLine(@"10.0.100 [C:\Program Files\dotnet\sdk]");
+            return 0;
+        }
         File.AppendAllText(Environment.GetEnvironmentVariable("RUSTIC_TEST_CALLS"),
             string.Join(" ", args) + Environment.NewLine);
         string mode = Environment.GetEnvironmentVariable("RUSTIC_TEST_MODE");
@@ -36,10 +42,16 @@ public class MockWinGet {
         }
         if (mode == "fatal-install") return unchecked((int)0xC0000142);
         if (mode == "package-failure" && Array.IndexOf(args, "PHP.PHP.8.4") >= 0) return 9;
+        if (mode != "sdk-not-installed" && Array.IndexOf(args, "Microsoft.DotNet.SDK.10") >= 0) {
+            string dotnet = Path.Combine(Environment.GetEnvironmentVariable("ProgramW6432"), "dotnet");
+            Directory.CreateDirectory(dotnet);
+            File.Copy(typeof(MockWinGet).Assembly.Location, Path.Combine(dotnet, "dotnet.exe"));
+        }
         return 0;
     }
 }
 '@
+Copy-Item $mockTool (Join-Path $mockBin 'winget.exe')
 
 function Assert-Equal($Actual, $Expected, [string]$Message) {
     if ($Actual -ne $Expected) { throw "$Message (expected $Expected, got $Actual)" }
@@ -55,6 +67,15 @@ function New-TestProcess([string]$Mode) {
     $info.EnvironmentVariables['PATH'] = $mockBin
     $info.EnvironmentVariables['LOCALAPPDATA'] = $caseRoot
     $info.EnvironmentVariables['USERPROFILE'] = $caseRoot
+    $info.EnvironmentVariables['ProgramW6432'] = $caseRoot
+    $info.EnvironmentVariables['ProgramFiles'] = $caseRoot
+    $info.EnvironmentVariables['ProgramFiles(x86)'] = $caseRoot
+    $info.EnvironmentVariables.Remove('DOTNET_ROOT')
+    if ($Mode -eq 'installed') {
+        $sdkRoot = Join-Path $caseRoot 'dotnet'
+        New-Item -ItemType Directory -Path $sdkRoot | Out-Null
+        Copy-Item $mockTool (Join-Path $sdkRoot 'dotnet.exe')
+    }
     $info.EnvironmentVariables['RUSTIC_TEST_MODE'] = $Mode
     $info.EnvironmentVariables['RUSTIC_TEST_CALLS'] = Join-Path $caseRoot 'calls.txt'
     return $info
@@ -148,8 +169,8 @@ function Invoke-InstallerCase([string]$Mode, [string]$Components, [int]$Expected
 
 try {
     $all = 'Python,CSharp,CCpp,Java,Php'
-    Invoke-ManagerCase 'installed' $all 0 5 'already installed'
-    Invoke-ManagerCase 'missing' $all 0 10 'Selected gameplay language toolchains are installed.'
+    Invoke-ManagerCase 'installed' $all 0 4 'already installed'
+    Invoke-ManagerCase 'missing' $all 0 9 'Selected gameplay language toolchains are installed.'
     Invoke-ManagerCase 'fatal-list' $all 1 1 'failed to initialize (exit code -1073741502)'
     Invoke-ManagerCase 'fatal-list-142' $all 1 1 'failed to initialize (exit code 142)'
     Invoke-ManagerCase 'fatal-install' $all 1 2 'failed to initialize (exit code -1073741502)'
@@ -167,9 +188,16 @@ try {
     Invoke-ManagerCase 'missing' 'Python' 1 0 'Windows Package Manager is unavailable.'
     Rename-Item (Join-Path $mockBin 'winget-disabled.exe') 'winget.exe'
 
+    Copy-Item (Join-Path $mockBin 'winget.exe') (Join-Path $mockBin 'dotnet.exe')
+    Invoke-ManagerCase 'installed' 'CSharp' 0 0 'already installed'
+    Invoke-ManagerCase 'missing' 'CSharp' 1 0 '' -CheckOnly
+    Invoke-ManagerCase 'missing' 'CSharp' 0 1 'Selected gameplay language toolchains are installed.'
+    Invoke-ManagerCase 'sdk-not-installed' 'CSharp' 1 1 'was not found after installation'
+    Remove-Item (Join-Path $mockBin 'dotnet.exe')
+
     if ($InstallerPath) {
         $components = 'engine,languages\bundled,languages\python,languages\csharp,languages\ccpp,languages\java,languages\php'
-        Invoke-InstallerCase 'missing' $components 10 $false
+        Invoke-InstallerCase 'missing' $components 9 $false
         Invoke-InstallerCase 'fatal-list' $components 1 $true
         Invoke-InstallerCase 'fatal-install' $components 2 $true
         Invoke-InstallerCase 'missing' 'engine,languages\bundled' 0 $false

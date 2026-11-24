@@ -24,6 +24,7 @@ mod php;
 mod python;
 mod toolchain;
 
+pub use csharp::find_dotnet_sdk;
 use toolchain::find_executable;
 
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
@@ -72,6 +73,9 @@ pub fn probe_language_toolchain(language: ScriptLanguage) -> LanguageAvailabilit
             version: Some(env!("CARGO_PKG_VERSION").into()),
             detail: "runtime is bundled with Rustic".into(),
         };
+    }
+    if language == ScriptLanguage::CSharp {
+        return csharp::probe();
     }
     let specification = toolchain_spec(language);
     let executable = if language == ScriptLanguage::Luau {

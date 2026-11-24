@@ -35,7 +35,7 @@ pub use external_editor::{
     build_editor_launch, discover_code_editor, open_in_external_editor,
 };
 pub use external_runtime::{
-    ExternalBehavior, ExternalRuntimeError, LanguageAvailability, WebBehavior,
+    ExternalBehavior, ExternalRuntimeError, LanguageAvailability, WebBehavior, find_dotnet_sdk,
     probe_language_toolchain, validate_external,
 };
 pub use input::{
