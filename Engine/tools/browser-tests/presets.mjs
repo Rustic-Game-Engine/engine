@@ -60,7 +60,9 @@ try {
   await frames(2);const early=await compare();
   const slug=`${String(index).padStart(2,'0')}-${name.toLowerCase().replace(/[^a-z0-9]+/g,'-')}`;
   if(artifact)await page.locator('#game').screenshot({path:join(artifact,`${slug}-early.png`)});
-  const sampledFrames = name === "Mist" ? 4 : 40;
+  // Sample a second completed frame window without spending most of CI on
+  // repeated software rasterization. The lifecycle test covers longer playback.
+  const sampledFrames = name === "Mist" ? 4 : 8;
   const started = performance.now();
   await frames(sampledFrames);
   const presentationMsPerFrame = (performance.now() - started) / sampledFrames;
