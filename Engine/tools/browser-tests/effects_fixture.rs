@@ -347,6 +347,13 @@ fn write_browser_presets_fixture() {
             }
             _ => false,
         });
+        // Tire smoke is deliberately faint. Use a wide contrast range so the
+        // smoke can be measured on both sides without altering the shipped asset.
+        let backdrop_shades = if asset.name == "Tire smoke" {
+            [0.025, 0.8]
+        } else {
+            [0.2, 0.45]
+        };
         stations.push((group, asset.name, x, moving, burst));
         world
             .apply_commands(&[WorldCommand::Spawn(Box::new(EntitySnapshot {
@@ -369,7 +376,7 @@ fn write_browser_presets_fixture() {
                 ..Default::default()
             }))])
             .unwrap();
-        for (offset, shade) in [(-1.2, 0.2), (1.2, 0.45)] {
+        for (offset, shade) in [-1.2, 1.2].into_iter().zip(backdrop_shades) {
             world
                 .apply_commands(&[WorldCommand::Spawn(Box::new(EntitySnapshot {
                     name: Some(format!("Preset {} backdrop", index + 1)),

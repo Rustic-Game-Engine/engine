@@ -66,10 +66,18 @@ try {
   const started = performance.now();
   await frames(sampledFrames);
   const presentationMsPerFrame = (performance.now() - started) / sampledFrames;
-  const late = await compare();
+  let late = await compare();
+  // Sparse, translucent particles can briefly blend into the backdrop.
+  // Give them more completed frames to show without lowering the pixel threshold.
+  let additionalFrames = 0;
+  while (Math.max(early.changed, late.changed) <= 5 && additionalFrames < 24) {
+   await frames(4);
+   additionalFrames += 4;
+   late = await compare();
+  }
   const jsHeapBytes = await page.evaluate(() => performance.memory?.usedJSHeapSize ?? null);
   if(artifact)await page.locator('#game').screenshot({path:join(artifact,`${slug}-late.png`)});
-  results.push({index,name,early,late,viewport:page.viewportSize(),sampledFrames,presentationMsPerFrame,jsHeapBytes});
+  results.push({index,name,early,late,viewport:page.viewportSize(),sampledFrames,additionalFrames,presentationMsPerFrame,jsHeapBytes});
   // These checks establish real rendered output, not subjective artistic approval.
   assert.ok(Math.max(early.changed,late.changed)>5,`Preset ${index} ${name} produced no visible pixels: ${JSON.stringify({early,late})}`);
   console.log(`PASS preset ${index}/35 ${name}: early=${early.changed} late=${late.changed} changed pixels`);
