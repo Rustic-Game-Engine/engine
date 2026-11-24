@@ -30,7 +30,7 @@ Before placing a model, request actual preview images. `model_preview` takes eit
 
 Build and save the full initial scene in the editor: models, objects, camera, lighting, colliders, UI and script attachments must be inspectable before Play. Do not hide scene construction in startup scripts or make the scene appear only after playtesting begins. Runtime spawning is appropriate for actual gameplay (projectiles, enemies, changing procedural content) or an explicit procedural-generation request; persist a representative authored layout and make the runtime behavior clear.
 
-Call `editor_status` for live object IDs and properties, including unsaved changes; `scene_summary` reads saved files only. Use `object_create` for folders, empty nodes, cameras, lights and deliberate blockouts; `model_create` places finished mesh assets. `object_update` changes names, parent, local xyz translation/scale, xyzw quaternion rotation, part attributes (color, anchored, can_touch, can_collide, friction), cameras, lights and object script components. These tools use the editor's document validation and undo history; do not click inspector controls through computer use. They affect the active scene only. Object edits are unsaved until `scene_save`; inspect the result before saving. `editor_undo` and `editor_redo` support scene object edits.
+Call `editor_status` for live object IDs and properties, including unsaved changes; `scene_summary` reads saved files only. Use `object_create` for folders, empty nodes, cameras, lights and deliberate blockouts; `model_create` places finished mesh assets. `object_update` changes names, parent, local xyz translation/scale, xyzw quaternion rotation, part attributes (color, anchored, can_touch, can_collide, double_sided, friction), cameras, lights and object script components. These tools use the editor's document validation and undo history; do not click inspector controls through computer use. They affect the active scene only. Object edits are unsaved until `scene_save`; inspect the result before saving. `editor_undo` and `editor_redo` support scene object edits.
 
 Use `scene_list` to discover active/start scenes and nested paths. Scene-management tool paths are relative to the configured scenes directory, e.g. `levels/forest.scene`; file/model/script paths are relative to the project root. `scene_create` creates an empty scene without overwriting or switching. `scene_switch` saves current edits before opening an existing scene. `scene_set_start` controls the launch scene independently of the editor's active scene. Stop play and resolve any pending runtime-change review before switching/editing. Re-read live IDs after switching; do not reuse assumptions from the previous scene. Save each scene, and test both its individual flow and the game's launch/transition flow. Use the engine scene-lifecycle documentation for runtime load/switch/unload and additive scene behavior; do not invent APIs from another engine.
 
@@ -206,3 +206,22 @@ and `material_asset` in `editor_status`. `object_update` and `object_create` acc
 validated composite groups and existing project `.material` asset UUIDs; updates
 share the editor transaction and undo history. Validate the actual backend through
 playtest logs and viewport capture.
+
+For inside/outside rendering on a primitive or imported mesh, use `object_update` with `{"entity_id":"<mesh-owner-id>","properties":{"part_attributes":{"double_sided":true}}}`. This boolean defaults to false, is undoable and persists with `scene_save`. It changes rendering only, uses the same textures on both sides and does not add thickness or collision geometry. Scripts can read/write `DoubleSided` through the built-in attribute API during Play. Verify the inside or back of the surface in a fresh viewport capture.
+
+## Custom Windows installer interfaces
+
+For installer design, read the engine's `PROJECT_BUILDS.md`. Put the manifest at
+`scripts/install/installer.json` in the game project: `{"kind":"web","entry":"index.html"}`
+for static HTML/CSS/JavaScript, or `{"kind":"csharp","entry":"InstallerUi.cs"}`
+for one Windows Forms source defining `InstallerUi(InstallerContext context)`.
+Do not attach installer sources as gameplay scripts. Use `window.chrome.webview`
+messages (`ready`, `install`, `close`) for web UIs or `context.InstallAsync` for C#;
+the Inno Setup backend handles copying, shortcuts and uninstalling. Build on
+Windows with the .NET 8 SDK and distribute the complete `custom-installer` folder.
+Web UIs require Microsoft Edge WebView2 Runtime on the player's machine. Consult
+the build guide for complete examples, event/error handling, license acceptance,
+supported source limits and troubleshooting. These interfaces are independent
+of gameplay script adapters and do not apply to website/Android exports.
+
+Installer manifest compatibility: only an explicit `kind` selects the compiled UI. Keep companion HTTP API manifests without `kind` in their existing format; do not mix the schemas. Compiled UI projects do not also export the Python companion bundle.

@@ -4,16 +4,17 @@ Surface maps work on built-in primitives and imported mesh objects in the 3D edi
 
 ## Browse for maps
 
-1. Select a primitive or imported mesh in the scene hierarchy.
-2. Open **Inspector → Surface textures → Standard maps**.
-3. Click **Browse…** beside a map and select its image in the file dialog. Expand **Advanced maps** for the remaining slots.
-4. Inspect the result in the 3D viewport. **Clear** removes one slot; **Remove direct textures** removes the object's direct texture component. Both operations support undo/redo.
+1. Select a primitive or imported mesh in the scene hierarchy, then click **Add Texture child** in its Inspector (or choose **+ Add → Texture (child of selected object)**).
+2. Select the **Texture** child. Surface map slots, UV settings, displacement and emissive strength belong to this child; they are not properties of the 3D object.
+3. Open **Inspector → Surface textures → Standard maps**.
+4. Click **Browse…** beside a map and select its image in the file dialog. Expand **Advanced maps** for the remaining slots.
+5. Inspect the result in the 3D viewport. **Clear** removes one slot; delete the Texture child to remove its effect. Both operations support undo/redo.
 
 Images outside the project's `assets` directory are copied into `assets/textures` with a content-derived suffix. Existing project assets keep their relative paths. Save the scene to persist maps, UV settings and Texture children. Keep the original files inside the project when moving or distributing it; Play snapshots and packaged games include `assets`.
 
 ## Drop files onto an object
 
-Drag an image or a selection of PBR images from the project's Explorer onto the visible surface of the target object in the 3D viewport. You can also drag files from the operating system's file manager onto the surface, a scene hierarchy row, or an individual map slot. Project Explorer images can be dropped onto hierarchy rows and map slots too. A viewport drop targets the object under the pointer, regardless of the current selection. Empty space does not assign a map. Editing is disabled during Play and for read-only scenes.
+Drag an image or a selection of PBR images from the project's Explorer onto the visible surface of the target object in the 3D viewport. You can also drag files from the operating system's file manager onto the surface, a scene hierarchy row, or an individual map slot. Project Explorer images can be dropped onto hierarchy rows and map slots too. A viewport drop targets the object under the pointer, regardless of the current selection. Dropping onto a mesh or primitive creates and selects a Texture child, or updates its last Texture child in stable entity-ID order if one already exists. Dropping onto a Texture child updates that child. Each drop commits one undoable scene edit after validating all supplied images. Empty space does not assign a map. Editing is disabled during Play and for read-only scenes.
 
 Names containing `normal`, `rough`, `metal`, `occlusion`/`_ao`, `height`/`displacement`, `emiss`, `clearcoat`, `transmission`, `thickness`, `sheen`, `specular` or `anisotrop` select the matching map. Compound names such as `paint_clearcoat_roughness.png` select the advanced slot first. Unrecognized names use Base Color. Each slot holds one image; a later file for the same slot replaces the earlier one. Use Browse or drop onto a specific slot when a filename is ambiguous. Packed ORM images are not automatically split.
 
@@ -21,7 +22,9 @@ Names containing `normal`, `rough`, `metal`, `occlusion`/`_ao`, `height`/`displa
 
 Select a mesh or primitive and choose **+ Add → Texture (child of selected object)** in the scene hierarchy, or click **Add Texture child** in its Inspector. Select the new **Texture** child to browse its maps. A Texture child has no visible geometry. Drag it in the hierarchy onto another object, or onto another object's visible surface in the 3D viewport, to move its effect there.
 
-A Texture child affects its immediate parent only. Its supplied slots override direct slots on that parent; empty slots leave the parent's slots intact. Maps do not apply recursively to siblings or nested meshes. With several Texture children, stable entity-ID order resolves duplicate slots, so use one child per object for predictable editing. The last nonempty child's UV and intensity settings apply to the combined material. Adding, editing, moving, copying and deleting children participates in the scene's undo history.
+A Texture child affects its immediate parent only. Its supplied slots combine with those of other Texture children; empty slots leave other supplied maps intact. Maps do not apply recursively to siblings or nested meshes. With several Texture children, stable entity-ID order resolves duplicate slots, so use one child per object for predictable editing. The last nonempty child's UV and intensity settings apply to the combined material. Adding, editing, moving, copying and deleting children participates in the scene's undo history.
+
+Older scenes with direct texture components still render those maps for compatibility, but new surface maps are authored on Texture children. The Inspector does not expose direct texture properties on meshes or primitives.
 
 ## Map slots
 

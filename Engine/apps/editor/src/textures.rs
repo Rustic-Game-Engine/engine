@@ -94,26 +94,7 @@ impl EditorViewer<'_> {
         if self.playing || self.document.is_read_only() {
             return;
         }
-        let result = (|| -> Result<(), String> {
-            let s = self
-                .document
-                .world()
-                .snapshot(entity)
-                .map_err(|e| e.to_string())?;
-            if s.mesh.is_none() && s.primitive.is_none() && s.textures.is_none() {
-                return Err("Choose a mesh, primitive or Texture child".into());
-            }
-            let mut textures = s.textures.unwrap_or_default();
-            for path in paths {
-                let relative = import_texture(self.project_root, path)?;
-                textures
-                    .maps
-                    .insert(TextureMap::from_filename(path), relative);
-            }
-            self.document
-                .set_textures(entity, Some(textures))
-                .map_err(|e| e.to_string())
-        })();
+        let result = assign_files(self.document, self.project_root, entity, paths);
         self.texture_result(result);
     }
 
@@ -136,24 +117,28 @@ impl EditorViewer<'_> {
         snapshot: &engine_world::EntitySnapshot,
     ) {
         let renderable = snapshot.mesh.is_some() || snapshot.primitive.is_some();
-        if !renderable && snapshot.textures.is_none() {
+        if renderable {
+            ui.separator();
+            ui.add_enabled_ui(!self.document.is_read_only() && !self.playing, |ui| {
+                if ui.button("Add Texture child").clicked() {
+                    let result = self
+                        .document
+                        .add_texture_child(snapshot.id)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string());
+                    self.texture_result(result);
+                }
+            });
             return;
         }
+        let Some(mut textures) = snapshot.textures.clone() else {
+            return;
+        };
         ui.separator();
         ui.heading("Surface textures");
         ui.small("All maps are optional. Browse or drop an image onto a slot.");
-        let mut textures = snapshot.textures.clone().unwrap_or_default();
         let before = textures.clone();
-        let mut remove = false;
         ui.add_enabled_ui(!self.document.is_read_only() && !self.playing, |ui| {
-            if renderable && ui.button("Add Texture child").clicked() {
-                let result = self
-                    .document
-                    .add_texture_child(snapshot.id)
-                    .map(|_| ())
-                    .map_err(|e| e.to_string());
-                self.texture_result(result);
-            }
             for (group, maps) in [
                 ("Standard maps", &TextureMap::ALL[..7]),
                 ("Advanced maps", &TextureMap::ALL[7..]),
@@ -239,22 +224,85 @@ impl EditorViewer<'_> {
                     .range(0.0..=10000.0)
                     .prefix("Emissive strength "),
             );
-            if renderable && snapshot.textures.is_some() {
-                remove = ui.button("Remove direct textures").clicked();
-            }
         });
-        if remove || textures != before {
+        if textures != before {
             let result = self
                 .document
-                .set_textures(snapshot.id, if remove { None } else { Some(textures) })
+                .set_textures(snapshot.id, Some(textures))
                 .map_err(|e| e.to_string());
             self.texture_result(result);
         }
-        if renderable {
-            ui.small("Texture children override supplied slots on this object only.");
-        }
+        ui.small("Applies to the immediate parent object only.");
     }
 }
+/// Validate a complete drop before committing one child creation or map edit.
+fn assign_files(
+    document: &mut engine_editor::AuthoringDocument,
+    root: &Path,
+    entity: EntityId,
+    paths: &[PathBuf],
+) -> Result<(), String> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let s = document
+        .world()
+        .snapshot(entity)
+        .map_err(|e| e.to_string())?;
+    if s.mesh.is_none() && s.primitive.is_none() && s.textures.is_none() {
+        return Err("Choose a mesh, primitive or Texture child".into());
+    }
+    let renderable = s.mesh.is_some() || s.primitive.is_some();
+    // Reuse the final Texture child in resolution order so repeated drops
+    // replace supplied slots while preserving the other maps and controls.
+    let target = if renderable {
+        document
+            .world()
+            .children(entity)
+            .map_err(|e| e.to_string())?
+            .iter()
+            .filter_map(|id| document.world().snapshot(*id).ok())
+            .rfind(|child| {
+                child.mesh.is_none() && child.primitive.is_none() && child.textures.is_some()
+            })
+    } else {
+        Some(s)
+    };
+    let mut textures = target
+        .as_ref()
+        .and_then(|child| child.textures.clone())
+        .unwrap_or_default();
+    for path in paths {
+        let relative = import_texture(root, path)?;
+        textures
+            .maps
+            .insert(TextureMap::from_filename(path), relative);
+    }
+    if let Some(target) = target {
+        document
+            .set_textures(target.id, Some(textures))
+            .map_err(|e| e.to_string())?;
+        document.select(Some(target.id));
+        Ok(())
+    } else {
+        let snapshot = engine_world::EntitySnapshot {
+            parent: Some(entity),
+            name: Some("Texture".into()),
+            textures: Some(textures),
+            ..Default::default()
+        };
+        let id = snapshot.id;
+        document
+            .edit_transaction(
+                "Drop Texture child",
+                vec![engine_world::SceneEdit::Create { snapshot }],
+            )
+            .map_err(|e| e.to_string())?;
+        document.select(Some(id));
+        Ok(())
+    }
+}
+
 fn transform_texture_pair(ui: &mut egui::Ui, label: &str, values: &mut [f32; 2]) {
     ui.horizontal(|ui| {
         ui.label(label);
@@ -267,6 +315,139 @@ fn transform_texture_pair(ui: &mut egui::Ui, label: &str, values: &mut [f32; 2])
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn surface_controls_belong_only_to_texture_objects_in_both_themes() {
+        use crate::*;
+        let temporary = tempfile::tempdir().unwrap();
+        let project = Project::create(
+            temporary.path().join("game"),
+            "Textures",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let owner = document
+            .add_primitive("Cube", engine_world::Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+        // Legacy direct components must not expose surface controls on 3D objects either.
+        document
+            .set_textures(owner, Some(engine_world::SurfaceTextures::default()))
+            .unwrap();
+        let child = document.add_texture_child(owner).unwrap();
+        let owner = document.world().snapshot(owner).unwrap();
+        let child = document.world().snapshot(child).unwrap();
+        let root = document.project().root().to_path_buf();
+        let mut action = None;
+        let mut viewer = EditorViewer {
+            document: &mut document,
+            project_root: &root,
+            console: &mut RuntimeConsole::default(),
+            project_tree: None,
+            project_filter: &mut String::new(),
+            preview: None,
+            preview_status: "",
+            request_preview: false,
+            playing: false,
+            can_switch_scene: true,
+            play: None,
+            play_keys: BTreeSet::new(),
+            camera: &mut EditorCamera::default(),
+            viewport_extent: &mut [640, 480],
+            gizmo: &mut GizmoSettings::default(),
+            gizmo_drag: &mut None,
+            gizmo_widget: &mut transform_widget::TransformWidget::default(),
+            scene_graph: &mut scene_graph::SceneGraph::default(),
+            ui_designer: &mut ui_designer::UiDesigner::default(),
+            model_assets: &mut BTreeMap::new(),
+            project_file_action: &mut action,
+        };
+        for dark in [true, false] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark {
+                egui::Visuals::dark()
+            } else {
+                egui::Visuals::light()
+            });
+            for (snapshot, expected) in [(&owner, false), (&child, true)] {
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    viewer.texture_inspector(ui, snapshot);
+                });
+                output.textures_delta.clear();
+                let visible = |label: &str| {
+                    output.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(text) if text.galley.job.text == label))
+                };
+                assert_eq!(visible("Surface textures"), expected);
+                assert_eq!(visible("UV scale"), expected);
+                assert_eq!(visible("Add Texture child"), !expected);
+            }
+        }
+    }
+
+    #[test]
+    fn drops_create_and_reuse_texture_children_atomically() {
+        let temporary = tempfile::tempdir().unwrap();
+        let project = engine_project::Project::create(
+            temporary.path().join("game"),
+            "Textures",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let root = project.root().to_path_buf();
+        let mut document = engine_editor::AuthoringDocument::open(project.clone(), false).unwrap();
+        let owner = document
+            .add_primitive("Cube", engine_world::Primitive::Cube { size: 1.0 }, None)
+            .unwrap();
+        let image = root.join("assets/albedo.png");
+        image::RgbaImage::from_pixel(2, 2, image::Rgba([255u8; 4]))
+            .save(&image)
+            .unwrap();
+        let broken = root.join("assets/broken.png");
+        std::fs::write(&broken, b"broken").unwrap();
+        assert!(
+            assign_files(
+                &mut document,
+                &root,
+                owner,
+                &[image.clone(), broken.clone()]
+            )
+            .is_err()
+        );
+        assert!(document.world().children(owner).unwrap().is_empty());
+        assign_files(&mut document, &root, owner, std::slice::from_ref(&image)).unwrap();
+        let child = document.selected().unwrap();
+        assert_ne!(child, owner);
+        assert!(document.world().surface_textures(owner).unwrap().is_none());
+        assert_eq!(
+            document.world().snapshot(child).unwrap().parent,
+            Some(owner)
+        );
+        assert!(
+            document
+                .world()
+                .resolved_textures(owner)
+                .maps
+                .contains_key(&TextureMap::BaseColor)
+        );
+        document.undo().unwrap();
+        assert!(!document.world().contains(child));
+        document.redo().unwrap();
+        let normal = root.join("assets/normal.png");
+        std::fs::copy(&image, &normal).unwrap();
+        assign_files(&mut document, &root, owner, std::slice::from_ref(&normal)).unwrap();
+        assert_eq!(document.world().children(owner).unwrap(), &[child]);
+        let before = document.world().surface_textures(child).unwrap();
+        assert_eq!(before.as_ref().unwrap().maps.len(), 2);
+        assert!(assign_files(&mut document, &root, owner, &[image.clone(), broken]).is_err());
+        assert_eq!(document.world().surface_textures(child).unwrap(), before);
+        document.undo().unwrap();
+        assert_eq!(document.world().resolved_textures(owner).maps.len(), 1);
+        document.redo().unwrap();
+        document.save().unwrap();
+        let mut reopened = engine_editor::AuthoringDocument::open(project, true).unwrap();
+        assert_eq!(reopened.world().surface_textures(child).unwrap(), before);
+        assert!(assign_files(&mut reopened, &root, child, &[image]).is_err());
+    }
+
     #[test]
     fn external_textures_are_copied_and_invalid_images_are_rejected() {
         let root = tempfile::tempdir().unwrap();

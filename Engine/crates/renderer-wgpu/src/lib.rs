@@ -212,17 +212,18 @@ fn brdf(n: vec3<f32>, coat_n: vec3<f32>, v: vec3<f32>, l: vec3<f32>, uv: vec2<f3
 fn dissolve_order(input:VertexOutput)->f32{var order=fract(sin(dot(floor(input.world_position*max(uniforms.surface_effect.y,1.)),vec3<f32>(12.9898,78.233,37.719)))*43758.5453);if uniforms.effect_options.x>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.uv*uniforms.surface_effect.y,0,0.).r;}if dot(uniforms.effect_direction.xyz,uniforms.effect_direction.xyz)>0.{order=clamp(dot(input.world_position,uniforms.effect_direction.xyz)+uniforms.effect_direction.w,0.,1.);}if uniforms.effect_options.y>0.5{order=textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r;}return order;}
 fn surface_discard(input:VertexOutput){if uniforms.effect_misc.x>0.5&&uniforms.effect.x>0.&&dissolve_order(input)<uniforms.effect.x{discard;}let mask=select(1.,textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r,uniforms.effect_options.y>0.5);let alpha=uniforms.color.a*surface.base_color.a*sample_map(0u,input.uv,vec4<f32>(1.)).a*mix(1.,uniforms.effect_color.a,mask);if alpha<=0.001||(surface.factors.w>=0.&&alpha<surface.factors.w){discard;}}
 @fragment fn fs_shadow_encodedDepth(raw:VertexOutput)->@location(0) vec4<f32>{var input=raw;input.uv=effect_texcoord(raw.uv,raw.local_position.xy);surface_discard(input);let encoded=u32(clamp(input.position.z,0.,1.)*16777215.);return vec4<f32>(f32(encoded&255u),f32((encoded>>8u)&255u),f32((encoded>>16u)&255u),255.)/255.;}
-@fragment fn fs_main(raw: VertexOutput) -> @location(0) vec4<f32> {
+@fragment fn fs_main(raw: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
     var input=raw;input.uv=effect_texcoord(raw.uv,raw.local_position.xy);surface_discard(input);let dissolve_noise=dissolve_order(input);
     let geometric = normalize(input.normal);
-    let n = mapped_normal(input.uv, geometric, input.world_position, 1u);
-    let coat_n = mapped_normal(input.uv, geometric, input.world_position, 9u);
+    let face_direction = select(-1.0, 1.0, front_facing);
+    let n = mapped_normal(input.uv, geometric, input.world_position, 1u) * face_direction;
+    let coat_n = mapped_normal(input.uv, geometric, input.world_position, 9u) * face_direction;
     if uniforms.lighting.y > 0.5 { return vec4<f32>(display_radiance(uniforms.color.rgb),uniforms.color.a); }
     // Authored material factors are linear (including glTF baseColorFactor).
     // Color textures are decoded on upload; do not decode either factor twice.
     var color = uniforms.color * surface.base_color * sample_map(0u, input.uv, vec4<f32>(1.0));
     let influence=select(1.,textureSampleLevel(effect_maps,map_sampler,input.local_position.xy,1,0.).r,uniforms.effect_options.y>0.5);color*=mix(vec4<f32>(1.),uniforms.effect_color,influence);
-    if uniforms.effect.z > 0.5 {let edge=min(min(input.uv.x,1.-input.uv.x),min(input.uv.y,1.-input.uv.y));color.a*=smoothstep(0.,max(uniforms.effect.y,0.001),edge);color.a*=smoothstep(uniforms.effect_misc.y,min(1.,uniforms.effect_misc.y+0.1),dot(geometric,normalize(uniforms.effect_direction.xyz+vec3<f32>(0.000001))));}
+    if uniforms.effect.z > 0.5 {let edge=min(min(input.uv.x,1.-input.uv.x),min(input.uv.y,1.-input.uv.y));color.a*=smoothstep(0.,max(uniforms.effect.y,0.001),edge);color.a*=smoothstep(uniforms.effect_misc.y,min(1.,uniforms.effect_misc.y+0.1),dot(geometric * face_direction,normalize(uniforms.effect_direction.xyz+vec3<f32>(0.000001))));}
     let v = normalize(uniforms.camera.xyz-input.world_position+vec3<f32>(0.000001));
     let ao = mix(1.,clamp(sample_map(4u,input.uv,vec4<f32>(1.0)).r,0.0,1.0),surface.factors.x);
     var radiance = color.rgb * uniforms.ambient.rgb * uniforms.ambient.w * ao;
@@ -462,6 +463,8 @@ pub struct ViewportVertex {
 /// One immutable scene instance. Stable keys allow GPU resource reuse across frames.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ViewportMesh {
+    /// Disable back-face culling for this instance.
+    pub double_sided: bool,
     pub textures: engine_world::SurfaceTextures,
     pub instance_key: u64,
     pub mesh_key: u64,
@@ -1237,6 +1240,7 @@ pub struct SceneViewportRenderer {
     bind_layout: wgpu::BindGroupLayout,
     shadows: shadows::Shadows,
     solid_pipeline: wgpu::RenderPipeline,
+    double_sided_pipeline: wgpu::RenderPipeline,
     outline_pipeline: wgpu::RenderPipeline,
     line_pipeline: wgpu::RenderPipeline,
     meshes: HashMap<u64, CachedViewportMesh>,
@@ -1281,6 +1285,13 @@ impl SceneViewportRenderer {
             &shadows.layout,
             ViewportPass::Solid,
             "rustic-viewport-solid-pipeline",
+        );
+        let double_sided_pipeline = viewport_pipeline(
+            &context.device,
+            &bind_layout,
+            &surfaces.layout,
+            ViewportPass::DoubleSided,
+            "rustic-viewport-double-sided-pipeline",
         );
         let outline_pipeline = viewport_pipeline(
             &context.device,
@@ -1329,6 +1340,7 @@ impl SceneViewportRenderer {
             bind_layout,
             shadows,
             solid_pipeline,
+            double_sided_pipeline,
             outline_pipeline,
             line_pipeline,
             meshes: HashMap::new(),
@@ -1839,11 +1851,6 @@ impl SceneViewportRenderer {
             // of its own mesh; the stencil excludes visible selected surfaces.
             pass.set_bind_group(3, &self.shadows.bind, &[]);
             for selected_pass in [false, true] {
-                pass.set_pipeline(if selected_pass {
-                    &self.outline_pipeline
-                } else {
-                    &self.solid_pipeline
-                });
                 for mesh in &scene.meshes {
                     if selected_pass
                         && (!mesh.selected
@@ -1856,6 +1863,13 @@ impl SceneViewportRenderer {
                     {
                         continue;
                     }
+                    pass.set_pipeline(if selected_pass {
+                        &self.outline_pipeline
+                    } else if mesh.double_sided {
+                        &self.double_sided_pipeline
+                    } else {
+                        &self.solid_pipeline
+                    });
                     pass.set_stencil_reference(if selected_pass {
                         1
                     } else {
@@ -2093,6 +2107,7 @@ impl SceneViewportRenderer {
             .map_err(|_| RendererError::InvalidMesh("grid vertex count exceeds u32".to_owned()))?)
             .collect();
         let mesh = ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures::default(),
             instance_key: u64::MAX,
             mesh_key: u64::MAX,
@@ -2163,6 +2178,7 @@ impl SceneViewportRenderer {
         })?)
             .collect::<Vec<_>>();
         let mesh = ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures::default(),
             instance_key: guide.key,
             mesh_key: guide.key,
@@ -2545,6 +2561,7 @@ fn viewport_bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
 #[derive(Clone, Copy)]
 enum ViewportPass {
     Solid,
+    DoubleSided,
     Outline,
     Lines,
 }
@@ -2558,14 +2575,18 @@ impl ViewportPass {
         wgpu::StencilState,
     ) {
         match self {
-            ViewportPass::Solid => {
+            ViewportPass::Solid | ViewportPass::DoubleSided => {
                 let face = wgpu::StencilFaceState {
                     pass_op: wgpu::StencilOperation::Replace,
                     ..wgpu::StencilFaceState::IGNORE
                 };
                 (
                     wgpu::PrimitiveTopology::TriangleList,
-                    Some(wgpu::Face::Back),
+                    if matches!(self, Self::DoubleSided) {
+                        None
+                    } else {
+                        Some(wgpu::Face::Back)
+                    },
                     wgpu::StencilState {
                         front: face,
                         back: face,
@@ -3449,6 +3470,69 @@ mod tests {
 
     #[test]
     #[ignore = "requires a physical or software graphics adapter"]
+    fn double_sided_renders_and_lights_back_faces_when_toggled() {
+        let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
+        let mut scene = ViewportScene {
+            environment: engine_world::SceneEnvironment {
+                enabled: true,
+                sky_color: [0.0; 3],
+                ambient_intensity: 0.0,
+                sun_direction: [0.0, 0.0, -1.0],
+                sun_color: [1.0; 3],
+                sun_intensity: 1.0,
+                ..engine_world::SceneEnvironment::default()
+            },
+            camera_position: [0.0, 0.0, -1.0],
+            view_projection: identity_matrix(),
+            meshes: vec![ViewportMesh {
+                double_sided: false,
+                textures: engine_world::SurfaceTextures::default(),
+                instance_key: 1,
+                mesh_key: 1,
+                vertices: [[-1.0, -1.0, 0.5], [1.0, -1.0, 0.5], [0.0, 1.0, 0.5]]
+                    .map(|position| ViewportVertex {
+                        uv: [0.0; 2],
+                        position,
+                        normal: [0.0, 0.0, -1.0],
+                    })
+                    .to_vec(),
+                indices: vec![0, 2, 1],
+                model: identity_matrix(),
+                color: [1.0; 4],
+                selected: false,
+            }],
+            lights: Vec::new(),
+            guides: Vec::new(),
+            grid_vertices: Vec::new(),
+            clear_color: [0.0, 0.0, 0.0, 1.0],
+        };
+        let sample = |frame: &RenderedFrame| frame.rgba8[(32 * 65 + 32) * 4];
+        let front = sample(&renderer.render(65, 65, &scene).unwrap().unwrap());
+        assert!(front > 100);
+        // Same surface viewed from its reverse winding, with the outward normal reversed.
+        scene.meshes[0].mesh_key = 2;
+        scene.meshes[0].indices = vec![0, 1, 2];
+        for vertex in &mut scene.meshes[0].vertices {
+            vertex.normal = [0.0, 0.0, 1.0];
+        }
+        assert_eq!(
+            sample(&renderer.render(65, 65, &scene).unwrap().unwrap()),
+            0
+        );
+        scene.meshes[0].double_sided = true;
+        assert_eq!(
+            sample(&renderer.render(65, 65, &scene).unwrap().unwrap()),
+            front
+        );
+        scene.meshes[0].double_sided = false;
+        assert_eq!(
+            sample(&renderer.render(65, 65, &scene).unwrap().unwrap()),
+            0
+        );
+    }
+
+    #[test]
+    #[ignore = "requires a physical or software graphics adapter"]
     fn lighting_preserves_shadow_detail_and_highlight_gradation() {
         use engine_world::{EntityId, LightKind, RenderLight};
         let mut renderer = SceneViewportRenderer::new(BackendRequest::Auto).unwrap();
@@ -3457,6 +3541,7 @@ mod tests {
             camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: vec![ViewportMesh {
+                double_sided: false,
                 textures: engine_world::SurfaceTextures::default(),
                 instance_key: 1,
                 mesh_key: 1,
@@ -3538,6 +3623,7 @@ mod tests {
             camera_position: [0.0; 3],
             view_projection: identity_matrix(),
             meshes: vec![ViewportMesh {
+                double_sided: false,
                 textures: engine_world::SurfaceTextures::default(),
                 instance_key: 1,
                 mesh_key: 1,
@@ -3627,6 +3713,10 @@ mod tests {
         };
         let asset = engine_world::AssetId::new();
         let root = engine_world::EntitySnapshot {
+            part_attributes: engine_world::PartAttributes {
+                double_sided: true,
+                ..Default::default()
+            },
             mesh: Some(engine_world::Mesh { asset }),
             ..Default::default()
         };
@@ -3646,6 +3736,7 @@ mod tests {
         world.propagate_transforms();
         let models = std::collections::BTreeMap::from([(asset, model)]);
         let bind = game_scene_with_models(&world, 1., &models);
+        assert!(bind.meshes.iter().all(|mesh| mesh.double_sided));
         assert_eq!(bind.meshes[0].vertices[0].position, [0., 0., 0.]);
         joint.local_transform.translation.x = 2.;
         world
@@ -3886,6 +3977,7 @@ mod tests {
             },
         ];
         let mesh = |instance_key, mesh_key, z, color| ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures::default(),
             instance_key,
             mesh_key,
@@ -3974,6 +4066,7 @@ mod tests {
     fn selected_cube(model: glam::Mat4) -> ViewportMesh {
         let primitive = engine_world::Primitive::Cube { size: 1.0 }.mesh().unwrap();
         ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures::default(),
             instance_key: 10,
             mesh_key: 20,
@@ -4353,6 +4446,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let mesh = |scale: f32| ViewportMesh {
+            double_sided: false,
             textures: engine_world::SurfaceTextures::default(),
             instance_key: 10,
             mesh_key: 20,
@@ -4655,6 +4749,11 @@ fn base_game_scene(world: &engine_world::SceneWorld, aspect: f32) -> ViewportSce
         let key = hasher.finish();
         scene.meshes.push(ViewportMesh {
             textures: render_surface(world, primitive.entity),
+            double_sided: world
+                .part_attributes(primitive.entity)
+                .unwrap_or_default()
+                .double_sided,
+            textures: world.resolved_textures(primitive.entity),
             instance_key: key,
             mesh_key: key,
             vertices: mesh
@@ -4984,6 +5083,10 @@ pub fn game_scene_with_models(
                 color[3] *= world.part_attributes(entity).unwrap_or_default().color[3];
             }
             scene.meshes.push(ViewportMesh {
+                double_sided: world
+                    .part_attributes(entity)
+                    .unwrap_or_default()
+                    .double_sided,
                 textures,
                 instance_key: key,
                 mesh_key: key,
@@ -5038,6 +5141,25 @@ mod game_view_tests {
             .unwrap();
         world.propagate_transforms();
         (world, ids.0, ids.1)
+    }
+
+    #[test]
+    fn game_view_extracts_double_sided_per_primitive() {
+        let (mut world, _, _) = fixture();
+        assert!(!game_scene(&world, 1.0).meshes[0].double_sided);
+        let id = world
+            .entity_ids()
+            .find(|id| world.primitive(*id).unwrap().is_some())
+            .unwrap();
+        let mut attributes = world.part_attributes(id).unwrap();
+        attributes.double_sided = true;
+        world
+            .apply_commands(&[WorldCommand::SetPartAttributes {
+                entity: id,
+                value: attributes,
+            }])
+            .unwrap();
+        assert!(game_scene(&world, 1.0).meshes[0].double_sided);
     }
 
     #[test]

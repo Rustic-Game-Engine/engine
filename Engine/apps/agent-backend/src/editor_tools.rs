@@ -151,7 +151,7 @@ fn texture_tools() -> Vec<Value> {
             "ambient_color":color,"ambient_intensity":positive,"sun_color":color,"sun_intensity":positive,"sun_direction":vector,"haze_color":color,"haze_density":positive,"haze_start":positive
         }}}}}),
         json!({"name":"texture_inspect","description":"Inspect direct texture maps, effective maps after Texture-child overrides, and immediate texture children for an object in the live editor.","inputSchema":{"type":"object","required":["entity_id"],"properties":{"entity_id":{"type":"string"}},"additionalProperties":false}}),
-        json!({"name":"texture_update","description":"Atomically edit optional HDR/PBR slots and UV/intensity controls on a mesh, primitive or existing Texture child through editor undo. Paths must be existing project-relative images. Validates all images before attaching; use null to clear slots. Save with scene_save.","inputSchema":edit}),
+        json!({"name":"texture_update","description":"Atomically edit optional HDR/PBR slots and UV/intensity controls on an existing Texture child through editor undo. For meshes and primitives, use texture_create_child. Paths must be existing project-relative images. Validates all images before attaching; use null to clear slots. Save with scene_save.","inputSchema":edit}),
         json!({"name":"texture_create_child","description":"Create a Texture child of the mesh/primitive identified by entity_id, optionally with maps and controls, as one undoable scene edit. Child maps apply only to the immediate parent. Save with scene_save.","inputSchema":child}),
     ]
 }

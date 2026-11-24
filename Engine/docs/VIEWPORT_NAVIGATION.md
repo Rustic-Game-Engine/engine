@@ -11,14 +11,20 @@ window loses focus.
 | --- | --- |
 | W / S | Move forward / backward. |
 | A / D | Move left / right. |
-| Q / E | Pan left / right horizontally. |
-| Middle, right or left drag away from a gizmo | Orbit. |
+| Q / E | Fly down / up along world vertical. |
+| Shift + movement key | Fly four times faster. |
+| Right or left drag away from a gizmo | Look around from the current camera position. |
+| Middle drag | Orbit around the current focus point. |
 | Shift + middle drag | Pan. |
 | Mouse wheel | Dolly. |
 | F | Frame the selected object. |
 | Home | Reset the editor camera. |
 
-Hold movement keys for continuous navigation; release them to stop. Only the
+Hold movement keys for continuous navigation; release them to stop. Flight moves
+at 5 world units per second (20 with Shift), independent of wheel zoom. For example,
+hold right drag to turn, then hold W to fly in the new facing direction; use E to
+rise and Q to descend. Looking around keeps the camera position fixed, while
+middle drag preserves the focus point for orbiting. Only the
 authoring camera moves. These controls do not move objects or the scene camera,
 and keyboard navigation is unavailable in the 2D authoring viewport. During Play,
 WASD is forwarded to gameplay scripts instead of navigating the authoring camera.
