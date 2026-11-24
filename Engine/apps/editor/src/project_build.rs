@@ -156,7 +156,7 @@ impl ProjectBuild {
                     field(ui, "Application name", &mut self.settings.name);
                     match self.settings.target {
                         Target::Windows => {
-                            ui.label("Packages the bundled Windows runtime and a snapshot of the current scene, scripts and assets. Distribute the entire output folder.");
+                            ui.label("Packages the bundled Windows runtime and a snapshot of the current scene, scripts and assets.");
                             ui.checkbox(&mut self.settings.installer, "Create a custom installer");
                             if self.settings.installer {
                                 ui.collapsing("Design installer", |ui| {
