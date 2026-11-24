@@ -119,6 +119,15 @@ These are optional references, not installed dependencies or engine API specific
 - Broader design/accessibility reference catalog: https://github.com/jeremylongworth-source/AgentSkills/tree/main/skills
 - Blender workflow reference: https://github.com/Chara-Xh/blender-modeling-skill/tree/main/skills/blender-modeling
 
+## Packaging a Windows game
+
+Use File → Build Project… → Windows. Select the installer option and leave the
+compiler at `ISCC.exe` for automatic Inno Setup configuration. If compilation
+fails, use the compiler output shown in the build dialog. For games with C#
+behaviors, install .NET SDK 10 or newer on the runtime machine. Rustic discovers
+standard .NET install locations, PATH, and custom locations set through
+`DOTNET_ROOT`.
+
 ## Exporting a game website
 
 Use File → Build Project… → Website (playable game). Hosted runtime supports all
@@ -151,7 +160,7 @@ for one Windows Forms source defining `InstallerUi(InstallerContext context)`.
 Do not attach installer sources as gameplay scripts. Use `window.chrome.webview`
 messages (`ready`, `install`, `close`) for web UIs or `context.InstallAsync` for C#;
 the Inno Setup backend handles copying, shortcuts and uninstalling. Build on
-Windows with the .NET 8 SDK and distribute the complete `custom-installer` folder.
+Windows with .NET SDK 8 or newer and distribute the complete `custom-installer` folder.
 Web UIs require Microsoft Edge WebView2 Runtime on the player's machine. Consult
 the build guide for complete examples, event/error handling, license acceptance,
 supported source limits and troubleshooting. These interfaces are independent

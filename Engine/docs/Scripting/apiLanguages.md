@@ -8,9 +8,10 @@ use the same engine services. CSS supplies styling and executes no API calls.
 1. Open a project and create an **Object Component Script** from
    **Programming > New Script**, choosing your language.
 2. Select an enabled scene object and use **+ Add Component** to attach the script.
-3. External languages need their toolchain on PATH: Python 3, a C17 or C++20
-   compiler, .NET SDK 10+, Java with javac, or PHP CLI. Lua, JavaScript and the
-   isolated Luau host ship with Rustic.
+3. External languages require Python 3, a C17 or C++20 compiler, .NET SDK 10+,
+   Java with javac, or PHP CLI. Toolchains can be installed on PATH. For C#,
+   Rustic also checks standard .NET install locations and `DOTNET_ROOT`.
+   Lua, JavaScript and the isolated Luau host ship with Rustic.
 4. Generate the programming workspace from the editor before using an external
    editor. Include/import the engine-owned SDK shown in your
    [language guide](/docs/guides/scripting). PHP and HTML assets belong under ui/.
