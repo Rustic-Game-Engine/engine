@@ -13,11 +13,11 @@ Build on Windows with `rustic-runtime.exe` beside the editor. Installed engine d
 3. For setup, leave the **Inno Setup compiler** field as `ISCC.exe` (or blank). When you click **Build Project**, the background worker finds Inno Setup on PATH, in standard installation folders, or through its Windows uninstall registration. If missing, it downloads the signed Inno Setup 6.7.3 installer from the official GitHub release and installs it for the current user without administrator access. The compiler folder is added to your user PATH, and this build continues without restarting the editor. First installation requires internet access. To use a custom installation, expand **Design installer** and enter its existing absolute `ISCC.exe` path.
 4. Set a numeric version such as `1.0.0`, publisher and welcome message. Choose modern/classic wizard styling and whether to offer a desktop shortcut. The dialog shows a text preview.
 5. Optionally use **Browse…** beside the license, setup icon, and wizard image fields to select a plain text (`.txt`) license, `.ico` setup icon, and `.bmp` wizard image. The file explorer starts in your project folder and stores the selected path relative to it. Copy files from outside the project into it before selecting them; otherwise the dialog reports an error and keeps the previous value. You can also type or clear these optional paths directly. For example, `branding/license.txt`, `branding/setup.ico`, and `branding/wizard.bmp`. Inno Setup validates image formats/dimensions; its standard large wizard image is 164 × 314 pixels. The compiled wizard displays these images; the editor preview displays text.
-6. Click **Build Project**. For the standard wizard, distribute `setup.exe`; for a custom UI, distribute the complete `custom-installer/` folder described below. Alternatively, distribute the complete `game/` folder containing `<Application name>.exe` and `data/`. Launch the game by opening the executable; the editor is not required.
+6. Click **Build Project**. For the standard wizard, distribute `setup.exe`; for a custom UI, distribute `install/setup.exe`. Alternatively, distribute the complete `game/` folder containing `<Application name>.exe` and `data/`. Launch the game by opening the executable; the editor is not required.
 
 The standard installer uses Inno Setup. If your game uses C# behaviors, install .NET SDK 10 or newer on the computer that runs the game.
 
-Setup installs per user into `%LOCALAPPDATA%\Programs\<Application name>`, adds a Start menu shortcut and an uninstaller, and optionally offers a desktop shortcut. The generated `installer.iss` is kept beside setup for inspection. The setup icon customizes the installer, not the game executable's embedded icon. These are unsigned builds; signing and store publication are separate steps.
+Setup installs per user into `%LOCALAPPDATA%\Programs\<Application name>`, adds a Start menu shortcut and an uninstaller, and optionally offers a desktop shortcut. The generated `installer.iss` is kept at the build root for inspection. The setup icon customizes the installer, not the game executable's embedded icon. These are unsigned builds; signing and store publication are separate steps.
 
 The game opens its own window and isolated simulation, forwards keyboard, primary mouse and touch input, and stops the simulation when the window closes. Logs are written under `%LOCALAPPDATA%\RusticGames\<Application name>\logs` on Windows. Lua 5.4, JavaScript and HTML/CSS script support are bundled. Available sibling DLLs and `rustic-luau-host.exe` are copied. Other external script languages still require their supported toolchains on the player's machine; test the result on a clean machine.
 
@@ -31,7 +31,7 @@ installer** enabled. No manifest means the standard wizard is used.
 
 The `kind` field explicitly selects a compiled front end. Manifests without
 `kind` retain the companion HTTP installer API format; they do not require .NET
-or generate `custom-installer/`. The two manifest schemas are separate: use the
+or generate `install/setup.exe`. The two manifest schemas are separate: use the
 examples below only for a compiled UI. Compiled manifests do not also generate
 the Python companion bundle. A portable export with setup disabled does not
 compile the UI or export the compiled manifest as an HTTP configuration.
@@ -161,23 +161,22 @@ with an `InstallerUi(InstallerContext context)` constructor. The engine supplies
 the application entry point and compiles it with .NET 8 Windows Forms. Additional
 project files, NuGet dependencies, WPF and arbitrary `.csproj` entry points are
 not supported. Put helper classes in the same source file. Access copied assets
-through `context.AssetsDirectory`. `InstallAsync(directory, desktopShortcut)`
+through `context.AssetsDirectory`, the extracted folder for bundled UI assets. `InstallAsync(directory, desktopShortcut)`
 returns the Inno Setup exit code; `Installing` and `Installed` expose state.
 The host prevents window closing during installation.
 
 #### Build output and limits
 
-Distribute the **entire `custom-installer/` folder** and run its `setup.exe`.
-It contains the self-contained UI executable, libraries, `ui/` assets and
-`payload/setup.exe` (the standard Inno Setup installer, also usable as a fallback).
-This is a folder distribution, not a single-file custom installer. The generated
-`installer.iss` remains in the parent build folder. Installation still uses the
-configured game name, publisher, version, shortcuts and per-user uninstaller.
-The custom UI controls presentation and calls the silent installation backend;
-standard welcome/license pages are hidden during that call. If you require
-license acceptance, implement it in your custom UI. Wizard banners/styles apply
-to the fallback wizard, not to the custom interface. Enable **Offer desktop
-shortcut** in build settings before requesting it from your UI.
+Distribute **`install/setup.exe`** from the `project-*` build folder. You can
+move this file on its own. It opens your custom UI and bundles the .NET runtime,
+your installer assets, and the game installer. Web UIs require Microsoft Edge
+WebView2 Runtime on the player's machine.
+
+The generated `installer.iss` remains at the build root. Installation uses
+the configured game name, publisher, version, shortcuts and per-user uninstaller.
+The custom UI calls the Inno Setup backend silently. If you require license
+acceptance, implement it in your custom UI. Enable **Offer desktop shortcut**
+in build settings before requesting it from your UI.
 
 The manifest must use `web` with an existing `.html` entry or `csharp` with an
 existing `.cs` entry, relative to `scripts/install`. Absolute paths, parent
@@ -192,9 +191,9 @@ Portable Windows builds and website/Android exports do not use this UI.
 If publishing fails, check the .NET SDK and the reported NuGet/compiler output.
 If the web page is blank, check relative asset paths and script errors in WebView2
 developer tools. If installation fails, display the bridge error/exit code, check
-the chosen directory is writable and the complete distribution is present, or run
-`payload/setup.exe` to diagnose using the standard wizard. Test installation and
-uninstallation on a clean Windows machine before distribution.
+that the chosen directory is writable. To diagnose with the standard wizard,
+build a copy of the project without the compiled UI manifest. Test installation
+and uninstallation from the standalone executable on a clean Windows machine.
 
 ## Playable website
 

@@ -3,6 +3,7 @@ using System.Text.Json;
 
 public sealed class InstallerContext
 {
+    // IncludeAllContentForSelfExtract sets BaseDirectory to the .NET bundle extraction directory.
     public string GameName { get; } = JsonSerializer.Deserialize<string>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "game-name.json")))!;
     public string DefaultDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", GameName);
     public string AssetsDirectory => Path.Combine(AppContext.BaseDirectory, "ui");

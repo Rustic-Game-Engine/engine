@@ -66,8 +66,21 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
     let (dotnet, _) = engine_scripting::find_dotnet_sdk(8)
         .ok_or("Install .NET SDK 8 or newer to build a custom installer. For a custom SDK location, set DOTNET_ROOT to the folder containing dotnet.exe.")?;
     let sources = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let destination = output.join("custom-installer");
-    fs::create_dir(&destination).map_err(|e| e.to_string())?;
+    let destination = output.join("install");
+    let bundle = sources.path().join("bundle");
+    copy_tree(
+        &root.join("scripts/install"),
+        &bundle.join("ui"),
+        &["bin", "obj"],
+    )?;
+    fs::create_dir(bundle.join("payload")).map_err(|e| e.to_string())?;
+    let backend = output.join("setup.exe");
+    fs::copy(&backend, bundle.join("payload/setup.exe")).map_err(|e| e.to_string())?;
+    fs::write(
+        bundle.join("game-name.json"),
+        serde_json::to_vec(settings.name.trim()).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| e.to_string())?;
     fs::write(
         sources.path().join("Installer.csproj"),
         include_str!("installer_templates/Installer.csproj"),
@@ -80,32 +93,22 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
     .map_err(|e| e.to_string())?;
     match manifest {
         Manifest::Web { entry } => {
-            copy_tree(
-                &root.join("scripts/install"),
-                &destination.join("ui"),
-                &["bin", "obj"],
-            )?;
             fs::write(
                 sources.path().join("InstallerUi.cs"),
                 include_str!("installer_templates/WebUi.cs"),
             )
             .map_err(|e| e.to_string())?;
             fs::write(
-                destination.join("ui-entry.json"),
+                bundle.join("ui-entry.json"),
                 serde_json::to_vec(&entry).map_err(|e| e.to_string())?,
             )
             .map_err(|e| e.to_string())?;
         }
         Manifest::Csharp { .. } => {
             fs::copy(entry, sources.path().join("InstallerUi.cs")).map_err(|e| e.to_string())?;
-            copy_tree(
-                &root.join("scripts/install"),
-                &destination.join("ui"),
-                &["bin", "obj"],
-            )?;
         }
     }
-    // A self-contained publish avoids requiring the .NET runtime on player machines.
+    // The publish bundles the .NET runtime, authored files and Inno Setup payload.
     run_command(
         Command::new(dotnet)
             .current_dir(sources.path())
@@ -124,21 +127,16 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
     )
     .map_err(|e| format!("Could not publish the custom installer UI. Check NuGet access and the compiler output: {e}"))?;
     if !destination.join("setup.exe").is_file() {
-        return Err("Custom installer publish did not produce setup.exe.".into());
+        return Err("Custom installer publish did not produce install/setup.exe.".into());
     }
-    fs::write(
-        destination.join("game-name.json"),
-        serde_json::to_vec(settings.name.trim()).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| e.to_string())?;
-    fs::create_dir(destination.join("payload")).map_err(|e| e.to_string())?;
-    fs::rename(
-        output.join("setup.exe"),
-        destination.join("payload/setup.exe"),
-    )
-    .map_err(|e| e.to_string())?;
-    fs::write(destination.join("README.txt"), "Distribute this entire folder. Run setup.exe to open the custom installer UI. Web UIs require Microsoft Edge WebView2 Runtime. payload/setup.exe is the standard Inno Setup fallback installer.\n")
-        .map_err(|e| e.to_string())?;
+    if fs::read_dir(&destination)
+        .map_err(|e| e.to_string())?
+        .count()
+        != 1
+    {
+        return Err("Custom installer publish produced files beside install/setup.exe.".into());
+    }
+    fs::remove_file(backend).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -147,7 +145,7 @@ mod tests {
     use super::*;
     #[test]
     #[ignore = "requires dotnet SDK, NuGet access and Windows runtime-pack downloads"]
-    fn publishes_both_front_ends_with_assets_and_backend() {
+    fn publishes_both_front_ends_as_standalone_executables() {
         for (kind, entry, source) in [
             ("web", "index.html", "<!doctype html><p>Setup</p>"),
             (
@@ -166,19 +164,20 @@ mod tests {
             )
             .unwrap();
             fs::write(install.join(entry), source).unwrap();
-            fs::write(install.join("asset.txt"), "asset").unwrap();
+            fs::write(install.join("asset.txt"), "installer asset fixture").unwrap();
             fs::write(output.path().join("setup.exe"), "backend fixture").unwrap();
             export(root.path(), output.path(), &Settings::default()).unwrap();
-            let custom = output.path().join("custom-installer");
-            assert!(custom.join("setup.exe").is_file());
-            assert_eq!(
-                fs::read_to_string(custom.join("payload/setup.exe")).unwrap(),
-                "backend fixture"
-            );
-            assert_eq!(
-                fs::read_to_string(custom.join("ui/asset.txt")).unwrap(),
-                "asset"
-            );
+            let custom = output.path().join("install");
+            assert_eq!(fs::read_dir(&custom).unwrap().count(), 1);
+            let executable = fs::read(custom.join("setup.exe")).unwrap();
+            assert!(executable.starts_with(b"MZ"));
+            for content in [b"installer asset fixture".as_slice(), b"backend fixture"] {
+                assert!(
+                    executable
+                        .windows(content.len())
+                        .any(|bytes| bytes == content)
+                );
+            }
             assert!(!output.path().join("setup.exe").exists());
         }
     }
@@ -217,7 +216,7 @@ mod tests {
             validate(root.path()).unwrap();
             let output = tempfile::tempdir().unwrap();
             export(root.path(), output.path(), &Settings::default()).unwrap();
-            assert!(!output.path().join("custom-installer").exists());
+            assert!(!output.path().join("install").exists());
         }
     }
     #[test]
