@@ -236,3 +236,5 @@ supported source limits and troubleshooting. These interfaces are independent
 of gameplay script adapters and do not apply to website/Android exports.
 
 Installer manifest compatibility: only an explicit `kind` selects the compiled UI. Keep companion HTTP API manifests without `kind` in their existing format; do not mix the schemas. Compiled UI projects do not also export the Python companion bundle.
+
+Compiled installer window options belong in the manifest `window` object: titleBar, width/height, minWidth/minHeight, maxWidth/maxHeight (0 means unlimited), resizable, minimizeButton, maximizeButton and startMaximized. Omit the object to preserve existing form behavior. Borderless web UIs must provide their own drag/buttons/resize handles using ready.window metadata and drag, minimize, toggleMaximize, close and resize messages; C# uses normal Forms controls. Read the installer build guide for validation rules. These are native window controls only for compiled installer front ends, not gameplay or the companion API browser.

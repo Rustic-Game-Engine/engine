@@ -45,7 +45,10 @@ public sealed class InstallerUi : Form
             var root = message.RootElement;
             switch (root.GetProperty("type").GetString())
             {
-                case "ready": Send(new { type = "ready", name = context.GameName, directory = context.DefaultDirectory }); break;
+                case "ready": Send(new { type = "ready", name = context.GameName, directory = context.DefaultDirectory,
+                    window = new { titleBar = FormBorderStyle != FormBorderStyle.None,
+                        resizable = context.Window?.Resizable ?? true,
+                        minimizeButton = MinimizeBox, maximizeButton = MaximizeBox } }); break;
                 case "install":
                     if (context.Installing || context.Installed) return;
                     var directory = root.TryGetProperty("directory", out var path) ? path.GetString()! : context.DefaultDirectory;
@@ -55,6 +58,10 @@ public sealed class InstallerUi : Form
                     Send(new { type = code == 0 ? "complete" : "error", exitCode = code });
                     break;
                 case "close": if (!context.Installing) Close(); break;
+                case "minimize": if (MinimizeBox) WindowState = FormWindowState.Minimized; break;
+                case "toggleMaximize": InstallerWindowCommands.ToggleMaximize(this); break;
+                case "drag": InstallerWindowCommands.Drag(this); break;
+                case "resize": InstallerWindowCommands.Resize(this, context.Window, root.GetProperty("edge").GetString()!); break;
             }
         }
         catch (Exception error) { Send(new { type = "error", message = error.Message }); }

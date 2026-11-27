@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <StartupObject>WindowTests</StartupObject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../../apps/editor/src/project_build/installer_templates/WindowOptions.cs" Link="WindowOptions.cs" />
+  </ItemGroup>
+</Project>

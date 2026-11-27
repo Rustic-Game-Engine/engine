@@ -72,6 +72,9 @@ jobs:
       - name: Custom installer API integration tests
         if: ${{ !cancelled() }}
         run: python -m unittest discover -s scripts/install -v
+      - name: Custom installer native window tests
+        if: ${{ !cancelled() && runner.os == 'Windows' }}
+        run: dotnet run --project tools/installer-window-tests/WindowTests.csproj --configuration Release
       - name: Unit, integration, and documentation tests
         if: ${{ !cancelled() }}
         run: |

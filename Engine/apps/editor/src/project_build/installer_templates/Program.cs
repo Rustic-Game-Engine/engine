@@ -7,6 +7,9 @@ public sealed class InstallerContext
     public string GameName { get; } = JsonSerializer.Deserialize<string>(File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "game-name.json")))!;
     public string DefaultDirectory => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", GameName);
     public string AssetsDirectory => Path.Combine(AppContext.BaseDirectory, "ui");
+    public InstallerWindowOptions? Window { get; } = JsonSerializer.Deserialize<InstallerWindowOptions>(
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "window-options.json")),
+        new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
     public bool Installing { get; private set; }
     public bool Installed { get; private set; }
 
@@ -41,6 +44,7 @@ internal static class Program
         {
             var context = new InstallerContext();
             using var form = new InstallerUi(context);
+            context.Window?.Apply(form);
             form.FormClosing += (_, e) => { if (context.Installing) e.Cancel = true; };
             Application.Run(form);
         }
