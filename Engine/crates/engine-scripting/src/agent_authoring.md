@@ -121,17 +121,18 @@ These are optional references, not installed dependencies or engine API specific
 
 ## Author scene effects
 
-Use `editor_status` to inspect each object's `effect` component. `object_create`
-accepts an optional `effect`; `object_update` accepts `properties.effect`. These
-values use the typed scene representation: `common` contains playback settings,
-and `kind` contains exactly one variant such as `Particle`, `Trail`, `Beam`,
-`Weather`, or `ScreenFlash`. For example, attach a particle emitter with
-`{"entity_id":"<live UUID>","properties":{"effect":{"kind":{"Particle":{"rate":40}},"common":{"random_seed":42}}}}`.
-Unspecified fields use the engine defaults. Update by reading the existing
-component, changing its fields, then submitting the complete component. Set
-`properties.effect` to null to remove it. Creation, edits and removal participate
-in ordinary scene undo/redo; duplicate retains authored effect configuration.
-Save with `scene_save`. Do not attach generators as gameplay scripts.
+In the editor, add effect objects, presets, and saved assets through Scene Explorer
+→ + Add → Effects. Properties edits the selected effect or group. To author the
+same standalone object with agent tools, use `object_create` with `kind: "empty"`
+and an `effect` value. For example:
+`{"name":"Sparks","kind":"empty","effect":{"kind":{"Particle":{"rate":40}},"common":{"random_seed":42}}}`.
+Supply `parent` to place the new effect under another scene object. Set target
+references in the effect settings when it needs to act on a different object.
+Use `editor_status` to read the current effect, then submit the complete edited
+component via `object_update.properties.effect`. Unspecified fields use the engine
+defaults. Delete effect objects through the scene hierarchy. Creation, edits
+and deletion participate in ordinary scene undo/redo. Save with `scene_save`.
+Do not attach generators as gameplay scripts.
 
 Runtime Lua/Luau, JavaScript, Python, C, C++, C#, Java and PHP provide language-native facades for `Effects.types()`,
 `Effects.create(entity,kind)`, `Effects.get(entity)`,

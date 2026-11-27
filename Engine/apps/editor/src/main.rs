@@ -2404,27 +2404,7 @@ impl EditorViewer<'_> {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.menu_button("+ Add", |ui| {
-                    ui.menu_button("Effects", |ui| {
-                        for kind in engine_world::effects::EffectKind::all_defaults() {
-                            if ui
-                                .add_enabled(
-                                    !self.document.is_read_only() && !self.playing,
-                                    egui::Button::new(kind.name()),
-                                )
-                                .clicked()
-                            {
-                                match self.document.add_effect(kind, selected_folder) {
-                                    Ok(_) => self.request_preview = true,
-                                    Err(error) => self.console.push(simple_console(
-                                        Severity::Error,
-                                        "effects",
-                                        error.to_string(),
-                                    )),
-                                }
-                                ui.close();
-                            }
-                        }
-                    });
+                    self.add_effect_menu(ui, selected_folder);
                     if ui
                         .add_enabled(!self.document.is_read_only(), egui::Button::new("Folder"))
                         .clicked()
@@ -2924,14 +2904,13 @@ impl EditorViewer<'_> {
     )]
     fn inspector_contents(&mut self, ui: &mut egui::Ui) {
         self.environment_inspector(ui);
-        self.effects_panel(ui);
         let Some(entity) = self.document.selected() else {
             ui.vertical_centered(|ui| {
                 ui.add_space(48.0);
                 ui.label(egui::RichText::new("Nothing selected").heading());
                 ui.label(
                     egui::RichText::new(
-                        "Choose an entity in the Project panel to edit its properties.",
+                        "Choose an object in the Scene Explorer to edit its properties.",
                     )
                     .color(ui.visuals().weak_text_color()),
                 );
@@ -5921,6 +5900,122 @@ fn edit_light(ui: &mut egui::Ui, light: &mut engine_world::Light) -> bool {
 #[cfg(test)]
 mod explorer_tests {
     use super::*;
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "exercise the inspector and menu interactions with the same editor viewer"
+    )]
+    fn scene_explorer_add_creates_effect_objects_and_presets_under_the_selected_folder() {
+        let temporary = TestProject::new();
+        let project = Project::create(
+            temporary.0.join("game"),
+            "Game",
+            engine_project::ProjectTemplate::Blank,
+        )
+        .unwrap();
+        let mut document = AuthoringDocument::open(project, false).unwrap();
+        let folder = document.add_folder(None).unwrap();
+        let root = document.project().root().to_path_buf();
+        let mut viewer = EditorViewer {
+            document: &mut document,
+            project_root: &root,
+            console: &mut RuntimeConsole::default(),
+            project_tree: None,
+            project_filter: &mut String::new(),
+            preview: None,
+            preview_status: "",
+            request_preview: false,
+            playing: false,
+            can_switch_scene: true,
+            play: None,
+            play_keys: BTreeSet::new(),
+            camera: &mut EditorCamera::default(),
+            viewport_extent: &mut [640, 480],
+            gizmo: &mut GizmoSettings::default(),
+            gizmo_drag: &mut None,
+            gizmo_widget: &mut transform_widget::TransformWidget::default(),
+            scene_graph: &mut scene_graph::SceneGraph::default(),
+            effect_preview: &mut effects::EffectPreview::default(),
+            ui_designer: &mut ui_designer::UiDesigner::default(),
+            model_assets: &mut BTreeMap::new(),
+            project_file_action: &mut None,
+        };
+        let context = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |viewer: &mut EditorViewer<'_>, events, explorer| {
+            time += 0.1;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 900.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    if explorer {
+                        viewer.scene_tree(ui);
+                    } else {
+                        viewer.inspector_contents(ui);
+                    }
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let properties = frame(&mut viewer, vec![], false);
+        assert!(!properties.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::epaint::Shape::Text(text)
+                if matches!(text.galley.job.text.as_str(),
+                    "Scene effects" | "Effect preview" | "Effects presets & assets"))
+        }));
+        let mut choose = |viewer: &mut EditorViewer<'_>, labels: &[&str]| {
+            let mut output = frame(viewer, vec![], true);
+            for label in labels {
+                let pos = text_position(&output, label);
+                frame(viewer, vec![egui::Event::PointerMoved(pos)], true);
+                frame(
+                    viewer,
+                    vec![pointer(pos, egui::PointerButton::Primary, true)],
+                    true,
+                );
+                frame(
+                    viewer,
+                    vec![pointer(pos, egui::PointerButton::Primary, false)],
+                    true,
+                );
+                output = frame(viewer, vec![], true);
+            }
+        };
+        let kind = engine_world::effects::EffectKind::default();
+        choose(&mut viewer, &["+ Add", "Effects", kind.name()]);
+        let selected = viewer.document.selected().unwrap();
+        let effect = viewer.document.world().snapshot(selected).unwrap();
+        assert_ne!(selected, folder);
+        assert_eq!(effect.parent, Some(folder));
+        assert_eq!(effect.effect.unwrap().kind, kind,);
+        assert!(
+            viewer
+                .document
+                .world()
+                .snapshot(folder)
+                .unwrap()
+                .effect
+                .is_none()
+        );
+
+        viewer.document.select(Some(folder));
+        choose(&mut viewer, &["+ Add", "Effects", "Presets", "Campfire"]);
+        let selected = viewer.document.selected().unwrap();
+        let group = viewer.document.world().snapshot(selected).unwrap();
+        assert_eq!(group.parent, Some(folder));
+        assert!(group.effect_group.is_some());
+        let properties = frame(&mut viewer, vec![], false);
+        text_position(&properties, "Effect preview");
+    }
 
     #[test]
     fn viewport_drag_looks_in_place_and_keys_fly_without_editing_the_scene() {
