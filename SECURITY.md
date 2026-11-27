@@ -11,13 +11,13 @@ the oldest entry is removed. Releases outside this table are unsupported.
 <!-- supported-versions:start -->
 | Version | Supported | Download |
 | ------- | --------- | -------- |
-| v4.6-Pre-Alpha | ✅ Latest | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.6-Pre-Alpha) |
+| v4.7-Pre-Alpha | ✅ Latest | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.7-Pre-Alpha) |
+| v4.6-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.6-Pre-Alpha) |
 | v4.5-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.5-Pre-Alpha) |
 | v4.4-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.4-Pre-Alpha) |
 | v4.3-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.3-Pre-Alpha) |
 | v4.2-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.2-Pre-Alpha) |
 | v4.1-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.1-Pre-Alpha) |
-| v4.0-Pre-Alpha | ✅ | [Download](https://github.com/Rustic-Game-Engine/engine/releases/tag/v4.0-Pre-Alpha) |
 <!-- supported-versions:end -->
 
 Download links open each release page, where installers and source
