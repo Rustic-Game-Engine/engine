@@ -1,18 +1,18 @@
 # Scene Effects and VFX
 
-Scene effects are authored entity components. They use the existing hierarchy, transforms, scene persistence and undo history. An entity has at most one effect component; use child entities to combine effects. Configuration is saved; live particles and playback clocks are transient.
+Scene effects are scene objects. They use the existing hierarchy, transforms, scene persistence and undo history. Use child effect objects or a reusable group to combine effects. Configuration is saved; live particles and playback clocks are transient.
 
 This guide describes the native editor and Play path, with capability-gated GPU particles and CPU fallback. The compatibility section describes renderer and browser limits.
 
 ## Add and preview an effect
 
 1. Open a project and scene in the editor.
-2. Use hierarchy **+ Add → Effects** to create an effect entity, or select an entity and open **Properties → Scene effects → + Add / replace effect**.
-3. Select the new effect entity. Expand **Common** for playback, seed, duration and visibility, then the effect-specific section for simulation and appearance.
+2. In the **Scene Explorer**, open **+ Add → Effects** and choose an effect type. The new effect becomes a selected scene object. Select a folder before adding an effect to place it inside that folder.
+3. With the new effect selected, open **Properties** and expand **Common** for playback, seed, duration and visibility, then the effect-specific section for simulation and appearance.
 4. Open **Properties → Effect preview** to play, pause, resume, stop, restart, reset or step by 1/60 second. Preview speed ranges from 0 to 4; time scrubbing replays up to 30 seconds, and bounds/metrics are available. Use the Inspector gizmo selector for **Entity transform**, **Emission-volume size**, **Beam start**, **Beam end** or **Force-wind direction**. These use the existing transform-gizmo handles; releasing records one undo transaction and Escape restores the original. Enable preview audio explicitly to hear composite cues; scrubbing stays silent. An emitting trail needs movement before it creates a ribbon. Preview runs a scratch SceneWorld through the same simulation path, including registered child-asset sub-emitters. Stopping preview clears transient child groups.
 5. Save the scene, close it and reopen it. The configuration returns; playback starts from the configured initial state.
 
-Open **Effects presets & assets**, search the built-in library and click a preset to instantiate a group under the selection. Drag a preset onto the viewport or hierarchy to place it. Use **Load .effect** or **Save selection .effect** for custom assets. Move, rotate or scale the group root to transform the whole preset. The preset is editable. For a selected single-effect component, **Assign single-effect asset…** changes its source. Composite assets are instantiated through the asset browser. Configure entity references such as a light pulse's target or a beam's endpoint; effects requiring targets cannot infer your intended object.
+For built-in presets, open **Scene Explorer → + Add → Effects → Presets**. Search or filter the list and click a preset to add it as a group. Choose **Load .effect asset…** in the same Effects menu to add a saved asset. Move, rotate or scale the group root to transform the whole preset. To save a reusable asset, select an effect object or group and click **Save selection as .effect asset…** in Properties. To remove an effect from the scene, delete its object in the Scene Explorer. For effects that act on another object, configure the target in the effect's settings.
 
 ## Common properties
 

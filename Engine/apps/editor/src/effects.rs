@@ -464,36 +464,15 @@ impl crate::EditorViewer<'_> {
         snapshot: &engine_world::EntitySnapshot,
     ) {
         use engine_world::effects::{EffectComponent, EffectKind};
+        if snapshot.effect.is_none() && snapshot.effect_group.is_none() {
+            return;
+        }
         ui.separator();
         ui.heading("Scene effects");
         let writable = !self.document.is_read_only() && !self.playing;
         ui.add_enabled_ui(writable, |ui| self.composite_timeline(ui, snapshot));
         let mut next = snapshot.effect.clone();
         ui.add_enabled_ui(writable, |ui| {
-            ui.menu_button("+ Add / replace effect", |ui| {
-                for kind in EffectKind::all_defaults() {
-                    if ui.button(kind.name()).clicked() {
-                        next = Some(EffectComponent::new(kind));
-                        ui.close();
-                    }
-                }
-            });
-            if ui.button("Assign single-effect asset…").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .set_directory(self.project_root)
-                    .add_filter("Effect asset", &["effect"])
-                    .pick_file()
-            {
-                match load_effect_asset(self.project_root, &path) {
-                    Ok(asset) if asset.effects.len() == 1 => {
-                        next = asset.effects.into_iter().next();
-                    }
-                    Ok(_) => self.effect_error(
-                        "Composite assets must be added through the preset / asset browser".into(),
-                    ),
-                    Err(error) => self.effect_error(error),
-                }
-            }
             if let Some(effect) = &mut next {
                 ui.strong(effect.kind.name());
                 let handle_key = egui::Id::new(("effect-handle", snapshot.id));
@@ -600,9 +579,6 @@ impl crate::EditorViewer<'_> {
                     }
                 }
             }
-            if next.is_some() && ui.button("Remove effect").clicked() {
-                next = None;
-            }
         });
         if next != snapshot.effect {
             let load_meshes = next
@@ -651,6 +627,7 @@ impl crate::EditorViewer<'_> {
                 )),
             }
         }
+        self.effect_object_controls(ui);
     }
 }
 
@@ -1221,94 +1198,125 @@ pub(super) fn append_bounds(
 }
 
 impl crate::EditorViewer<'_> {
-    pub(super) fn effects_panel(&mut self, ui: &mut egui::Ui) {
+    fn effect_object_controls(&mut self, ui: &mut egui::Ui) {
         self.request_preview |=
             self.effect_preview
                 .controls(ui, self.document, self.camera.position());
-        ui.collapsing("Effects presets & assets", |ui| {
-            ui.add_enabled_ui(!self.document.is_read_only() && !self.playing, |ui| {
-                ui.text_edit_singleline(&mut self.effect_preview.search)
-                    .on_hover_text("Search built-in effect presets");
-                egui::ComboBox::from_id_salt("effects-category")
-                    .selected_text(&self.effect_preview.category)
-                    .show_ui(ui, |ui| {
-                        for category in [
-                            "All",
-                            "Fire and Explosions",
-                            "Magic and Energy",
-                            "Vehicles",
-                            "Environment",
-                            "Character and Combat",
-                        ] {
-                            ui.selectable_value(
-                                &mut self.effect_preview.category,
-                                category.to_owned(),
-                                category,
-                            );
-                        }
-                    });
-                let search = self.effect_preview.search.to_lowercase();
-                let category = self.effect_preview.category.clone();
-                let mut chosen = None;
-                egui::ScrollArea::vertical()
-                    .max_height(160.0)
-                    .id_salt("effects-presets")
-                    .show(ui, |ui| {
-                        for asset in engine_world::effects::presets().into_iter().filter(|a| {
-                            a.name.to_lowercase().contains(&search)
-                                && (category == "All" || preset_category(&a.name) == category)
-                        }) {
-                            let response = ui
-                                .button(&asset.name)
-                                .interact(egui::Sense::click_and_drag());
-                            if response.drag_started() {
-                                response.dnd_set_drag_payload(PresetDrop(asset.clone()));
-                            }
-                            if response.clicked() {
-                                chosen = Some(asset);
-                            }
-                        }
-                    });
-                if ui.button("Load .effect asset…").clicked()
-                    && let Some(path) = rfd::FileDialog::new()
+        if ui
+            .add_enabled(
+                !self.document.is_read_only() && !self.playing,
+                egui::Button::new("Save selection as .effect asset…"),
+            )
+            .clicked()
+            && let Err(error) = self.save_effect_selection()
+        {
+            self.effect_error(error);
+        }
+    }
+
+    pub(super) fn add_effect_menu(
+        &mut self,
+        ui: &mut egui::Ui,
+        parent: Option<engine_world::EntityId>,
+    ) {
+        let writable = !self.document.is_read_only() && !self.playing;
+        ui.add_enabled_ui(writable, |ui| {
+            ui.menu_button("Effects", |ui| {
+                ui.menu_button("Presets", |ui| self.effect_presets_menu(ui, parent));
+                if ui.button("Load .effect asset…").clicked() {
+                    ui.close();
+                    if let Some(path) = rfd::FileDialog::new()
                         .set_directory(self.project_root)
                         .add_filter("Effect asset", &["effect"])
                         .pick_file()
-                {
-                    match load_effect_asset(self.project_root, &path) {
-                        Ok(asset) => chosen = Some(asset),
-                        Err(error) => self.effect_error(error),
-                    }
-                }
-                if let Some(asset) = chosen {
-                    if asset
-                        .effects
-                        .iter()
-                        .any(|effect| missing_effect_meshes(effect, self.model_assets))
                     {
-                        self.model_assets
-                            .extend(crate::load_project_model_assets(self.project_root));
-                    }
-                    match self
-                        .document
-                        .add_effect_asset(&asset, self.document.selected())
-                    {
-                        Ok(_) => {
-                            self.model_assets
-                                .extend(crate::load_project_model_assets(self.project_root));
-                            self.request_preview = true;
+                        match load_effect_asset(self.project_root, &path) {
+                            Ok(asset) => self.add_effect_from_menu(&asset, parent),
+                            Err(error) => self.effect_error(error),
                         }
-                        Err(error) => self.effect_error(error.to_string()),
                     }
                 }
-                if ui.button("Save selection as .effect asset…").clicked() {
-                    let result = self.save_effect_selection();
-                    if let Err(error) = result {
-                        self.effect_error(error);
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .max_height(320.0)
+                    .id_salt("scene-effect-types")
+                    .show(ui, |ui| {
+                        for kind in engine_world::effects::EffectKind::all_defaults() {
+                            if ui.button(kind.name()).clicked() {
+                                match self.document.add_effect(kind, parent) {
+                                    Ok(_) => self.request_preview = true,
+                                    Err(error) => self.effect_error(error.to_string()),
+                                }
+                                ui.close();
+                            }
+                        }
+                    });
+            });
+        });
+    }
+
+    fn effect_presets_menu(&mut self, ui: &mut egui::Ui, parent: Option<engine_world::EntityId>) {
+        ui.text_edit_singleline(&mut self.effect_preview.search)
+            .on_hover_text("Search built-in effect presets");
+        egui::ComboBox::from_id_salt("effects-category")
+            .selected_text(&self.effect_preview.category)
+            .show_ui(ui, |ui| {
+                for category in [
+                    "All",
+                    "Fire and Explosions",
+                    "Magic and Energy",
+                    "Vehicles",
+                    "Environment",
+                    "Character and Combat",
+                ] {
+                    ui.selectable_value(
+                        &mut self.effect_preview.category,
+                        category.to_owned(),
+                        category,
+                    );
+                }
+            });
+        let search = self.effect_preview.search.to_lowercase();
+        let category = self.effect_preview.category.clone();
+        let mut chosen = None;
+        egui::ScrollArea::vertical()
+            .max_height(160.0)
+            .id_salt("effects-presets")
+            .show(ui, |ui| {
+                for asset in engine_world::effects::presets().into_iter().filter(|a| {
+                    a.name.to_lowercase().contains(&search)
+                        && (category == "All" || preset_category(&a.name) == category)
+                }) {
+                    let response = ui
+                        .button(&asset.name)
+                        .interact(egui::Sense::click_and_drag());
+                    if response.drag_started() {
+                        response.dnd_set_drag_payload(PresetDrop(asset.clone()));
+                    }
+                    if response.clicked() {
+                        chosen = Some(asset);
                     }
                 }
             });
-        });
+        if let Some(asset) = chosen {
+            self.add_effect_from_menu(&asset, parent);
+            ui.close();
+        }
+    }
+
+    fn add_effect_from_menu(
+        &mut self,
+        asset: &engine_world::effects::EffectAsset,
+        parent: Option<engine_world::EntityId>,
+    ) {
+        match self.document.add_effect_asset(asset, parent) {
+            Ok(_) => {
+                self.model_assets
+                    .extend(crate::load_project_model_assets(self.project_root));
+                self.request_preview = true;
+            }
+            Err(error) => self.effect_error(error.to_string()),
+        }
     }
 
     fn effect_error(&mut self, error: String) {
