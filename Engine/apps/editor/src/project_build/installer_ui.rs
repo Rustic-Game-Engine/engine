@@ -1,6 +1,6 @@
 //! Optional project-authored Windows installer front ends.
 use super::{Settings, copy_tree, project_path, run_command};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -10,8 +10,89 @@ use std::{
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "lowercase", deny_unknown_fields)]
 enum Manifest {
-    Web { entry: String },
-    Csharp { entry: String },
+    Web {
+        entry: String,
+        #[serde(default)]
+        window: Option<WindowOptions>,
+    },
+    Csharp {
+        entry: String,
+        #[serde(default)]
+        window: Option<WindowOptions>,
+    },
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "independent native window capabilities"
+)]
+struct WindowOptions {
+    width: u32,
+    height: u32,
+    min_width: u32,
+    min_height: u32,
+    max_width: u32,
+    max_height: u32,
+    title_bar: bool,
+    resizable: bool,
+    minimize_button: bool,
+    maximize_button: bool,
+    start_maximized: bool,
+}
+
+impl Default for WindowOptions {
+    fn default() -> Self {
+        Self {
+            width: 900,
+            height: 650,
+            min_width: 320,
+            min_height: 240,
+            max_width: 0,
+            max_height: 0,
+            title_bar: true,
+            resizable: true,
+            minimize_button: true,
+            maximize_button: true,
+            start_maximized: false,
+        }
+    }
+}
+
+impl WindowOptions {
+    fn validate(&self) -> Result<(), String> {
+        for (axis, initial, minimum, maximum) in [
+            ("width", self.width, self.min_width, self.max_width),
+            ("height", self.height, self.min_height, self.max_height),
+        ] {
+            if minimum == 0
+                || minimum > 32_767
+                || initial < minimum
+                || initial > 32_767
+                || maximum > 32_767
+                || (maximum != 0 && (maximum < minimum || initial > maximum))
+            {
+                return Err(format!(
+                    "Installer window {axis}: use 1..32767, minimum <= initial <= maximum, or maximum 0 for unlimited."
+                ));
+            }
+        }
+        if self.start_maximized && (!self.resizable || !self.maximize_button) {
+            return Err(
+                "Installer window startMaximized requires resizable and maximizeButton.".into(),
+            );
+        }
+        Ok(())
+    }
+}
+
+impl Manifest {
+    fn window(&self) -> Option<&WindowOptions> {
+        match self {
+            Self::Web { window, .. } | Self::Csharp { window, .. } => window.as_ref(),
+        }
+    }
 }
 
 fn configuration(root: &Path) -> Result<Option<(Manifest, PathBuf)>, String> {
@@ -34,9 +115,12 @@ fn configuration(root: &Path) -> Result<Option<(Manifest, PathBuf)>, String> {
     }
     let manifest: Manifest = serde_json::from_value(value)
         .map_err(|e| format!("scripts/install/installer.json: {e}"))?;
+    if let Some(window) = manifest.window() {
+        window.validate()?;
+    }
     let (entry, extension) = match &manifest {
-        Manifest::Web { entry } => (entry, "html"),
-        Manifest::Csharp { entry } => (entry, "cs"),
+        Manifest::Web { entry, .. } => (entry, "html"),
+        Manifest::Csharp { entry, .. } => (entry, "cs"),
     };
     let path = project_path(&directory, entry)?;
     if !path.is_file()
@@ -82,17 +166,25 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
     )
     .map_err(|e| e.to_string())?;
     fs::write(
-        sources.path().join("Installer.csproj"),
-        include_str!("installer_templates/Installer.csproj"),
+        bundle.join("window-options.json"),
+        serde_json::to_vec(&manifest.window()).map_err(|e| e.to_string())?,
     )
     .map_err(|e| e.to_string())?;
-    fs::write(
-        sources.path().join("Program.cs"),
-        include_str!("installer_templates/Program.cs"),
-    )
-    .map_err(|e| e.to_string())?;
+    for (name, source) in [
+        (
+            "Installer.csproj",
+            include_str!("installer_templates/Installer.csproj"),
+        ),
+        ("Program.cs", include_str!("installer_templates/Program.cs")),
+        (
+            "WindowOptions.cs",
+            include_str!("installer_templates/WindowOptions.cs"),
+        ),
+    ] {
+        fs::write(sources.path().join(name), source).map_err(|e| e.to_string())?;
+    }
     match manifest {
-        Manifest::Web { entry } => {
+        Manifest::Web { entry, .. } => {
             fs::write(
                 sources.path().join("InstallerUi.cs"),
                 include_str!("installer_templates/WebUi.cs"),
@@ -144,6 +236,71 @@ pub(super) fn export(root: &Path, output: &Path, settings: &Settings) -> Result<
 mod tests {
     use super::*;
     #[test]
+    fn window_defaults_limits_and_unknown_fields_are_validated() {
+        let defaults = WindowOptions::default();
+        assert!(defaults.title_bar && defaults.resizable && defaults.maximize_button);
+        assert_eq!((defaults.width, defaults.height), (900, 650));
+        defaults.validate().unwrap();
+        let custom: WindowOptions = serde_json::from_str(r#"{"titleBar":false,"width":800,"height":500,"minWidth":600,"maxWidth":1200,"maxHeight":800}"#).unwrap();
+        custom.validate().unwrap();
+        assert!(!custom.title_bar);
+        assert_eq!(serde_json::to_value(custom).unwrap()["maxWidth"], 1200);
+        for value in [
+            r#"{"width":0}"#,
+            r#"{"height":32768}"#,
+            r#"{"minWidth":901}"#,
+            r#"{"maxHeight":400}"#,
+            r#"{"minHeight":0}"#,
+            r#"{"maxWidth":32768}"#,
+            r#"{"resizable":false,"startMaximized":true}"#,
+            r#"{"maximizeButton":false,"startMaximized":true}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<WindowOptions>(value)
+                    .unwrap()
+                    .validate()
+                    .is_err(),
+                "{value}"
+            );
+        }
+        for value in [
+            r#"{"maxWidth":-1}"#,
+            r#"{"titlebar":false}"#,
+            r#"{"resizable":"no"}"#,
+        ] {
+            assert!(serde_json::from_str::<WindowOptions>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn both_front_ends_validate_window_settings_and_preserve_omitted_options() {
+        let root = tempfile::tempdir().unwrap();
+        let install = root.path().join("scripts/install");
+        fs::create_dir_all(&install).unwrap();
+        for (kind, entry) in [("web", "index.html"), ("csharp", "InstallerUi.cs")] {
+            fs::write(install.join(entry), "source").unwrap();
+            let manifest = serde_json::json!({"kind": kind, "entry": entry});
+            fs::write(install.join("installer.json"), manifest.to_string()).unwrap();
+            assert!(
+                configuration(root.path())
+                    .unwrap()
+                    .unwrap()
+                    .0
+                    .window()
+                    .is_none()
+            );
+            for window in [
+                serde_json::json!({"maxWidth": 100}),
+                serde_json::json!({"titlebar": false}),
+            ] {
+                let manifest = serde_json::json!({"kind": kind, "entry": entry, "window": window});
+                fs::write(install.join("installer.json"), manifest.to_string()).unwrap();
+                assert!(validate(root.path()).is_err());
+            }
+        }
+    }
+
+    #[test]
     #[ignore = "requires dotnet SDK, NuGet access and Windows runtime-pack downloads"]
     fn publishes_both_front_ends_as_standalone_executables() {
         for (kind, entry, source) in [
@@ -160,7 +317,7 @@ mod tests {
             fs::create_dir_all(&install).unwrap();
             fs::write(
                 install.join("installer.json"),
-                format!(r#"{{"kind":"{kind}","entry":"{entry}"}}"#),
+                format!(r#"{{"kind":"{kind}","entry":"{entry}","window":{{"titleBar":false,"maxWidth":1200,"maxHeight":800}}}}"#),
             )
             .unwrap();
             fs::write(install.join(entry), source).unwrap();
@@ -171,7 +328,12 @@ mod tests {
             assert_eq!(fs::read_dir(&custom).unwrap().count(), 1);
             let executable = fs::read(custom.join("setup.exe")).unwrap();
             assert!(executable.starts_with(b"MZ"));
-            for content in [b"installer asset fixture".as_slice(), b"backend fixture"] {
+            for content in [
+                b"installer asset fixture".as_slice(),
+                b"backend fixture",
+                b"\"maxWidth\":1200",
+                b"\"titleBar\":false",
+            ] {
                 assert!(
                     executable
                         .windows(content.len())

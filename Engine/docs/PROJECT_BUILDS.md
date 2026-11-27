@@ -165,6 +165,127 @@ through `context.AssetsDirectory`, the extracted folder for bundled UI assets. `
 returns the Inno Setup exit code; `Installing` and `Installed` expose state.
 The host prevents window closing during installation.
 
+#### Window title bar, size and controls
+
+For either compiled UI kind, add an optional `window` object to
+`scripts/install/installer.json`. For example, this web installer hides the
+Windows title bar, starts at 900 × 650, and stays between 600 × 400 and
+1200 × 900:
+
+```json
+{
+  "kind": "web",
+  "entry": "index.html",
+  "window": {
+    "titleBar": false,
+    "width": 900,
+    "height": 650,
+    "minWidth": 600,
+    "minHeight": 400,
+    "maxWidth": 1200,
+    "maxHeight": 900,
+    "resizable": true,
+    "minimizeButton": true,
+    "maximizeButton": true,
+    "startMaximized": false
+  }
+}
+```
+
+For C#, keep the same `window` object and use `"kind": "csharp"` and your
+`.cs` entry. Rebuild the Windows game with **Create a custom installer** enabled,
+then launch the generated `install/setup.exe` to see the configured window.
+No scene/script attachment is needed.
+
+| Field | Default when `window` is present | Effect |
+| --- | --- | --- |
+| `titleBar` | `true` | Show the standard Windows title bar and frame; `false` makes the window borderless. |
+| `width`, `height` | `900`, `650` | Initial outer window dimensions, including any native frame. |
+| `minWidth`, `minHeight` | `320`, `240` | Smallest permitted outer window dimensions. |
+| `maxWidth`, `maxHeight` | `0`, `0` | Largest permitted dimensions; `0` leaves that axis unlimited. |
+| `resizable` | `true` | Allow interactive resizing. Fixed windows also disable maximizing. |
+| `minimizeButton` | `true` | Enable the native minimize button and web `minimize` command. |
+| `maximizeButton` | `true` | Enable maximizing when `resizable` is also true. |
+| `startMaximized` | `false` | Start maximized; requires `resizable` and `maximizeButton`. |
+
+Dimensions are Windows Forms pixels; OS minimum frame sizes, display scaling and
+the available desktop can affect the visible bounds. Supply positive integers up
+to 32767, with minimum ≤ initial ≤ maximum for each finite axis. A maximum of
+zero means unlimited. Unknown fields, negative sizes and contradictory limits
+stop the build with a window-settings error. Omitted fields take the defaults
+above. Omit `window` entirely to preserve existing behavior: web uses the normal
+900 × 650 window; C# keeps the form properties set in its constructor. An explicit
+`window` object is applied **after** the C# constructor, so it overrides the
+corresponding form properties. C# code can read the optional `context.Window`
+settings and use ordinary Windows Forms APIs for its own controls.
+
+##### Custom controls for a borderless web UI
+
+Hiding the title bar removes its standard buttons and drag area. Add your own
+controls to the HTML page, or keep `titleBar: true`. The `ready` response includes
+`window.titleBar`, `window.resizable`, `window.minimizeButton` and
+`window.maximizeButton` so your page can adapt its controls.
+
+Add these elements to your existing page and attach their handlers before its
+`bridge.postMessage({type: 'ready'})` call. This uses the `bridge` variable from
+the web example above:
+
+```html
+<header id="window-bar">
+  <span>My game setup</span>
+  <button id="minimize" aria-label="Minimize">−</button>
+  <button id="maximize" aria-label="Maximize or restore">□</button>
+  <button id="window-close" aria-label="Close">×</button>
+</header>
+<button id="resize-corner" aria-label="Resize from bottom right">↘</button>
+<script>
+const bar = document.getElementById('window-bar');
+const minimize = document.getElementById('minimize');
+const maximize = document.getElementById('maximize');
+const corner = document.getElementById('resize-corner');
+bar.onpointerdown = event => {
+  if (event.button === 0 && !event.target.closest('button')) {
+    event.preventDefault();
+    bridge.postMessage({type: 'drag'});
+  }
+};
+minimize.onclick = () => bridge.postMessage({type: 'minimize'});
+maximize.onclick = () => bridge.postMessage({type: 'toggleMaximize'});
+document.getElementById('window-close').onclick = () =>
+  bridge.postMessage({type: 'close'});
+corner.onpointerdown = event => {
+  if (event.button === 0) {
+    event.preventDefault();
+    bridge.postMessage({type: 'resize', edge: 'bottomRight'});
+  }
+};
+bridge.addEventListener('message', ({data}) => {
+  if (data.type !== 'ready') return;
+  bar.hidden = data.window.titleBar;
+  minimize.hidden = !data.window.minimizeButton;
+  maximize.hidden = !data.window.maximizeButton;
+  corner.hidden = data.window.titleBar || !data.window.resizable;
+});
+</script>
+```
+
+The native host enforces the minimize/maximize/resize settings; hiding a button
+in HTML is not required to enforce them. `drag` moves a normal window.
+`toggleMaximize` switches between normal and maximized states. For borderless
+resizing, send `resize` on primary pointer-down with an `edge` of `left`, `right`,
+`top`, `bottom`, `topLeft`, `topRight`, `bottomLeft` or `bottomRight`. Position and
+style the resize handles yourself. Minimum and maximum sizes remain enforced.
+Borderless maximization respects the monitor's taskbar area and finite limits.
+Closing through custom controls or Alt+F4 stays blocked during installation.
+
+These settings apply to the compiled installer front end, not the Inno Setup
+fallback wizard, the game window or a normal browser tab. For the [companion HTTP
+API](CUSTOM_INSTALLER.md), `window` remains layout metadata; the browser or native client owns
+its window chrome and size. If resizing is unavailable, check `resizable`,
+`titleBar` and your borderless resize handlers. If a window opens with the old
+appearance, rebuild and launch the new `install/setup.exe` rather than editing
+the source manifest beside an already-built executable.
+
 #### Build output and limits
 
 Distribute **`install/setup.exe`** from the `project-*` build folder. You can
