@@ -131,6 +131,21 @@ impl ImporterRegistry {
                 version: 1,
                 kind: AssetKind::Font,
             }),
+            "cubemap" => Ok(ImporterContract {
+                id: "rustic.cubemap",
+                version: 1,
+                kind: AssetKind::Cubemap,
+            }),
+            "material" => Ok(ImporterContract {
+                id: "rustic.material",
+                version: 1,
+                kind: AssetKind::Material,
+            }),
+            "effect" => Ok(ImporterContract {
+                id: "rustic.effect",
+                version: 1,
+                kind: AssetKind::Effect,
+            }),
             _ => Err(AssetError::UnsupportedFormat(extension)),
         }
     }
@@ -153,6 +168,15 @@ impl ImporterRegistry {
                 "rustic.image" => import_image(request).map(DerivedArtifact::Texture),
                 "rustic.audio" => import_audio(request).map(DerivedArtifact::Audio),
                 "rustic.font" => import_font(request).map(DerivedArtifact::Font),
+                "rustic.cubemap" => crate::CubemapAsset::from_bytes(&request.source_bytes)
+                    .map(DerivedArtifact::Cubemap),
+                "rustic.material" => crate::MaterialAsset::from_bytes(&request.source_bytes)
+                    .map(DerivedArtifact::Material),
+                "rustic.effect" => {
+                    engine_world::effects::EffectAsset::from_bytes(&request.source_bytes)
+                        .map(DerivedArtifact::Effect)
+                        .map_err(AssetError::InvalidData)
+                }
                 _ => Err(AssetError::UnsupportedFormat(contract.id.to_owned())),
             }))
             .map_err(|_| AssetError::Decode("decoder panic was contained".to_owned()))??;
@@ -1486,5 +1510,31 @@ mod tests {
             ImporterRegistry::import(&ImportRequest::new("unsafe.gltf", source.to_vec())),
             Err(AssetError::UnsafePath(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod effect_import_tests {
+    use super::{AssetKind, DerivedArtifact, ImportRequest, ImporterRegistry};
+    use std::path::Path;
+    #[test]
+    fn effect_assets_use_stable_typed_import_contract() {
+        let asset = engine_world::effects::presets().remove(0);
+        let contract = ImporterRegistry::contract(Path::new("effects/campfire.effect")).unwrap();
+        assert_eq!(contract.id, "rustic.effect");
+        assert_eq!(contract.kind, AssetKind::Effect);
+        let result = ImporterRegistry::import(&ImportRequest::new(
+            "effects/campfire.effect",
+            asset.to_bytes().unwrap(),
+        ))
+        .unwrap();
+        assert!(matches!(result,DerivedArtifact::Effect(value) if value==asset));
+        assert!(
+            ImporterRegistry::import(&ImportRequest::new(
+                "bad.effect",
+                b"(version:2,name:\"x\",effects:[])".to_vec()
+            ))
+            .is_err()
+        );
     }
 }

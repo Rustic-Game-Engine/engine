@@ -402,3 +402,7 @@ mod tests {
         assert!(valid_package("com.example.game_2"));
     }
 }
+
+#[cfg(test)]
+#[path = "../../../../tools/browser-tests/effects_fixture.rs"]
+mod effects_fixture;

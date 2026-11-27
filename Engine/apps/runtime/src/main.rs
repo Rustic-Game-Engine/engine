@@ -498,11 +498,19 @@ fn render_runtime(
         let (models, game_ui, renderer) = resources
             .as_mut()
             .ok_or("runtime renderer was not initialized")?;
+        world.submit_gpu_particle_feedback(renderer.gpu_particle_context(), &[]);
         let scene = renderer_wgpu::game_scene_with_models(world, 16.0 / 9.0, models);
+        renderer
+            .set_effect_frame(world.effect_frame())
+            .map_err(|error| error.to_string())?;
         let frame = renderer
             .render(width, height, &scene)
             .map_err(|e| e.to_string())?
             .ok_or("empty game frame")?;
+        world.submit_gpu_particle_feedback(
+            renderer.gpu_particle_context(),
+            &renderer.take_gpu_particle_acknowledgements(),
+        );
         let mut pixels = frame.rgba8;
         game_ui.composite_rgba(width, height, &mut pixels)?;
         for pixel in pixels.as_chunks_mut::<4>().0 {

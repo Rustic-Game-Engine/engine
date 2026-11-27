@@ -1,0 +1,11 @@
+(
+    format_version: 1,
+    asset_id: "72757374-6963-5f76-6678-5f6d65736831",
+    importer_id: "rustic.obj",
+    importer_version: 1,
+    settings: (
+        version: 0,
+        values: {},
+    ),
+    dependencies: [],
+)

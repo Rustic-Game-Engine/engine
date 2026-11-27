@@ -41,3 +41,8 @@ globalThis.behavior = {
 - Shake uses deterministic decaying offsets. Avoid overlapping actions or physics that write the same property. Camera.shake uses the same implementation.
 - Check script attachment, enabled state and the Console when an operation fails. Asynchronous errors also appear in operation state. Callback exceptions disable the owner and clean up its actions.
 - Owner destruction, disable, successful reload or Stop cleans up owned actions and subscriptions. Failed reload retains the previous behavior's operations. See [Operation handles](/docs/api/operation-handles) for controls and lifetime details.
+
+
+## Typed scene effects
+
+The same `Effects` service also creates and controls typed particles, trails, weather and camera effects. See [Scene Effects API](/docs/api/scene-effects) for component controls, configuration patches and backend limitations. The tween helpers above retain their existing behavior.

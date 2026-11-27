@@ -297,6 +297,25 @@ inline auto follow(const std::string&e,const std::string&target,double duration,
 inline auto orbit(const std::string&e,RusticVector3 center,double radius,double turns,double duration,const std::string& easing="Linear"){return Gameplay::start(rustic_detail::object({{"kind","orbit"},{"entity",Gameplay::entity(e)},{"center",Physics::vec(center)},{"radius",radius},{"turns",turns},{"duration",duration},{"easing",easing}}));}
 }
 namespace Effects{
+inline RusticValue types(){return rustic.query(rustic_detail::object({{"op","effect_types"}}));}
+inline RusticValue create(const std::string& entity,const std::string& kind){return rustic.query(rustic_detail::object({{"op","effect_create"},{"entity",Gameplay::entity(entity)},{"kind",kind}}));}
+inline RusticValue get(const std::string& entity=""){return rustic.query(rustic_detail::object({{"op","effect_get"},{"entity",Gameplay::entity(entity)}}));}
+inline RusticValue group(const std::string& entity=""){return rustic.query(rustic_detail::object({{"op","effect_group_get"},{"entity",Gameplay::entity(entity)}}));}
+inline RusticValue configure(const std::string& entity,const RusticValue& settings){return rustic.query(rustic_detail::object({{"op","effect_configure"},{"entity",Gameplay::entity(entity)},{"settings",settings}}));}
+inline RusticValue configureGroup(const std::string& entity,const RusticValue& settings){return rustic.query(rustic_detail::object({{"op","effect_group_configure"},{"entity",Gameplay::entity(entity)},{"settings",settings}}));}
+inline RusticValue refreshProbe(const std::string& entity=""){return rustic.query(rustic_detail::object({{"op","effect_refresh_probe"},{"entity",Gameplay::entity(entity)}}));}
+inline std::string state(const std::string& entity=""){return rustic.query(rustic_detail::object({{"op","effect_state"},{"entity",Gameplay::entity(entity)}})).string();}
+inline std::string instantiate(const std::string& asset,const std::string& parent="",RusticVector3 position={0,0,0}){return rustic.query(rustic_detail::object({{"op","effect_instantiate"},{"asset",asset},{"parent",parent.empty()?RusticValue{}:RusticValue(Gameplay::entity(parent))},{"position",Physics::vec(position)}})).string();}
+inline std::string spawn(const std::string& asset,RusticVector3 position,double lifetime,const std::string& parent=""){return rustic.query(rustic_detail::object({{"op","effect_spawn"},{"asset",asset},{"parent",parent.empty()?RusticValue{}:RusticValue(Gameplay::entity(parent))},{"position",Physics::vec(position)},{"lifetime",lifetime}})).string();}
+inline RusticVector3 sampleWind(RusticVector3 position,double time,std::uint32_t layers=UINT32_MAX){auto values=rustic.query(rustic_detail::object({{"op","effect_wind"},{"position",Physics::vec(position)},{"time",time},{"layers",std::int64_t(layers)}})).array();return {values[0].number(),values[1].number(),values[2].number()};}
+inline void play(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","play"}}));}
+inline void pause(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","pause"}}));}
+inline void resume(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","resume"}}));}
+inline void stop(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","stop"}}));}
+inline void restart(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","restart"}}));}
+inline void reset(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","reset"}}));}
+inline void dispose(const std::string& entity=""){rustic.query(rustic_detail::object({{"op","effect_control"},{"entity",Gameplay::entity(entity)},{"action","dispose"}}));}
+
 inline auto fade(const std::string&e,double opacity,double d,const std::string& ease="Linear"){return Tween::to(e,"Opacity",opacity,d,ease);}
 inline auto flash(const std::string&e,RusticVector3 color,double d,const std::string& ease="Linear"){return Gameplay::start(Tween::action(e,"Color",Physics::vec(color),d,ease),false,1,true);}
 inline auto pulse(const std::string&e,RusticVector3 scale,double d,const std::string& ease="Linear"){return Gameplay::start(Tween::action(e,"Scale",Physics::vec(scale),d,ease),false,1,true);}

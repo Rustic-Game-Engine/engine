@@ -357,6 +357,7 @@ mod tests {
             gizmo_drag: &mut None,
             gizmo_widget: &mut transform_widget::TransformWidget::default(),
             scene_graph: &mut scene_graph::SceneGraph::default(),
+            effect_preview: &mut effects::EffectPreview::default(),
             ui_designer: &mut ui_designer::UiDesigner::default(),
             model_assets: &mut BTreeMap::new(),
             project_file_action: &mut action,

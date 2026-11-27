@@ -125,7 +125,7 @@ pub fn generate_programming_workspace(
         include_str!("sdk/entity-api.lua"),
         include_str!("sdk/media-api.lua")
     );
-    let api_text = format!("{api_text}{}", include_str!("sdk/game-api.lua"));
+    let api_text = format!("{api_text}{}", game_effect_declarations(true));
     files.write_with_options(
         &api,
         api_text.as_bytes(),
@@ -140,7 +140,7 @@ pub fn generate_programming_workspace(
         include_str!("sdk/entity-api.d.ts"),
         include_str!("sdk/media-api.d.ts")
     );
-    let javascript_api_text = format!("{javascript_api_text}{}", include_str!("sdk/game-api.d.ts"));
+    let javascript_api_text = format!("{javascript_api_text}{}", game_effect_declarations(false));
     files.write_with_options(
         &javascript_api,
         javascript_api_text.as_bytes(),
@@ -191,6 +191,22 @@ pub fn generate_programming_workspace(
         preserved_user_files: preserved,
         agent_integration_files,
     })
+}
+
+fn game_effect_declarations(lua: bool) -> String {
+    if lua {
+        format!(
+            "{}{}",
+            include_str!("sdk/game-api.lua"),
+            include_str!("sdk/effects-api.lua")
+        )
+    } else {
+        format!(
+            "{}{}",
+            include_str!("sdk/game-api.d.ts"),
+            include_str!("sdk/effects-api.d.ts")
+        )
+    }
 }
 
 fn generate_agent_integrations(

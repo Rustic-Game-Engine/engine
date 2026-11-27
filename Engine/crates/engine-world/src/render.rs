@@ -26,6 +26,7 @@ pub struct RenderCamera {
     pub projection: CameraProjection,
     pub zoom: f32,
     pub order: i32,
+    pub visibility_layers: u32,
 }
 
 /// Immutable light data, containing no backend-specific representation.
@@ -125,6 +126,7 @@ impl RenderWorldBuffer {
                     projection: camera.projection,
                     zoom: camera.zoom,
                     order: camera.order,
+                    visibility_layers: camera.visibility_layers,
                 });
             }
             if let Ok(Some(light)) = world.light(entity) {
@@ -294,6 +296,7 @@ mod camera_projection_tests {
             projection: CameraProjection::default(),
             zoom: 1.0,
             order: 0,
+            visibility_layers: u32::MAX,
         };
         let zoomed = RenderCamera { zoom: 2.0, ..base };
 

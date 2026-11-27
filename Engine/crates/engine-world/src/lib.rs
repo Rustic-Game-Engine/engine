@@ -3,7 +3,9 @@
 #![forbid(unsafe_code)]
 
 mod components;
+pub mod effects;
 mod environment;
+pub use effects::EffectComponent;
 mod foundations;
 pub use environment::SceneEnvironment;
 mod ids;

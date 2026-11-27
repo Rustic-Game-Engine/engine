@@ -1269,6 +1269,7 @@ version = "0.1.0"
 dependencies = [
  "base64",
  "engine-core",
+ "engine-world",
  "gltf",
  "hound",
  "image",
@@ -1318,6 +1319,7 @@ dependencies = [
 name = "engine-editor"
 version = "0.1.0"
 dependencies = [
+ "engine-assets",
  "engine-core",
  "engine-platform",
  "engine-play",
@@ -1374,6 +1376,7 @@ dependencies = [
 name = "engine-project"
 version = "0.1.0"
 dependencies = [
+ "engine-assets",
  "engine-core",
  "engine-platform",
  "engine-scripting",
@@ -1422,6 +1425,7 @@ dependencies = [
  "glam 0.33.6",
  "ron",
  "serde",
+ "serde_json",
  "sha2",
  "tempfile",
  "thiserror 2.0.20",
@@ -2394,6 +2398,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "lhash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "744a4c881f502e98c2241d2e5f50040ac73b30194d64452bb6260393b53f0dc9"
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2501,6 +2511,15 @@ name = "mac"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c41e0c4fef86961ac6d6f8a82609f55f31b05e4fce149ac5710e439df7619ba4"
+
+[[package]]
+name = "mach-dxcompiler-rs"
+version = "0.1.7+2026.10.26-141dd7f.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae7b01febf4806c6a95a217784adcd0f0d19413eef5afb1fbea60656ea28c081"
+dependencies = [
+ "lhash",
+]
 
 [[package]]
 name = "mach2"
@@ -5511,6 +5530,7 @@ dependencies = [
  "libc",
  "libloading",
  "log",
+ "mach-dxcompiler-rs",
  "naga",
  "naga-types",
  "ndk-sys",

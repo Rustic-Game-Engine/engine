@@ -292,7 +292,7 @@ impl SupervisedRuntime {
             let received = connection.receive()?;
             match received.message {
                 ProtocolMessage::LiveEntity(entity) if received.request_id == request_id => {
-                    return Ok(entity);
+                    return Ok(entity.map(|entity| *entity));
                 }
                 ProtocolMessage::Console(event) => self.console_events.push_back(*event),
                 ProtocolMessage::Frame(frame) => publish_frame(&mut self.frames, &frame)?,

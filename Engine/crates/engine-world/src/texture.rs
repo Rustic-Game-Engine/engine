@@ -125,6 +125,29 @@ impl TextureMap {
 #[derive(Component, Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SurfaceTextures {
+    /// Runtime-only emitter owner used by per-camera draw-distance culling.
+    #[serde(skip)]
+    pub effect_source: Option<crate::EntityId>,
+    /// Optional effect-only grayscale/noise, coverage mask and RG distortion maps.
+    pub effect_noise_map: Option<String>,
+    pub effect_mask_map: Option<String>,
+    pub effect_distortion_map: Option<String>,
+    /// Optional reusable `.material` source, resolved through its stable sidecar ID.
+    pub material: Option<crate::AssetId>,
+    /// Packed ambient occlusion (R), perceptual roughness (G), metallic (B).
+    pub orm_map: Option<String>,
+    pub roughness: Option<f32>,
+    pub metallic: Option<f32>,
+    pub base_color: [f32; 4],
+    pub emissive_color: [f32; 3],
+    pub normal_scale: f32,
+    pub occlusion_strength: f32,
+    pub pbr: bool,
+    pub alpha_cutoff: Option<f32>,
+    pub visibility_layers: u32,
+    pub cast_shadows: bool,
+    pub receive_shadows: bool,
+    pub wind_response: Option<f32>,
     pub maps: BTreeMap<TextureMap, String>,
     pub uv_scale: [f32; 2],
     pub uv_offset: [f32; 2],
@@ -134,6 +157,24 @@ pub struct SurfaceTextures {
 impl Default for SurfaceTextures {
     fn default() -> Self {
         Self {
+            effect_source: None,
+            effect_noise_map: None,
+            effect_mask_map: None,
+            effect_distortion_map: None,
+            material: None,
+            orm_map: None,
+            roughness: None,
+            metallic: None,
+            base_color: [1.0; 4],
+            emissive_color: [1.0; 3],
+            normal_scale: 1.0,
+            occlusion_strength: 1.0,
+            pbr: false,
+            alpha_cutoff: None,
+            visibility_layers: u32::MAX,
+            cast_shadows: true,
+            receive_shadows: true,
+            wind_response: None,
             maps: BTreeMap::new(),
             uv_scale: [1.0; 2],
             uv_offset: [0.0; 2],
@@ -157,7 +198,38 @@ impl SurfaceTextures {
         {
             return Err("Invalid texture scale, offset or intensity".into());
         }
-        for path in self.maps.values() {
+        if self
+            .base_color
+            .iter()
+            .chain(&self.emissive_color)
+            .any(|v| !v.is_finite() || *v < 0.0)
+            || self.base_color[3] > 1.0
+            || self.emissive_color.iter().any(|v| *v > 65504.0)
+            || !self.normal_scale.is_finite()
+            || !(0.0..=10.0).contains(&self.normal_scale)
+            || !self.occlusion_strength.is_finite()
+            || !(0.0..=1.0).contains(&self.occlusion_strength)
+            || [self.roughness, self.metallic, self.alpha_cutoff]
+                .into_iter()
+                .flatten()
+                .any(|v| !v.is_finite() || !(0.0..=1.0).contains(&v))
+        {
+            return Err("Invalid PBR material factor, opacity, cutoff or normal scale".into());
+        }
+        if self
+            .wind_response
+            .is_some_and(|value| !value.is_finite() || !(0.0..=10.0).contains(&value))
+        {
+            return Err("Wind response must be finite and within0..10".into());
+        }
+        for path in self
+            .maps
+            .values()
+            .chain(self.orm_map.iter())
+            .chain(self.effect_noise_map.iter())
+            .chain(self.effect_mask_map.iter())
+            .chain(self.effect_distortion_map.iter())
+        {
             if path.is_empty()
                 || path.len() > 4096
                 || path.contains('\\')

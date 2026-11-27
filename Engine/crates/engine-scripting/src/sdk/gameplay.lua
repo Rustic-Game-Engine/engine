@@ -391,6 +391,22 @@ World={}
 function World.find_by_tag(name) return rustic.query({op="world_find_by_tag",name=name}) end
 function World.find_in_radius(center,radius) return rustic.query({op="world_find_in_radius",center=center,radius=radius}) end
 
+-- Scene effects extend the existing Effects tween helpers.
+function Effects.refreshProbe(entity) return rustic.query({op='effect_refresh_probe',entity=resolve_entity(entity)}) end
+function Effects.spawn(asset,position,lifetime,parent) return rustic.query({op='effect_spawn',asset=asset,parent=parent and resolve_entity(parent) or nil,position=position,lifetime=lifetime}) end
+function Effects.instantiate(asset,parent,position) return rustic.query({op='effect_instantiate',asset=asset,parent=parent and resolve_entity(parent) or nil,position=position or {0,0,0}}) end
+function Effects.types() return rustic.query({op='effect_types'}) end
+function Effects.sampleWind(position,time,layers) return rustic.query({op='effect_wind',position=position,time=time,layers=layers or 4294967295}) end
+function Effects.create(entity,kind) return rustic.query({op='effect_create',entity=resolve_entity(entity),kind=kind}) end
+function Effects.get(entity) return rustic.query({op='effect_get',entity=resolve_entity(entity)}) end
+function Effects.group(entity) return rustic.query({op='effect_group_get',entity=resolve_entity(entity)}) end
+function Effects.configureGroup(entity,settings) return rustic.query({op='effect_group_configure',entity=resolve_entity(entity),settings=settings}) end
+function Effects.configure(entity,settings) return rustic.query({op='effect_configure',entity=resolve_entity(entity),settings=settings}) end
+function Effects.state(entity) return rustic.query({op='effect_state',entity=resolve_entity(entity)}) end
+for _,action in ipairs({'play','pause','resume','stop','restart','reset','dispose'}) do
+    Effects[action]=function(entity) return rustic.query({op='effect_control',entity=resolve_entity(entity),action=action}) end
+end
+
 -- Game mirrors the existing rustic.game capture methods.
 function Game.startRecording(path,options) return rustic.game:startRecording(path,options) end
 function Game.stopRecording(handle) return rustic.game:stopRecording(handle) end

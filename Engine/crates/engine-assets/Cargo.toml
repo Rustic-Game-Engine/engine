@@ -10,6 +10,7 @@ publish = false
 base64 = "0.22"
 ufbx = "0.11.5"
 engine-core = { path = "../engine-core", version = "0.1.0" }
+engine-world = { path = "../engine-world", version = "0.1.0" }
 gltf.workspace = true
 hound.workspace = true
 image.workspace = true

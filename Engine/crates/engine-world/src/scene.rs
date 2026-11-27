@@ -27,6 +27,8 @@ const MATERIAL_SCHEMA: &str = "rustic.material";
 const CAMERA_SCHEMA: &str = "rustic.camera";
 const LIGHT_SCHEMA: &str = "rustic.light";
 const PRIMITIVE_SCHEMA: &str = "rustic.primitive";
+const EFFECT_SCHEMA: &str = "rustic.effect";
+const EFFECT_GROUP_SCHEMA: &str = "rustic.effect_group";
 const SCRIPTS_SCHEMA: &str = "rustic.scripts";
 const PART_ATTRIBUTES_SCHEMA: &str = "rustic.part_attributes";
 
@@ -52,6 +54,8 @@ pub struct EntitySnapshot {
     pub camera: Option<Camera>,
     pub light: Option<Light>,
     pub primitive: Option<Primitive>,
+    pub effect: Option<crate::EffectComponent>,
+    pub effect_group: Option<crate::effects::EffectGroup>,
     pub part_attributes: PartAttributes,
     pub scripts: Vec<ScriptComponent>,
     pub unknown_components: Vec<RawComponent>,
@@ -71,6 +75,8 @@ impl Default for EntitySnapshot {
             camera: None,
             light: None,
             primitive: None,
+            effect: None,
+            effect_group: None,
             part_attributes: PartAttributes::default(),
             scripts: Vec::new(),
             unknown_components: Vec::new(),
@@ -98,6 +104,12 @@ impl EntitySnapshot {
         }
         if let Some(textures) = &self.textures {
             textures.validate().map_err(WorldError::InvalidArgument)?;
+        }
+        if let Some(effect) = &self.effect {
+            effect.validate().map_err(WorldError::InvalidArgument)?;
+        }
+        if let Some(group) = &self.effect_group {
+            group.validate().map_err(WorldError::InvalidArgument)?;
         }
         for script in &self.scripts {
             script
@@ -335,6 +347,8 @@ struct CameraWire {
     zoom: f32,
     active: bool,
     order: i32,
+    #[serde(default = "crate::components::default_visibility_layers")]
+    visibility_layers: u32,
 }
 
 const fn default_camera_zoom() -> f32 {
@@ -416,6 +430,7 @@ impl EntityWire {
                     zoom: camera.zoom,
                     active: camera.active,
                     order: camera.order,
+                    visibility_layers: camera.visibility_layers,
                 },
             )?);
         }
@@ -434,6 +449,12 @@ impl EntityWire {
         }
         if let Some(primitive) = snapshot.primitive {
             components.push(encode_component(PRIMITIVE_SCHEMA, &primitive)?);
+        }
+        if let Some(effect) = snapshot.effect {
+            components.push(encode_component(EFFECT_SCHEMA, &effect)?);
+        }
+        if let Some(group) = snapshot.effect_group {
+            components.push(encode_component(EFFECT_GROUP_SCHEMA, &group)?);
         }
         components.push(encode_component(
             PART_ATTRIBUTES_SCHEMA,
@@ -723,6 +744,7 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                         zoom: value.zoom,
                         active: value.active,
                         order: value.order,
+                        visibility_layers: value.visibility_layers,
                     });
                 },
             ),
@@ -748,6 +770,20 @@ fn decode_entity(entity: EntityWire, diagnostics: &mut Vec<SceneDiagnostic>) -> 
                 diagnostics,
                 &mut snapshot.unknown_components,
                 |value| snapshot.primitive = Some(value),
+            ),
+            EFFECT_SCHEMA => assign_or_preserve(
+                &raw,
+                entity.id,
+                diagnostics,
+                &mut snapshot.unknown_components,
+                |value| snapshot.effect = Some(value),
+            ),
+            EFFECT_GROUP_SCHEMA => assign_or_preserve(
+                &raw,
+                entity.id,
+                diagnostics,
+                &mut snapshot.unknown_components,
+                |value| snapshot.effect_group = Some(value),
             ),
             PART_ATTRIBUTES_SCHEMA => assign_or_preserve(
                 &raw,
@@ -1021,6 +1057,7 @@ mod tests {
             zoom: 2.5,
             active: true,
             order: 3,
+            visibility_layers: u32::MAX,
         };
         let encoded = ron::to_string(&wire).unwrap();
         assert_eq!(ron::from_str::<CameraWire>(&encoded).unwrap().zoom, 2.5);

@@ -11,7 +11,7 @@ before(async () => {
 });
 after(async () => { await browser?.close(); });
 
-async function openPlayer(t, { missingRuntime = false, badManifest = false } = {}) {
+async function openPlayer(t, { missingRuntime = false, badManifest = false, sequenced = false } = {}) {
   const context = await browser.newContext({ hasTouch: true });
   t.after(() => context.close());
   const page = await context.newPage();
@@ -37,9 +37,12 @@ async function openPlayer(t, { missingRuntime = false, badManifest = false } = {
           readFile(path) { return files.get(path); },
           writeFile(path, bytes) { files.set(path, bytes); },
         };
+        window.mockTicks = 0;
+        window.mockSequence = 1;
         Module._rustic_tick = () => {
-          files.set('/frame.json', '[1,1]');
-          files.set('/frame.rgba', new Uint8Array([255,0,0,255]));
+          window.mockTicks++;
+          files.set('/frame.json', JSON.stringify(${sequenced} ? [1, 1, mockSequence] : [1, 1]));
+          files.set('/frame.rgba', new Uint8Array(mockSequence === 1 ? [255,0,0,255] : [0,255,0,255]));
         };
         Module.addRunDependency = () => {};
         Module.removeRunDependency = () => Module.onRuntimeInitialized();
@@ -86,4 +89,15 @@ test("a missing game manifest displays an error instead of starting gameplay", a
   await page.waitForFunction(() => !document.getElementById("status").hidden);
   assert.match(await page.locator("#status").textContent(), /Game file manifest is missing/);
   assert.equal(await page.locator("#game").getAttribute("data-frame"), null);
+});
+
+
+test("only presents a frame when the runtime advances its sequence", async t => {
+  const page = await openPlayer(t, { sequenced: true });
+  await page.waitForFunction(() => window.mockTicks > 5);
+  assert.equal(await page.locator("#game").getAttribute("data-frame"), "1");
+  await page.evaluate(() => { window.mockSequence = 2; });
+  await page.waitForFunction(() => document.getElementById("game").dataset.frame === "2");
+  assert.deepEqual(await page.locator("#game").evaluate(canvas =>
+    [...canvas.getContext("2d").getImageData(0, 0, 1, 1).data]), [0, 255, 0, 255]);
 });

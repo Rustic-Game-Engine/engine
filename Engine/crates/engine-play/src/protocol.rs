@@ -37,7 +37,7 @@ pub struct ProtocolVersion {
 }
 
 /// Protocol understood by this engine build.
-pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 3, minor: 1 };
+pub const PROTOCOL_VERSION: ProtocolVersion = ProtocolVersion { major: 3, minor: 2 };
 
 /// Current values for the selected entity while the isolated runtime is active.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -49,6 +49,8 @@ pub struct LiveEntityProperties {
     pub scale: [f32; 3],
     pub part_attributes: PartAttributes,
     pub scripts: Vec<ScriptComponent>,
+    #[serde(default)]
+    pub effect: Option<engine_world::EffectComponent>,
 }
 
 /// Process responsibility carried in every frame and authenticated handshake.
@@ -218,7 +220,7 @@ pub enum ProtocolMessage {
     ResetPointerInput,
     ResizeViewport([u32; 2]),
     QueryEntity(String),
-    LiveEntity(Option<LiveEntityProperties>),
+    LiveEntity(Option<Box<LiveEntityProperties>>),
     ControlAck(ControlAck),
     Console(Box<ConsoleEvent>),
     Frame(BgraFrame),
@@ -554,6 +556,12 @@ fn unix_millis() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn older_live_entity_payloads_default_to_no_effect() {
+        let payload = serde_json::json!({"entity_id":"entity","name":null,"translation":[0,0,0],"rotation":[0,0,0,1],"scale":[1,1,1],"part_attributes":engine_world::PartAttributes::default(),"scripts":[]});
+        let properties: super::LiveEntityProperties = serde_json::from_value(payload).unwrap();
+        assert!(properties.effect.is_none());
+    }
     use super::*;
     use std::io::Cursor;
 

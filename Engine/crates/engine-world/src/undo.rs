@@ -7,6 +7,21 @@ use crate::{
 /// command batch and therefore cannot leave a partial hierarchy edit behind.
 #[derive(Clone, Debug, PartialEq)]
 pub enum SceneEdit {
+    Material {
+        entity: EntityId,
+        before: Option<crate::AssetId>,
+        after: Option<crate::AssetId>,
+    },
+    EffectGroup {
+        entity: EntityId,
+        before: Option<crate::effects::EffectGroup>,
+        after: Option<crate::effects::EffectGroup>,
+    },
+    Effect {
+        entity: EntityId,
+        before: Option<crate::EffectComponent>,
+        after: Option<crate::EffectComponent>,
+    },
     Environment {
         before: crate::SceneEnvironment,
         after: crate::SceneEnvironment,
@@ -84,6 +99,9 @@ impl SceneEdit {
 
     pub fn label(&self) -> &str {
         match self {
+            Self::Material { .. } => "Material source",
+            Self::EffectGroup { .. } => "Composite timeline",
+            Self::Effect { .. } => "Scene effect",
             Self::Environment { .. } => "Scene environment",
             Self::Camera { .. } => "Camera",
             Self::Light { .. } => "Light",
@@ -102,6 +120,18 @@ impl SceneEdit {
 
     fn append_forward(&self, output: &mut Vec<WorldCommand>) {
         match self {
+            Self::Material { entity, after, .. } => output.push(WorldCommand::SetMaterial {
+                entity: *entity,
+                value: after.map(|asset| crate::Material { asset }),
+            }),
+            Self::EffectGroup { entity, after, .. } => output.push(WorldCommand::SetEffectGroup {
+                entity: *entity,
+                value: after.clone().map(Box::new),
+            }),
+            Self::Effect { entity, after, .. } => output.push(WorldCommand::SetEffect {
+                entity: *entity,
+                value: after.clone().map(Box::new),
+            }),
             Self::Environment { after, .. } => {
                 output.push(WorldCommand::SetEnvironment(after.clone()));
             }
@@ -157,6 +187,18 @@ impl SceneEdit {
 
     fn append_reverse(&self, output: &mut Vec<WorldCommand>) {
         match self {
+            Self::Material { entity, before, .. } => output.push(WorldCommand::SetMaterial {
+                entity: *entity,
+                value: before.map(|asset| crate::Material { asset }),
+            }),
+            Self::EffectGroup { entity, before, .. } => output.push(WorldCommand::SetEffectGroup {
+                entity: *entity,
+                value: before.clone().map(Box::new),
+            }),
+            Self::Effect { entity, before, .. } => output.push(WorldCommand::SetEffect {
+                entity: *entity,
+                value: before.clone().map(Box::new),
+            }),
             Self::Environment { before, .. } => {
                 output.push(WorldCommand::SetEnvironment(before.clone()));
             }
