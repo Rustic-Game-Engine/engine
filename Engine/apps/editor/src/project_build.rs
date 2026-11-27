@@ -156,7 +156,7 @@ impl ProjectBuild {
                     field(ui, "Application name", &mut self.settings.name);
                     match self.settings.target {
                         Target::Windows => {
-                            ui.label("Packages the bundled Windows runtime and a snapshot of the current scene, scripts and assets. Distribute the entire output folder.");
+                            ui.label("Packages the bundled Windows runtime and a snapshot of the current scene, scripts and assets.");
                             ui.checkbox(&mut self.settings.installer, "Create a custom installer");
                             if self.settings.installer {
                                 ui.collapsing("Design installer", |ui| {
@@ -168,7 +168,7 @@ impl ProjectBuild {
                                     project_file_field(ui, "Wizard image (.bmp, project relative, optional)", &mut self.settings.banner, root, ("Wizard image", &["bmp"]), &mut self.status);
                                     ui.checkbox(&mut self.settings.modern, "Modern wizard style");
                                     ui.checkbox(&mut self.settings.desktop_shortcut, "Offer desktop shortcut");
-                                    ui.label("Custom C# or HTML/CSS/JavaScript UI: add scripts/install/installer.json to your project. Builds create a custom-installer folder to distribute.");
+                                    ui.label("Custom C# or HTML/CSS/JavaScript UI: add scripts/install/installer.json to your project. Distribute the generated install/setup.exe.");
                                     field(ui, "Inno Setup compiler (ISCC.exe path)", &mut self.settings.compiler);
                                     ui.small("Leave ISCC.exe for automatic setup. Building finds or installs Inno Setup and adds it to your user PATH. First installation requires internet access.");
                                     ui.group(|ui| {

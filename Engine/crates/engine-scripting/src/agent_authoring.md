@@ -228,7 +228,8 @@ for one Windows Forms source defining `InstallerUi(InstallerContext context)`.
 Do not attach installer sources as gameplay scripts. Use `window.chrome.webview`
 messages (`ready`, `install`, `close`) for web UIs or `context.InstallAsync` for C#;
 the Inno Setup backend handles copying, shortcuts and uninstalling. Build on
-Windows with .NET SDK 8 or newer and distribute the complete `custom-installer` folder.
+Windows with .NET SDK 8 or newer and distribute `install/setup.exe` from the
+build folder. The executable bundles the UI, assets, and game installer.
 Web UIs require Microsoft Edge WebView2 Runtime on the player's machine. Consult
 the build guide for complete examples, event/error handling, license acceptance,
 supported source limits and troubleshooting. These interfaces are independent
